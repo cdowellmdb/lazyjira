@@ -1,21 +1,25 @@
 # lazyjira
 
-`lazyjira` is a terminal UI for Jira focused on fast triage and team visibility.
+A terminal UI for Jira focused on fast triage and team visibility.
 
 ## Features
 
-- Three tabs: `My Work`, `Team`, and `Epics`
+- Five tabs: `My Work`, `Team`, `Epics`, `Unassigned`, `Filters`
 - Status-grouped ticket views with focus filters
 - Epic relationship mapping + progress bars
-- Rich ticket detail modal (description, labels, assignee, epic)
-- Optimistic ticket status move flow
-- Local caching for fast startup and fast detail open
+- Rich ticket detail with description, labels, assignee, epic, activity history
+- In-TUI actions: create tickets, comment, assign, edit fields, move status
+- Saved JQL filters with persistent config
+- Local caching for fast startup and detail open
 
-## Requirements
+## Setup
+
+On first run, lazyjira prompts for your Jira project key and team name, then writes `~/.config/lazyjira/config.toml`. Edit the file directly to add team members, custom statuses, or saved filters.
+
+### Requirements
 
 - Rust toolchain (`cargo`)
-- Jira CLI available as `jira` in your shell
-- Team roster file at `~/.claude/skills/jira/team.yml` with a `team` mapping of `name: email`
+- [`jira`](https://github.com/ankitpokhrel/jira-cli) CLI authenticated and in your `$PATH`
 
 ## Run
 
@@ -23,45 +27,92 @@
 cargo run
 ```
 
-## Install / Update CLI Binary
-
-If you run `lazyjira` directly from your shell, reinstall after code changes so the global binary matches your latest local code:
+## Install / Update
 
 ```bash
 cargo install --path . --force
 ```
 
-Dev rebuild modes:
+Dev rebuild:
 
 ```bash
-cargo run -- --dev
-cargo run -- --dev-release
+lazyjira --dev            # debug build + run
+lazyjira --dev-release    # release build + run
 ```
 
 ## Keybindings
 
-- `Tab`: switch tab
-- `j/k` or `Up/Down`: navigate
-- `Enter`: open detail
-- `/`: search
-- `d`: toggle Done visibility (My Work + Team)
-- `p`: focus In Progress
-- `w`: focus Ready for Work
-- `n`: focus Needs Triage
-- `v`: focus In Review
-- `r`: refresh
-- `?`: open keybindings menu
-- `q`: quit
+### Global
 
-Detail modal:
+| Key | Action |
+|-----|--------|
+| `Tab` | Next tab |
+| `j/k` | Navigate |
+| `Enter` | Open detail |
+| `/` | Search |
+| `c` | Create ticket |
+| `d` | Toggle Done visibility |
+| `p/w/n/v` | Focus status filter |
+| `r` | Refresh |
+| `?` | Keybindings help |
+| `q` | Quit |
 
-- `Esc`: close
-- `Up/Down`: scroll
-- `o`: open ticket in browser
-- `m`: open move picker
-- Move picker shortcuts: `p/w/n/t/v/b/d` (prompt + confirm), uppercase to move immediately
+### Detail View
 
-## Data/Cache Notes
+| Key | Action |
+|-----|--------|
+| `Esc` | Close |
+| `Up/Down` | Scroll |
+| `o` | Open in browser |
+| `m` | Move status |
+| `C` | Comment |
+| `a` | Assign/reassign |
+| `e` | Edit summary + labels |
+| `h` | Activity history |
 
-- Startup first loads a persisted full-cache snapshot (if present), then refreshes active tickets, then refreshes recently updated done tickets.
-- Epic relationships and rich ticket detail are cached in temp files and refreshed in the background.
+Move picker: `p/w/n/t/v/b/d` to select + confirm, uppercase to move immediately.
+
+### Filters Tab
+
+| Key | Action |
+|-----|--------|
+| `j/k` | Navigate within focused pane |
+| `Tab` | Switch to results / next tab |
+| `Shift+Tab` | Back to sidebar |
+| `Enter` | Run filter (sidebar) / open ticket (results) |
+| `n` | New filter |
+| `e` | Edit filter |
+| `x` | Delete filter |
+
+## Configuration
+
+Config lives at `~/.config/lazyjira/config.toml`:
+
+```toml
+[jira]
+project = "AMP"
+team_name = "Code Generation"
+done_window_days = 14
+
+[team]
+"Alice Smith" = "alice.smith@example.com"
+"Bob Jones" = "bob.jones@example.com"
+
+[statuses]
+active = ["Needs Triage", "Ready for Work", "To Do", "In Progress", "In Review", "Blocked"]
+done = ["Done", "Closed"]
+
+[[filters]]
+name = "My bugs"
+jql = "type = Bug AND assignee = currentUser()"
+
+[[filters]]
+name = "Recent P1s"
+jql = "priority = P1 AND created >= -7d"
+```
+
+## Cache
+
+- Startup loads a persisted snapshot, then refreshes active tickets, then recently done.
+- Epic relationships and ticket detail are cached locally and refreshed in the background.
+- Cache files are project-scoped (`~/.cache/lazyjira/`, `/tmp/lazyjira_*`).

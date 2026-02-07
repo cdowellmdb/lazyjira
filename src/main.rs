@@ -524,33 +524,47 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     } else if let Some(ref search) = app.search {
         Span::styled(format!("/{}", search), Style::default().fg(Color::Yellow))
     } else {
-        let done_state = if app.show_done { "on" } else { "off" };
-        let epic_state = if app.epics_refreshing {
-            "syncing"
+        if app.active_tab == Tab::Filters {
+            let pane = match app.filter_focus {
+                FilterFocus::Sidebar => "sidebar",
+                FilterFocus::Results => "results",
+            };
+            Span::styled(
+                format!(
+                    " j/k: navigate  Tab/S-Tab: switch pane({})  Enter: run/open  n: new  e: edit  x: delete  ?: keys  q: quit ",
+                    pane
+                ),
+                Style::default().fg(Color::DarkGray),
+            )
         } else {
-            "ready"
-        };
-        let ticket_state = match app.ticket_sync_stage {
-            Some(TicketSyncStage::ActiveOnly) => "sync-active",
-            Some(TicketSyncStage::Full) => "sync-full",
-            None => "ready",
-        };
-        let freshness_state = app
-            .cache_stale_age_secs
-            .map(|age| format!("stale {}", format_age_minutes(age)))
-            .unwrap_or_else(|| "fresh".to_string());
-        let focus_state = app
-            .status_focus
-            .as_ref()
-            .map(|s| s.as_str())
-            .unwrap_or("all");
-        Span::styled(
-            format!(
-                " Tab: switch  j/k: navigate  Enter: detail  d: done({})  p/w/n/v: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
-                done_state, focus_state, ticket_state, freshness_state, epic_state
-            ),
-            Style::default().fg(Color::DarkGray),
-        )
+            let done_state = if app.show_done { "on" } else { "off" };
+            let epic_state = if app.epics_refreshing {
+                "syncing"
+            } else {
+                "ready"
+            };
+            let ticket_state = match app.ticket_sync_stage {
+                Some(TicketSyncStage::ActiveOnly) => "sync-active",
+                Some(TicketSyncStage::Full) => "sync-full",
+                None => "ready",
+            };
+            let freshness_state = app
+                .cache_stale_age_secs
+                .map(|age| format!("stale {}", format_age_minutes(age)))
+                .unwrap_or_else(|| "fresh".to_string());
+            let focus_state = app
+                .status_focus
+                .as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or("all");
+            Span::styled(
+                format!(
+                    " Tab: switch  j/k: navigate  Enter: detail  d: done({})  p/w/n/v: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
+                    done_state, focus_state, ticket_state, freshness_state, epic_state
+                ),
+                Style::default().fg(Color::DarkGray),
+            )
+        }
     };
     f.render_widget(
         ratatui::widgets::Paragraph::new(Line::from(status_text)),
