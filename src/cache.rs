@@ -11,10 +11,11 @@ pub enum Status {
     InReview,
     Blocked,
     Done,
+    Other(String),
 }
 
 impl Status {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Status::NeedsTriage => "Needs Triage",
             Status::ReadyForWork => "Ready for Work",
@@ -23,6 +24,7 @@ impl Status {
             Status::InReview => "In Review",
             Status::Blocked => "Blocked",
             Status::Done => "Done",
+            Status::Other(s) => s,
         }
     }
 
@@ -35,7 +37,7 @@ impl Status {
             "in review" | "review" => Status::InReview,
             "blocked" => Status::Blocked,
             "done" | "closed" | "resolved" => Status::Done,
-            _ => Status::ToDo,
+            _ => Status::Other(s.to_string()),
         }
     }
 
@@ -48,6 +50,7 @@ impl Status {
             Status::InReview => 'v',
             Status::Blocked => 'b',
             Status::Done => 'd',
+            Status::Other(_) => '?',
         }
     }
 

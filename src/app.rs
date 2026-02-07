@@ -2,12 +2,18 @@ use crate::cache::Cache;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
+const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
+const NO_EPIC_KEY: &str = "NO-EPIC";
+const NO_EPIC_SUMMARY: &str = "No Epic";
+
 /// Which tab is currently active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     MyWork,
     Team,
     Epics,
+    Unassigned,
 }
 
 impl Tab {
@@ -15,7 +21,8 @@ impl Tab {
         match self {
             Tab::MyWork => Tab::Team,
             Tab::Team => Tab::Epics,
-            Tab::Epics => Tab::MyWork,
+            Tab::Epics => Tab::Unassigned,
+            Tab::Unassigned => Tab::MyWork,
         }
     }
 
@@ -24,11 +31,12 @@ impl Tab {
             Tab::MyWork => "My Work",
             Tab::Team => "Team",
             Tab::Epics => "Epics",
+            Tab::Unassigned => "Unassigned",
         }
     }
 
     pub fn all() -> &'static [Tab] {
-        &[Tab::MyWork, Tab::Team, Tab::Epics]
+        &[Tab::MyWork, Tab::Team, Tab::Epics, Tab::Unassigned]
     }
 }
 
@@ -211,6 +219,7 @@ impl App {
             Tab::MyWork => self.my_work_visible_ticket_keys(),
             Tab::Team => self.team_visible_ticket_keys(),
             Tab::Epics => self.epics_visible_ticket_keys(),
+            Tab::Unassigned => self.unassigned_visible_ticket_keys(),
         }
     }
 
@@ -272,6 +281,11 @@ impl App {
                 .any(|label| Self::contains_case_insensitive(label, search))
     }
 
+    fn is_unassigned_team_ticket(ticket: &crate::cache::Ticket) -> bool {
+        ticket.assignee_email.as_deref() == Some(UNASSIGNED_TEAM_EMAIL)
+            || ticket.assignee.as_deref() == Some(UNASSIGNED_TEAM_NAME)
+    }
+
     fn epic_status_rank(status: &crate::cache::Status) -> usize {
         match status {
             crate::cache::Status::InProgress => 0,
@@ -279,8 +293,9 @@ impl App {
             crate::cache::Status::NeedsTriage => 2,
             crate::cache::Status::ToDo => 3,
             crate::cache::Status::InReview => 4,
-            crate::cache::Status::Blocked => 5,
-            crate::cache::Status::Done => 6,
+            crate::cache::Status::Other(_) => 5,
+            crate::cache::Status::Blocked => 6,
+            crate::cache::Status::Done => 7,
         }
     }
 
@@ -337,6 +352,77 @@ impl App {
         self.epics_visible_epics()
             .into_iter()
             .flat_map(|(_, tickets)| tickets.into_iter().map(|t| t.key.clone()))
+            .collect()
+    }
+
+    /// Unassigned tickets grouped by epic.
+    pub(crate) fn unassigned_visible_by_epic<'a>(
+        &'a self,
+    ) -> Vec<(String, String, Vec<&'a crate::cache::Ticket>)> {
+        let search = self.normalized_search();
+        let mut grouped: HashMap<(String, String), Vec<&crate::cache::Ticket>> = HashMap::new();
+
+        for ticket in &self.cache.team_tickets {
+            if !Self::is_unassigned_team_ticket(ticket) {
+                continue;
+            }
+
+            let epic_key = ticket
+                .epic_key
+                .clone()
+                .unwrap_or_else(|| NO_EPIC_KEY.to_string());
+            let epic_summary = ticket
+                .epic_name
+                .clone()
+                .unwrap_or_else(|| NO_EPIC_SUMMARY.to_string());
+            grouped.entry((epic_key, epic_summary)).or_default().push(ticket);
+        }
+
+        let mut groups: Vec<_> = grouped
+            .into_iter()
+            .map(|((epic_key, epic_summary), mut tickets)| {
+                Self::sort_epic_children(&mut tickets);
+                (epic_key, epic_summary, tickets)
+            })
+            .collect();
+
+        groups.sort_by(|a, b| {
+            b.2.len()
+                .cmp(&a.2.len())
+                .then_with(|| a.0.cmp(&b.0))
+                .then_with(|| a.1.cmp(&b.1))
+        });
+
+        let mut visible = Vec::new();
+        for (epic_key, epic_summary, tickets) in groups {
+            match &search {
+                Some(s) => {
+                    let epic_matches = Self::contains_case_insensitive(&epic_key, s)
+                        || Self::contains_case_insensitive(&epic_summary, s);
+                    if epic_matches {
+                        visible.push((epic_key, epic_summary, tickets));
+                        continue;
+                    }
+
+                    let filtered: Vec<_> = tickets
+                        .into_iter()
+                        .filter(|t| Self::ticket_matches_search(t, s))
+                        .collect();
+                    if !filtered.is_empty() {
+                        visible.push((epic_key, epic_summary, filtered));
+                    }
+                }
+                None => visible.push((epic_key, epic_summary, tickets)),
+            }
+        }
+
+        visible
+    }
+
+    pub(crate) fn unassigned_visible_ticket_keys(&self) -> Vec<String> {
+        self.unassigned_visible_by_epic()
+            .into_iter()
+            .flat_map(|(_, _, tickets)| tickets.into_iter().map(|t| t.key.clone()))
             .collect()
     }
 
@@ -581,8 +667,12 @@ impl App {
         let mut changed = false;
         let update = |ticket: &mut crate::cache::Ticket| {
             ticket.status = detail.status.clone();
-            ticket.assignee = detail.assignee.clone();
-            ticket.assignee_email = detail.assignee_email.clone();
+            if detail.assignee.is_some() {
+                ticket.assignee = detail.assignee.clone();
+            }
+            if detail.assignee_email.is_some() {
+                ticket.assignee_email = detail.assignee_email.clone();
+            }
             ticket.description = detail.description.clone();
             ticket.labels = detail.labels.clone();
             if detail.epic_key.is_some() {
@@ -824,5 +914,75 @@ mod tests {
         app.search = Some("perf".to_string());
         assert_eq!(app.item_count(), 1);
         assert_eq!(app.selected_ticket_key(), Some("AMP-55".to_string()));
+    }
+
+    #[test]
+    fn unassigned_item_count_matches_visible_rows() {
+        let mut app = App::new();
+        app.active_tab = Tab::Unassigned;
+        app.loading = false;
+
+        let mut t1 = ticket("AMP-91", "Missing owner in epic one");
+        t1.assignee = Some("Unassigned".to_string());
+        t1.assignee_email = Some("__unassigned__".to_string());
+        t1.epic_key = Some("AMP-100".to_string());
+        t1.epic_name = Some("Epic One".to_string());
+
+        let mut t2 = ticket("AMP-92", "Another owner gap in epic one");
+        t2.assignee = Some("Unassigned".to_string());
+        t2.assignee_email = Some("__unassigned__".to_string());
+        t2.epic_key = Some("AMP-100".to_string());
+        t2.epic_name = Some("Epic One".to_string());
+
+        let mut t3 = ticket("AMP-93", "Unassigned without epic");
+        t3.assignee = Some("Unassigned".to_string());
+        t3.assignee_email = Some("__unassigned__".to_string());
+
+        let mut assigned = ticket("AMP-94", "Assigned ticket");
+        assigned.assignee = Some("Dev".to_string());
+        assigned.assignee_email = Some("dev@example.com".to_string());
+
+        app.cache.team_tickets = vec![t3, assigned, t2, t1];
+
+        assert_eq!(app.item_count(), 3);
+        assert_eq!(
+            app.unassigned_visible_ticket_keys(),
+            vec![
+                "AMP-91".to_string(),
+                "AMP-92".to_string(),
+                "AMP-93".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn unassigned_search_matches_epic_and_ticket_fields() {
+        let mut app = App::new();
+        app.active_tab = Tab::Unassigned;
+        app.loading = false;
+
+        let mut t1 = ticket("AMP-101", "Upgrade parser error handling");
+        t1.assignee = Some("Unassigned".to_string());
+        t1.assignee_email = Some("__unassigned__".to_string());
+        t1.epic_key = Some("AMP-501".to_string());
+        t1.epic_name = Some("Parser Platform".to_string());
+        t1.labels = vec!["infra".to_string()];
+
+        let mut t2 = ticket("AMP-102", "Refactor retries");
+        t2.assignee = Some("Unassigned".to_string());
+        t2.assignee_email = Some("__unassigned__".to_string());
+        t2.epic_key = Some("AMP-502".to_string());
+        t2.epic_name = Some("Runner".to_string());
+        t2.labels = vec!["perf".to_string()];
+
+        app.cache.team_tickets = vec![t1, t2];
+
+        app.search = Some("parser".to_string());
+        assert_eq!(app.item_count(), 1);
+        assert_eq!(app.selected_ticket_key(), Some("AMP-101".to_string()));
+
+        app.search = Some("perf".to_string());
+        assert_eq!(app.item_count(), 1);
+        assert_eq!(app.selected_ticket_key(), Some("AMP-102".to_string()));
     }
 }
