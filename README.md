@@ -56,8 +56,10 @@ cargo run -- --dev-release
 Detail modal:
 
 - `Esc`: close
+- `Up/Down`: scroll
 - `o`: open ticket in browser
 - `m`: open move picker
+- Move picker shortcuts: `p/w/n/t/v/b/d` (prompt + confirm), uppercase to move immediately
 
 ## Data/Cache Notes
 

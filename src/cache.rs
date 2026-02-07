@@ -39,6 +39,31 @@ impl Status {
         }
     }
 
+    pub fn move_shortcut(&self) -> char {
+        match self {
+            Status::InProgress => 'p',
+            Status::ReadyForWork => 'w',
+            Status::NeedsTriage => 'n',
+            Status::ToDo => 't',
+            Status::InReview => 'v',
+            Status::Blocked => 'b',
+            Status::Done => 'd',
+        }
+    }
+
+    pub fn from_move_shortcut(c: char) -> Option<Self> {
+        match c.to_ascii_lowercase() {
+            'p' => Some(Status::InProgress),
+            'w' => Some(Status::ReadyForWork),
+            'n' => Some(Status::NeedsTriage),
+            't' => Some(Status::ToDo),
+            'v' => Some(Status::InReview),
+            'b' => Some(Status::Blocked),
+            'd' => Some(Status::Done),
+            _ => None,
+        }
+    }
+
     /// All statuses in display order.
     pub fn all() -> &'static [Status] {
         &[

@@ -472,10 +472,47 @@ fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
     }
 }
 
+fn current_move_options(app: &App) -> Option<(String, Vec<Status>)> {
+    let ticket_key = app.detail_ticket_key.clone()?;
+    let ticket = app.find_ticket(&ticket_key)?;
+    let options = ticket.status.others().into_iter().cloned().collect();
+    Some((ticket_key, options))
+}
+
+fn queue_move_confirmation(app: &mut App, ticket_key: &str, selected: usize, new_status: Status) {
+    let shortcut = new_status.move_shortcut().to_ascii_uppercase();
+    let status_str = new_status.as_str().to_string();
+    app.detail_mode = DetailMode::MovePicker {
+        selected,
+        confirm_target: Some(new_status),
+    };
+    app.flash = Some(format!(
+        "Move {} to {}? Press Enter/y to confirm (or {} to move now).",
+        ticket_key, status_str, shortcut
+    ));
+}
+
+fn perform_ticket_move(app: &mut App, ticket_key: String, new_status: Status) {
+    let status_str = new_status.as_str().to_string();
+    let key_clone = ticket_key.clone();
+
+    // Optimistic update
+    app.update_ticket_status(&ticket_key, new_status);
+    app.detail_mode = DetailMode::View;
+    app.flash = Some(format!("Moving {} to {}...", key_clone, status_str));
+
+    // Fire and forget the CLI call
+    tokio::spawn(async move {
+        let _ = jira_client::move_ticket(&key_clone, &status_str).await;
+    });
+}
+
 fn handle_detail_keys(app: &mut App, key: KeyCode) {
-    match &app.detail_mode {
+    match app.detail_mode.clone() {
         DetailMode::View => match key {
             KeyCode::Esc => app.close_detail(),
+            KeyCode::Up => app.scroll_detail_up(),
+            KeyCode::Down => app.scroll_detail_down(),
             KeyCode::Char('o') => {
                 if let Some(ref key) = app.detail_ticket_key {
                     if let Some(ticket) = app.find_ticket(key) {
@@ -485,43 +522,75 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
                 }
             }
             KeyCode::Char('m') => {
-                app.detail_mode = DetailMode::MovePicker { selected: 0 };
+                app.detail_mode = DetailMode::MovePicker {
+                    selected: 0,
+                    confirm_target: None,
+                };
             }
             _ => {}
         },
-        DetailMode::MovePicker { selected } => match key {
+        DetailMode::MovePicker {
+            selected,
+            confirm_target,
+        } => match key {
             KeyCode::Esc => app.detail_mode = DetailMode::View,
             KeyCode::Char('j') | KeyCode::Down => {
-                if let Some(ref key) = app.detail_ticket_key {
-                    if let Some(ticket) = app.find_ticket(key) {
-                        let options = ticket.status.others();
-                        let new_sel = (*selected + 1).min(options.len().saturating_sub(1));
-                        app.detail_mode = DetailMode::MovePicker { selected: new_sel };
-                    }
+                if let Some((_, options)) = current_move_options(app) {
+                    let new_sel = (selected + 1).min(options.len().saturating_sub(1));
+                    app.detail_mode = DetailMode::MovePicker {
+                        selected: new_sel,
+                        confirm_target: None,
+                    };
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                let new_sel = selected.saturating_sub(1);
-                app.detail_mode = DetailMode::MovePicker { selected: new_sel };
+                app.detail_mode = DetailMode::MovePicker {
+                    selected: selected.saturating_sub(1),
+                    confirm_target: None,
+                };
             }
             KeyCode::Enter => {
-                if let Some(ticket_key) = app.detail_ticket_key.clone() {
-                    if let Some(ticket) = app.find_ticket(&ticket_key) {
-                        let options = ticket.status.others();
-                        if let Some(new_status) = options.get(*selected) {
-                            let new_status = (*new_status).clone();
-                            let status_str = new_status.as_str().to_string();
-                            let key_clone = ticket_key.clone();
-
-                            // Optimistic update
-                            app.update_ticket_status(&ticket_key, new_status);
-                            app.detail_mode = DetailMode::View;
-                            app.flash = Some(format!("Moving {} to {}...", key_clone, status_str));
-
-                            // Fire and forget the CLI call
-                            tokio::spawn(async move {
-                                let _ = jira_client::move_ticket(&key_clone, &status_str).await;
-                            });
+                if let Some(target) = confirm_target {
+                    if let Some((ticket_key, options)) = current_move_options(app) {
+                        if options.contains(&target) {
+                            perform_ticket_move(app, ticket_key, target);
+                        }
+                    }
+                } else if let Some((ticket_key, options)) = current_move_options(app) {
+                    if let Some(new_status) = options.get(selected).cloned() {
+                        queue_move_confirmation(app, &ticket_key, selected, new_status);
+                    }
+                }
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(target) = confirm_target {
+                    if let Some((ticket_key, options)) = current_move_options(app) {
+                        if options.contains(&target) {
+                            perform_ticket_move(app, ticket_key, target);
+                        }
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(target_status) = Status::from_move_shortcut(c) {
+                    if let Some((ticket_key, options)) = current_move_options(app) {
+                        if let Some(target_idx) = options.iter().position(|s| *s == target_status) {
+                            if c.is_ascii_uppercase() {
+                                perform_ticket_move(app, ticket_key, target_status);
+                            } else {
+                                queue_move_confirmation(
+                                    app,
+                                    &ticket_key,
+                                    target_idx,
+                                    target_status,
+                                );
+                            }
+                        } else {
+                            app.flash = Some(format!(
+                                "{} is already {}",
+                                ticket_key,
+                                target_status.as_str()
+                            ));
                         }
                     }
                 }

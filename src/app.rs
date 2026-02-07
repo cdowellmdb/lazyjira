@@ -37,8 +37,11 @@ impl Tab {
 pub enum DetailMode {
     /// Showing ticket info.
     View,
-    /// Showing the status move picker, with selected index.
-    MovePicker { selected: usize },
+    /// Showing the status move picker, with selected index and optional pending confirmation.
+    MovePicker {
+        selected: usize,
+        confirm_target: Option<crate::cache::Status>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +74,8 @@ pub struct App {
     /// If Some, the detail overlay is open for this ticket key.
     pub detail_ticket_key: Option<String>,
     pub detail_mode: DetailMode,
+    /// Vertical scroll offset for the ticket detail body.
+    pub detail_scroll: u16,
     /// True while data is being fetched.
     pub loading: bool,
     /// Flash message (error or success), cleared on next keypress.
@@ -106,6 +111,7 @@ impl App {
             selected_index: 0,
             detail_ticket_key: None,
             detail_mode: DetailMode::View,
+            detail_scroll: 0,
             loading: true,
             flash: None,
             search: None,
@@ -143,11 +149,13 @@ impl App {
     pub fn open_detail(&mut self, key: String) {
         self.detail_ticket_key = Some(key);
         self.detail_mode = DetailMode::View;
+        self.detail_scroll = 0;
     }
 
     pub fn close_detail(&mut self) {
         self.detail_ticket_key = None;
         self.detail_mode = DetailMode::View;
+        self.detail_scroll = 0;
     }
 
     pub fn is_detail_open(&self) -> bool {
@@ -542,6 +550,14 @@ impl App {
         if self.selected_index > 0 {
             self.selected_index -= 1;
         }
+    }
+
+    pub fn scroll_detail_down(&mut self) {
+        self.detail_scroll = self.detail_scroll.saturating_add(1);
+    }
+
+    pub fn scroll_detail_up(&mut self) {
+        self.detail_scroll = self.detail_scroll.saturating_sub(1);
     }
 
     /// Find a ticket by key across all cached data.

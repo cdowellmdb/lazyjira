@@ -190,12 +190,15 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     f.render_widget(block, area);
 
     match &app.detail_mode {
-        DetailMode::View => render_view(f, inner, ticket),
-        DetailMode::MovePicker { selected } => render_move_picker(f, inner, ticket, *selected),
+        DetailMode::View => render_view(f, inner, ticket, app.detail_scroll),
+        DetailMode::MovePicker {
+            selected,
+            confirm_target,
+        } => render_move_picker(f, inner, ticket, *selected, confirm_target.as_ref()),
     }
 }
 
-fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket) {
+fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket, scroll: u16) {
     // Split into body and footer
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -263,12 +266,14 @@ fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket
     let desc = ticket.description.as_deref().unwrap_or("(no description)");
     push_description_lines(&mut lines, desc);
 
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let body = Paragraph::new(lines)
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false });
     f.render_widget(body, body_area);
 
     // Footer
     let footer = Paragraph::new(Line::from(Span::styled(
-        "[Esc] close   [o] open in browser   [m] move",
+        "[↑/↓] scroll   [Esc] close   [o] open in browser   [m] move",
         Style::default().fg(Color::DarkGray),
     )));
     f.render_widget(footer, footer_area);
@@ -279,6 +284,7 @@ fn render_move_picker(
     area: Rect,
     ticket: &crate::cache::Ticket,
     selected: usize,
+    confirm_target: Option<&Status>,
 ) {
     // Split into body and footer
     let chunks = Layout::default()
@@ -311,8 +317,19 @@ fn render_move_picker(
             style = style.add_modifier(Modifier::BOLD).bg(Color::DarkGray);
         }
         lines.push(Line::from(Span::styled(
-            format!("{}{}", prefix, status.as_str()),
+            format!("{}[{}] {}", prefix, status.move_shortcut(), status.as_str()),
             style,
+        )));
+    }
+
+    if let Some(status) = confirm_target {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "Confirm move to {}? Press Enter or y. Esc cancels.",
+                status.as_str()
+            ),
+            Style::default().fg(Color::Yellow),
         )));
     }
 
@@ -321,7 +338,7 @@ fn render_move_picker(
 
     // Footer
     let footer = Paragraph::new(Line::from(Span::styled(
-        "[Enter] confirm   [Esc] cancel",
+        "[j/k/↑/↓] choose   [p/w/n/t/v/b/d] confirm   [Shift+key] move now   [Esc] cancel",
         Style::default().fg(Color::DarkGray),
     )));
     f.render_widget(footer, footer_area);
