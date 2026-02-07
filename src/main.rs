@@ -41,6 +41,10 @@ enum BackgroundMessage {
     },
     TicketCreated(std::result::Result<String, String>),
     CommentAdded(std::result::Result<String, String>),
+    TicketAssigned {
+        key: String,
+        result: std::result::Result<(), String>,
+    },
 }
 
 fn spawn_epics_refresh(tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
@@ -301,6 +305,16 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+                BackgroundMessage::TicketAssigned { key, result } => {
+                    match result {
+                        Ok(()) => {
+                            app.flash = Some(format!("Assigned {}", key));
+                        }
+                        Err(e) => {
+                            app.flash = Some(format!("Assign failed for {}: {}", key, e));
+                        }
+                    }
+                }
             }
         }
 
@@ -322,6 +336,8 @@ async fn main() -> Result<()> {
                         handle_create_ticket_keys(&mut app, key.code, key.modifiers, &bg_tx, &config).await;
                     } else if app.is_comment_open() {
                         handle_comment_keys(&mut app, key.code, &bg_tx);
+                    } else if app.is_assign_open() {
+                        handle_assign_keys(&mut app, key.code, &bg_tx);
                     } else if app.show_keybindings {
                         handle_keybindings_keys(&mut app, key.code);
                     } else if app.is_detail_open() {
@@ -510,6 +526,9 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     if app.is_comment_open() {
         widgets::comment::render(f, app);
     }
+    if app.is_assign_open() {
+        widgets::assign::render(f, app);
+    }
     if app.show_keybindings {
         widgets::keybindings_help::render(f);
     }
@@ -582,6 +601,14 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
                     app.comment_state = Some(app::CommentState {
                         ticket_key: key.clone(),
                         body: String::new(),
+                    });
+                }
+            }
+            KeyCode::Char('a') => {
+                if let Some(ref key) = app.detail_ticket_key {
+                    app.assign_state = Some(app::AssignState {
+                        ticket_key: key.clone(),
+                        selected: 0,
                     });
                 }
             }
@@ -860,6 +887,84 @@ fn handle_comment_keys(
             if let Some(ref mut state) = app.comment_state {
                 state.body.push(c);
             }
+        }
+        _ => {}
+    }
+}
+
+fn handle_assign_keys(
+    app: &mut App,
+    key: KeyCode,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+) {
+    let member_count = app.cache.team_members.len();
+    match key {
+        KeyCode::Esc => {
+            app.assign_state = None;
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(ref mut state) = app.assign_state {
+                if member_count > 0 && state.selected < member_count - 1 {
+                    state.selected += 1;
+                }
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(ref mut state) = app.assign_state {
+                state.selected = state.selected.saturating_sub(1);
+            }
+        }
+        KeyCode::Enter => {
+            let state = match &app.assign_state {
+                Some(s) => s,
+                None => return,
+            };
+            let member = match app.cache.team_members.get(state.selected) {
+                Some(m) => m,
+                None => return,
+            };
+            let ticket_key = state.ticket_key.clone();
+            let email = member.email.clone();
+            let name = member.name.clone();
+
+            // Optimistic cache update
+            for ticket in &mut app.cache.my_tickets {
+                if ticket.key == ticket_key {
+                    ticket.assignee = Some(name.clone());
+                    ticket.assignee_email = Some(email.clone());
+                }
+            }
+            for ticket in &mut app.cache.team_tickets {
+                if ticket.key == ticket_key {
+                    ticket.assignee = Some(name.clone());
+                    ticket.assignee_email = Some(email.clone());
+                }
+            }
+            for epic in &mut app.cache.epics {
+                for ticket in &mut epic.children {
+                    if ticket.key == ticket_key {
+                        ticket.assignee = Some(name.clone());
+                        ticket.assignee_email = Some(email.clone());
+                    }
+                }
+            }
+            app.mark_cache_changed();
+
+            app.assign_state = None;
+            app.flash = Some(format!("Assigning {} to {}...", ticket_key, name));
+
+            let tx = bg_tx.clone();
+            let key_clone = ticket_key.clone();
+            let email_clone = email.clone();
+            tokio::spawn(async move {
+                let result = jira_client::assign_ticket(&key_clone, &email_clone)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(BackgroundMessage::TicketAssigned {
+                    key: key_clone,
+                    result,
+                });
+            });
         }
         _ => {}
     }

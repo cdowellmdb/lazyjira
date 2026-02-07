@@ -16,6 +16,12 @@ pub struct CommentState {
 }
 
 #[derive(Debug, Clone)]
+pub struct AssignState {
+    pub ticket_key: String,
+    pub selected: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct CreateTicketState {
     pub focused_field: usize, // 0=type, 1=summary, 2=assignee, 3=epic
     pub issue_type_idx: usize,
@@ -130,6 +136,8 @@ pub struct App {
     pub create_ticket: Option<CreateTicketState>,
     /// State for the comment modal overlay.
     pub comment_state: Option<CommentState>,
+    /// State for the assign/reassign modal overlay.
+    pub assign_state: Option<AssignState>,
 }
 
 impl App {
@@ -156,6 +164,7 @@ impl App {
             should_quit: false,
             create_ticket: None,
             comment_state: None,
+            assign_state: None,
         }
     }
 
@@ -595,6 +604,10 @@ impl App {
 
     pub fn is_comment_open(&self) -> bool {
         self.comment_state.is_some()
+    }
+
+    pub fn is_assign_open(&self) -> bool {
+        self.assign_state.is_some()
     }
 
     pub fn begin_detail_fetch(&mut self, key: &str) -> bool {

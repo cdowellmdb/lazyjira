@@ -78,6 +78,7 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  o: open ticket in browser"),
         Line::from("  m: move ticket"),
         Line::from("  C: add comment"),
+        Line::from("  a: assign/reassign ticket"),
         Line::from("  (in move picker) j/k or Up/Down: choose status"),
         Line::from("  (in move picker) p/w/n/t/v/b/d: choose + confirm prompt"),
         Line::from("  (in move picker) Shift+key: move immediately"),

@@ -782,6 +782,12 @@ pub async fn add_comment(key: &str, body: &str) -> Result<()> {
     Ok(())
 }
 
+/// Assign a ticket to a user via `jira issue assign`.
+pub async fn assign_ticket(key: &str, email: &str) -> Result<()> {
+    run_cmd("jira", &["issue", "assign", key, email]).await?;
+    Ok(())
+}
+
 /// Create a new ticket via `jira issue create`.
 pub async fn create_ticket(
     project: &str,
