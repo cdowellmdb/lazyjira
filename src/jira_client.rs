@@ -114,6 +114,7 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
         status: Status::from_str(status_str),
         assignee,
         assignee_email: None,
+        reporter: None,
         description: None,
         labels: Vec::new(),
         epic_key: None,
@@ -247,6 +248,9 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
     let assignee_email = fields["assignee"]["emailAddress"]
         .as_str()
         .map(|s| s.to_string());
+    let reporter = fields["reporter"]["displayName"]
+        .as_str()
+        .map(|s| s.to_string());
     let description = fields["description"].as_str().map(|s| s.to_string());
     let labels = fields["labels"]
         .as_array()
@@ -337,6 +341,7 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
         status: Status::from_str(status),
         assignee,
         assignee_email,
+        reporter,
         description,
         labels,
         epic_key,
@@ -682,6 +687,9 @@ fn hydrate_ticket_from_details_cache(
     }
     if detail.assignee_email.is_some() {
         ticket.assignee_email = detail.assignee_email.clone();
+    }
+    if detail.reporter.is_some() {
+        ticket.reporter = detail.reporter.clone();
     }
     if detail.epic_key.is_some() {
         ticket.epic_key = detail.epic_key.clone();

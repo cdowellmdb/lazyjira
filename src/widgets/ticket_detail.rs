@@ -238,6 +238,14 @@ fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket
         Span::styled(assignee_str, Style::default().fg(Color::White)),
     ]));
 
+    // Line 4: Reporter (if loaded)
+    if let Some(ref reporter) = ticket.reporter {
+        lines.push(Line::from(vec![
+            Span::raw("Reporter: "),
+            Span::styled(reporter.as_str(), Style::default().fg(Color::White)),
+        ]));
+    }
+
     // Line 4: Epic (if present)
     if let (Some(ref epic_key), Some(ref epic_name)) = (&ticket.epic_key, &ticket.epic_name) {
         lines.push(Line::from(vec![

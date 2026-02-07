@@ -112,6 +112,7 @@ pub struct Ticket {
     pub status: Status,
     pub assignee: Option<String>,
     pub assignee_email: Option<String>,
+    pub reporter: Option<String>,
     pub description: Option<String>,
     pub labels: Vec<String>,
     pub epic_key: Option<String>,

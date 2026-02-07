@@ -775,6 +775,9 @@ impl App {
             if detail.assignee_email.is_some() {
                 ticket.assignee_email = detail.assignee_email.clone();
             }
+            if detail.reporter.is_some() {
+                ticket.reporter = detail.reporter.clone();
+            }
             ticket.description = detail.description.clone();
             ticket.labels = detail.labels.clone();
             if detail.epic_key.is_some() {
@@ -854,6 +857,7 @@ mod tests {
             status: Status::ToDo,
             assignee: None,
             assignee_email: None,
+            reporter: None,
             description: None,
             labels: Vec::new(),
             epic_key: None,
