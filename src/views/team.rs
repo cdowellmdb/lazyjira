@@ -8,6 +8,8 @@ use crate::cache::Status;
 
 fn status_color(status: &Status) -> Color {
     match status {
+        Status::NeedsTriage => Color::White,
+        Status::ReadyForWork => Color::Blue,
         Status::InProgress => Color::Yellow,
         Status::ToDo => Color::White,
         Status::InReview => Color::Cyan,
@@ -16,57 +18,88 @@ fn status_color(status: &Status) -> Color {
     }
 }
 
-pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
-    let search_lower = app.search.as_ref().map(|s| s.to_lowercase());
-    let searching = matches!(&search_lower, Some(s) if !s.is_empty());
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        let t: String = s.chars().take(max.saturating_sub(3)).collect();
+        format!("{}...", t)
+    } else {
+        s.to_string()
+    }
+}
 
-    // Sort members: those with more active tickets first
-    let mut members: Vec<_> = app.cache.team_members.iter().collect();
-    members.sort_by(|a, b| {
-        let ac = app.cache.active_tickets_for(&a.email).len();
-        let bc = app.cache.active_tickets_for(&b.email).len();
-        bc.cmp(&ac)
-    });
+fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
+    let key_w = 10usize;
+    let status_w = 15usize;
+    let mut summary_w = 28usize;
+    let mut epic_w = 20usize;
+    let mut labels_w = 18usize;
+    let inner = area.width.saturating_sub(2) as usize;
+    let prefix_and_separators = 2 + key_w + 3 + status_w + 3 + 3 + 3;
+    let mut overflow = prefix_and_separators + summary_w + epic_w + labels_w;
+
+    if overflow > inner {
+        let mut to_trim = overflow - inner;
+        if summary_w > 14 {
+            let cut = to_trim.min(summary_w - 14);
+            summary_w -= cut;
+            to_trim -= cut;
+        }
+        if to_trim > 0 && epic_w > 10 {
+            let cut = to_trim.min(epic_w - 10);
+            epic_w -= cut;
+            to_trim -= cut;
+        }
+        if to_trim > 0 && labels_w > 8 {
+            let cut = to_trim.min(labels_w - 8);
+            labels_w -= cut;
+        }
+    }
+
+    overflow = prefix_and_separators + summary_w + epic_w + labels_w;
+    if overflow < inner {
+        summary_w += inner - overflow;
+    }
+
+    (key_w, status_w, summary_w, epic_w, labels_w)
+}
+
+pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
+    let members = app.team_visible_tickets_by_member();
+    let (key_w, status_w, summary_w, epic_w, labels_w) = team_column_widths(area);
+    let heading_style = Style::default()
+        .fg(Color::Gray)
+        .add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
     let mut ticket_idx: usize = 0;
     let mut selected_visual_line: Option<usize> = None;
 
-    for member in &members {
-        let active = app.cache.active_tickets_for(&member.email);
-
-        // Apply search filter
-        let filtered: Vec<_> = if searching {
-            let s = search_lower.as_ref().unwrap();
-            active
-                .into_iter()
-                .filter(|t| {
-                    t.key.to_lowercase().contains(s.as_str())
-                        || t.summary.to_lowercase().contains(s.as_str())
-                })
-                .collect()
-        } else {
-            active
-        };
-
-        // When searching, skip members with no matching tickets
-        if searching && filtered.is_empty() {
-            continue;
-        }
-
+    for (member, active, done) in members {
         // Member header
         lines.push(Line::from(Span::styled(
-            member.name.clone(),
+            member.name.as_str(),
             Style::default().add_modifier(Modifier::BOLD),
         )));
 
-        if filtered.is_empty() {
+        if active.is_empty() && done.is_empty() {
             lines.push(Line::from(Span::styled(
-                "  (no active tickets)",
+                "  (no tickets)",
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            for ticket in &filtered {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {:<key_w$}", "KEY"), heading_style),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:<epic_w$}", "EPIC"), heading_style),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:<labels_w$}", "LABELS"), heading_style),
+            ]));
+
+            for ticket in &active {
                 let is_selected = ticket_idx == app.selected_index;
                 if is_selected {
                     selected_visual_line = Some(lines.len());
@@ -84,16 +117,122 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     Style::default().fg(status_fg)
                 };
+                let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
+                let labels_str = if ticket.labels.is_empty() {
+                    "-".to_string()
+                } else {
+                    ticket.labels.join(", ")
+                };
 
                 lines.push(Line::from(vec![
-                    Span::styled("  \u{25CF} ", colored),
-                    Span::styled(format!("{} ", ticket.key), base),
-                    Span::styled(format!("{:<14}", ticket.status.as_str()), colored),
-                    Span::styled(ticket.summary.clone(), base),
+                    Span::styled(format!("  {:<key_w$}", ticket.key), base),
+                    Span::styled(" | ", base),
+                    Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
+                    Span::styled(" | ", base),
+                    Span::styled(
+                        format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
+                        base,
+                    ),
+                    Span::styled(" | ", base),
+                    Span::styled(
+                        format!("{:<epic_w$}", truncate(epic_str, epic_w)),
+                        if is_selected {
+                            Style::default().fg(Color::Gray).bg(Color::DarkGray)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
+                    Span::styled(" | ", base),
+                    Span::styled(
+                        format!("{:<labels_w$}", truncate(&labels_str, labels_w)),
+                        if is_selected {
+                            Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
                 ]));
 
                 ticket_idx += 1;
             }
+
+            if !done.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!("    done ({})", done.len()),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::DIM),
+                )));
+            }
+
+            for ticket in &done {
+                let is_selected = ticket_idx == app.selected_index;
+                if is_selected {
+                    selected_visual_line = Some(lines.len());
+                }
+
+                let base = if is_selected {
+                    Style::default().bg(Color::DarkGray)
+                } else {
+                    Style::default().add_modifier(Modifier::DIM)
+                };
+
+                let status_fg = status_color(&ticket.status);
+                let colored = if is_selected {
+                    Style::default().fg(status_fg).bg(Color::DarkGray)
+                } else {
+                    Style::default().fg(status_fg).add_modifier(Modifier::DIM)
+                };
+                let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
+                let labels_str = if ticket.labels.is_empty() {
+                    "-".to_string()
+                } else {
+                    ticket.labels.join(", ")
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(format!("    {:<key_w$}", ticket.key), base),
+                    Span::styled(" | ", base),
+                    Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
+                    Span::styled(" | ", base),
+                    Span::styled(
+                        format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
+                        base,
+                    ),
+                    Span::styled(" | ", base),
+                    Span::styled(
+                        format!("{:<epic_w$}", truncate(epic_str, epic_w)),
+                        if is_selected {
+                            Style::default().fg(Color::Gray).bg(Color::DarkGray)
+                        } else {
+                            Style::default()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::DIM)
+                        },
+                    ),
+                    Span::styled(" | ", base),
+                    Span::styled(
+                        format!("{:<labels_w$}", truncate(&labels_str, labels_w)),
+                        if is_selected {
+                            Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+                        } else {
+                            Style::default()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::DIM)
+                        },
+                    ),
+                ]));
+
+                ticket_idx += 1;
+            }
+
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("active: {}  done: {}", active.len(), done.len()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
         }
 
         // Blank line between members

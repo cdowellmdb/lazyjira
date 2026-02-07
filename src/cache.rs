@@ -1,8 +1,11 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Represents a Jira ticket status.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Status {
+    NeedsTriage,
+    ReadyForWork,
     ToDo,
     InProgress,
     InReview,
@@ -13,6 +16,8 @@ pub enum Status {
 impl Status {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Status::NeedsTriage => "Needs Triage",
+            Status::ReadyForWork => "Ready for Work",
             Status::ToDo => "To Do",
             Status::InProgress => "In Progress",
             Status::InReview => "In Review",
@@ -23,6 +28,8 @@ impl Status {
 
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
+            "needs triage" => Status::NeedsTriage,
+            "ready for work" => Status::ReadyForWork,
             "to do" | "todo" | "open" | "new" => Status::ToDo,
             "in progress" | "in development" => Status::InProgress,
             "in review" | "review" => Status::InReview,
@@ -36,6 +43,8 @@ impl Status {
     pub fn all() -> &'static [Status] {
         &[
             Status::InProgress,
+            Status::ReadyForWork,
+            Status::NeedsTriage,
             Status::ToDo,
             Status::InReview,
             Status::Blocked,
@@ -50,7 +59,7 @@ impl Status {
 }
 
 /// A single Jira ticket.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticket {
     pub key: String,
     pub summary: String,
@@ -58,13 +67,16 @@ pub struct Ticket {
     pub assignee: Option<String>,
     pub assignee_email: Option<String>,
     pub description: Option<String>,
+    pub labels: Vec<String>,
     pub epic_key: Option<String>,
     pub epic_name: Option<String>,
+    #[serde(default)]
+    pub detail_loaded: bool,
     pub url: String,
 }
 
 /// An epic with aggregated child ticket info.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Epic {
     pub key: String,
     pub summary: String,
@@ -77,7 +89,10 @@ impl Epic {
     }
 
     pub fn done_count(&self) -> usize {
-        self.children.iter().filter(|t| t.status == Status::Done).count()
+        self.children
+            .iter()
+            .filter(|t| t.status == Status::Done)
+            .count()
     }
 
     pub fn count_by_status(&self) -> HashMap<&Status, usize> {
@@ -97,7 +112,7 @@ impl Epic {
 }
 
 /// Team member info loaded from team.yml.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamMember {
     pub name: String,
     pub email: String,
@@ -110,7 +125,6 @@ pub struct Cache {
     pub team_tickets: Vec<Ticket>,
     pub epics: Vec<Epic>,
     pub team_members: Vec<TeamMember>,
-    pub my_email: String,
 }
 
 impl Cache {
@@ -120,7 +134,6 @@ impl Cache {
             team_tickets: Vec::new(),
             epics: Vec::new(),
             team_members: Vec::new(),
-            my_email: String::new(),
         }
     }
 
@@ -137,22 +150,6 @@ impl Cache {
         self.tickets_for(email)
             .into_iter()
             .filter(|t| t.status != Status::Done)
-            .collect()
-    }
-
-    /// Get my tickets grouped by status, in display order.
-    pub fn my_tickets_by_status(&self) -> Vec<(&'static Status, Vec<&Ticket>)> {
-        Status::all()
-            .iter()
-            .map(|status| {
-                let tickets: Vec<&Ticket> = self
-                    .my_tickets
-                    .iter()
-                    .filter(|t| &t.status == status)
-                    .collect();
-                (status, tickets)
-            })
-            .filter(|(_, tickets)| !tickets.is_empty())
             .collect()
     }
 }

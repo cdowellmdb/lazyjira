@@ -8,6 +8,8 @@ use crate::cache::Status;
 
 fn status_color(status: &Status) -> Color {
     match status {
+        Status::NeedsTriage => Color::White,
+        Status::ReadyForWork => Color::Blue,
         Status::InProgress => Color::Yellow,
         Status::ToDo => Color::White,
         Status::InReview => Color::Cyan,
@@ -25,39 +27,79 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
+    let key_w = 10usize;
+    let mut summary_w = 34usize;
+    let mut epic_w = 24usize;
+    let mut labels_w = 22usize;
+    let inner = area.width.saturating_sub(2) as usize;
+    let prefix_and_separators = 2 + key_w + 3 + 3 + 3;
+    let mut overflow = prefix_and_separators + summary_w + epic_w + labels_w;
+
+    if overflow > inner {
+        let mut to_trim = overflow - inner;
+        if summary_w > 16 {
+            let cut = to_trim.min(summary_w - 16);
+            summary_w -= cut;
+            to_trim -= cut;
+        }
+        if to_trim > 0 && epic_w > 12 {
+            let cut = to_trim.min(epic_w - 12);
+            epic_w -= cut;
+            to_trim -= cut;
+        }
+        if to_trim > 0 && labels_w > 10 {
+            let cut = to_trim.min(labels_w - 10);
+            labels_w -= cut;
+            to_trim -= cut;
+        }
+        if to_trim > 0 && summary_w > 12 {
+            let cut = to_trim.min(summary_w - 12);
+            summary_w -= cut;
+        }
+    }
+
+    overflow = prefix_and_separators + summary_w + epic_w + labels_w;
+    if overflow < inner {
+        summary_w += inner - overflow;
+    }
+
+    (key_w, summary_w, epic_w, labels_w)
+}
+
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
-    let grouped = app.cache.my_tickets_by_status();
-    let search_lower = app.search.as_ref().map(|s| s.to_lowercase());
+    let grouped = app.my_work_visible_by_status();
+    let (key_w, summary_w, epic_w, labels_w) = my_work_column_widths(area);
+    let heading_style = Style::default()
+        .fg(Color::Gray)
+        .add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
     let mut ticket_idx: usize = 0;
     let mut selected_visual_line: Option<usize> = None;
+    let mut has_rows = false;
 
     for (status, tickets) in &grouped {
-        // Apply search filter
-        let filtered: Vec<_> = match &search_lower {
-            Some(s) if !s.is_empty() => tickets
-                .iter()
-                .filter(|t| {
-                    t.key.to_lowercase().contains(s.as_str())
-                        || t.summary.to_lowercase().contains(s.as_str())
-                })
-                .copied()
-                .collect(),
-            _ => tickets.to_vec(),
-        };
-
-        if filtered.is_empty() {
-            continue;
+        if !has_rows {
+            let header_w = 2 + key_w + 3 + summary_w + 3 + epic_w + 3 + labels_w;
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {:<key_w$}", "KEY"), heading_style),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:<epic_w$}", "EPIC"), heading_style),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:<labels_w$}", "LABELS"), heading_style),
+            ]));
+            lines.push(Line::from(Span::styled(
+                format!("{}", "-".repeat(header_w)),
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(""));
         }
 
-        // Cap Done section at 5 most recent
-        let total_count = filtered.len();
-        let display: Vec<_> = if **status == Status::Done {
-            filtered.into_iter().take(5).collect()
-        } else {
-            filtered
-        };
+        let total_count = tickets.len();
+        has_rows = true;
 
         // Status header
         let header = format!("{} ({})", status.as_str().to_uppercase(), total_count);
@@ -69,7 +111,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         )));
 
         // Ticket rows
-        for ticket in &display {
+        for ticket in tickets {
             let is_selected = ticket_idx == app.selected_index;
             if is_selected {
                 selected_visual_line = Some(lines.len());
@@ -81,18 +123,34 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 Style::default()
             };
 
-            let epic_str = match &ticket.epic_name {
-                Some(name) => format!("Epic: {}", name),
-                None => String::new(),
+            let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
+            let labels_str = if ticket.labels.is_empty() {
+                "-".to_string()
+            } else {
+                ticket.labels.join(", ")
             };
 
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:<10}", ticket.key), base),
-                Span::styled(format!("{:<30}", truncate(&ticket.summary, 30)), base),
+                Span::styled(format!("  {:<key_w$}", ticket.key), base),
+                Span::styled(" | ", base),
                 Span::styled(
-                    epic_str,
+                    format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
+                    base,
+                ),
+                Span::styled(" | ", base),
+                Span::styled(
+                    format!("{:<epic_w$}", truncate(epic_str, epic_w)),
                     if is_selected {
                         Style::default().fg(Color::Gray).bg(Color::DarkGray)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                ),
+                Span::styled(" | ", base),
+                Span::styled(
+                    format!("{:<labels_w$}", truncate(&labels_str, labels_w)),
+                    if is_selected {
+                        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
                     } else {
                         Style::default().fg(Color::DarkGray)
                     },

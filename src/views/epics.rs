@@ -8,6 +8,8 @@ use crate::cache::Status;
 
 fn status_color(status: &Status) -> Color {
     match status {
+        Status::NeedsTriage => Color::White,
+        Status::ReadyForWork => Color::Blue,
         Status::InProgress => Color::Yellow,
         Status::ToDo => Color::White,
         Status::InReview => Color::Cyan,
@@ -28,116 +30,185 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
-    let search_lower = app.search.as_ref().map(|s| s.to_lowercase());
+fn child_column_widths(area: Rect) -> (usize, usize, usize) {
+    let key_w = 10usize;
+    let mut status_w = 12usize;
+    let mut summary_w = 48usize;
+    let inner = area.width.saturating_sub(2) as usize;
+    let prefix_and_separators = 4 + key_w + 3 + status_w + 3;
+    let mut overflow = prefix_and_separators + summary_w;
 
-    // Filter epics by search
-    let filtered_epics: Vec<_> = app
-        .cache
-        .epics
-        .iter()
-        .filter(|epic| match &search_lower {
-            Some(s) if !s.is_empty() => {
-                epic.key.to_lowercase().contains(s.as_str())
-                    || epic.summary.to_lowercase().contains(s.as_str())
-            }
-            _ => true,
-        })
-        .collect();
+    if overflow > inner {
+        let mut to_trim = overflow - inner;
+        if summary_w > 18 {
+            let cut = to_trim.min(summary_w - 18);
+            summary_w -= cut;
+            to_trim -= cut;
+        }
+        if to_trim > 0 && status_w > 8 {
+            let cut = to_trim.min(status_w - 8);
+            status_w -= cut;
+            to_trim -= cut;
+        }
+        if to_trim > 0 && summary_w > 10 {
+            let cut = to_trim.min(summary_w - 10);
+            summary_w -= cut;
+        }
+    }
+
+    overflow = prefix_and_separators + summary_w;
+    if overflow < inner {
+        summary_w += inner - overflow;
+    }
+
+    (key_w, status_w, summary_w)
+}
+
+fn progress_bar(done: usize, total: usize, width: usize) -> String {
+    if total == 0 || width == 0 {
+        return format!("[{}]", "-".repeat(width));
+    }
+
+    let filled = ((done * width) + (total / 2)) / total;
+    format!(
+        "[{}{}]",
+        "#".repeat(filled.min(width)),
+        "-".repeat(width.saturating_sub(filled.min(width)))
+    )
+}
+
+pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
+    let visible_epics = app.epics_visible_epics();
+    let (key_w, status_w, summary_w) = child_column_widths(area);
+    let heading_style = Style::default()
+        .fg(Color::Gray)
+        .add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut epic_idx: usize = 0;
+    let mut ticket_idx: usize = 0;
     let mut selected_visual_line: Option<usize> = None;
 
-    for epic in &filtered_epics {
-        let is_selected = epic_idx == app.selected_index;
-        if is_selected {
-            selected_visual_line = Some(lines.len());
-        }
+    if !visible_epics.is_empty() {
+        let header_w = 4 + key_w + 3 + status_w + 3 + summary_w;
+        lines.push(Line::from(vec![
+            Span::styled(format!("    {:<key_w$}", "KEY"), heading_style),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("{}", "-".repeat(header_w)),
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(""));
+    }
 
+    for (epic, children) in visible_epics {
         let total = epic.total();
         let done = epic.done_count();
         let pct = epic.progress_pct();
-
-        // Progress bar: 12 chars wide
-        let filled = if total > 0 {
-            ((pct / 100.0) * 12.0).round() as usize
+        let counts = epic.count_by_status();
+        let blocked = counts.get(&Status::Blocked).copied().unwrap_or(0);
+        let bar_width = 18usize;
+        let progress = progress_bar(done, total, bar_width);
+        let meta = if blocked > 0 {
+            format!(
+                "{}  ({} / {} done, {:.1}%, blocked {})",
+                progress, done, total, pct, blocked
+            )
         } else {
-            0
+            format!("{}  ({} / {} done, {:.1}%)", progress, done, total, pct)
         };
-        let empty = 12usize.saturating_sub(filled);
-        let bar = format!(
-            "{}{}",
-            "\u{2588}".repeat(filled),
-            "\u{2591}".repeat(empty),
-        );
+        let inner = area.width.saturating_sub(2) as usize;
+        let prefix = 10 + 2;
+        let epic_summary_w = inner.saturating_sub(prefix).max(12);
 
-        let base = if is_selected {
-            Style::default().bg(Color::DarkGray)
-        } else {
-            Style::default()
-        };
-
-        let bar_style = if is_selected {
-            Style::default().fg(Color::Green).bg(Color::DarkGray)
-        } else {
-            Style::default().fg(Color::Green)
-        };
-
-        // Epic row: "AMP-200  Auth Overhaul        ████████░░░░  8/15  (53%)"
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{:<10}", epic.key),
-                if is_selected {
-                    Style::default()
-                        .add_modifier(Modifier::BOLD)
-                        .bg(Color::DarkGray)
-                } else {
-                    Style::default().add_modifier(Modifier::BOLD)
-                },
+                Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::styled(format!("{:<20}", truncate(&epic.summary, 20)), base),
-            Span::styled(format!("{}  ", bar), bar_style),
-            Span::styled(format!("{}/{}  ({:.0}%)", done, total, pct), base),
+            Span::raw("  "),
+            Span::styled(
+                format!(
+                    "{:<epic_summary_w$}",
+                    truncate(&epic.summary, epic_summary_w)
+                ),
+                Style::default(),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(meta, Style::default().fg(Color::DarkGray)),
         ]));
 
-        // Status breakdown: "  In Progress: 3  To Do: 4  In Review: 2  Done: 8"
-        let counts = epic.count_by_status();
-        let mut parts: Vec<Span> = vec![Span::raw("  ")];
-        let display_order = [
-            Status::InProgress,
-            Status::ToDo,
-            Status::InReview,
-            Status::Blocked,
-            Status::Done,
-        ];
-        let mut first = true;
-        for status in &display_order {
-            if let Some(&count) = counts.get(status) {
-                if count > 0 {
-                    if !first {
-                        parts.push(Span::raw("  "));
-                    }
-                    parts.push(Span::styled(
-                        format!("{}: {}", status.as_str(), count),
-                        Style::default().fg(status_color(status)),
-                    ));
-                    first = false;
+        if children.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "    (no related tickets)",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            for ticket in children {
+                let is_selected = ticket_idx == app.selected_index;
+                if is_selected {
+                    selected_visual_line = Some(lines.len());
                 }
+
+                let base = if is_selected {
+                    Style::default().bg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
+                let status_style = if is_selected {
+                    Style::default()
+                        .fg(status_color(&ticket.status))
+                        .bg(Color::DarkGray)
+                } else {
+                    Style::default().fg(status_color(&ticket.status))
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(format!("    {:<key_w$}", ticket.key), base),
+                    Span::styled(" | ", base),
+                    Span::styled(
+                        format!("{:<status_w$}", ticket.status.as_str()),
+                        status_style,
+                    ),
+                    Span::styled(" | ", base),
+                    Span::styled(
+                        format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
+                        base,
+                    ),
+                ]));
+
+                ticket_idx += 1;
             }
         }
-        lines.push(Line::from(parts));
 
         // Blank line between epics
         lines.push(Line::from(""));
-        epic_idx += 1;
     }
 
     if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  No epics found",
-            Style::default().fg(Color::DarkGray),
-        )));
+        let empty_text = if app.epics_refreshing {
+            "  Loading epics... (assembling the relationship map)"
+        } else if let Some(search) = app.search.as_ref().filter(|s| !s.is_empty()) {
+            lines.push(Line::from(Span::styled(
+                format!("  No epics match \"{}\"", search),
+                Style::default().fg(Color::DarkGray),
+            )));
+            ""
+        } else {
+            "  No epics found"
+        };
+
+        if !empty_text.is_empty() {
+            lines.push(Line::from(Span::styled(
+                empty_text,
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
     }
 
     // Scroll to keep selected row visible

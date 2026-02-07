@@ -13,8 +13,78 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::process::Command;
+use std::time::Duration;
+use tokio::sync::mpsc::UnboundedSender;
 
+use crate::cache::Status;
 use app::{App, DetailMode, Tab};
+
+enum BackgroundMessage {
+    EpicsRefreshed(std::result::Result<Vec<crate::cache::Epic>, String>),
+    TicketDetailFetched {
+        key: String,
+        result: std::result::Result<crate::cache::Ticket, String>,
+    },
+}
+
+fn spawn_epics_refresh(tx: &UnboundedSender<BackgroundMessage>) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let result = jira_client::refresh_epics_cache()
+            .await
+            .map_err(|e| e.to_string());
+        let _ = tx.send(BackgroundMessage::EpicsRefreshed(result));
+    });
+}
+
+fn spawn_ticket_detail_fetch(tx: &UnboundedSender<BackgroundMessage>, key: String) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let result = jira_client::fetch_ticket_detail(&key)
+            .await
+            .map_err(|e| e.to_string());
+        let _ = tx.send(BackgroundMessage::TicketDetailFetched { key, result });
+    });
+}
+
+fn spawn_ticket_detail_prefetch(tx: &UnboundedSender<BackgroundMessage>, keys: Vec<String>) {
+    const MAX_CONCURRENCY: usize = 6;
+    if keys.is_empty() {
+        return;
+    }
+
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let mut iter = keys.into_iter();
+        let mut tasks = tokio::task::JoinSet::new();
+
+        for _ in 0..MAX_CONCURRENCY {
+            if let Some(key) = iter.next() {
+                tasks.spawn(async move {
+                    let result = jira_client::fetch_ticket_detail(&key)
+                        .await
+                        .map_err(|e| e.to_string());
+                    (key, result)
+                });
+            }
+        }
+
+        while let Some(joined) = tasks.join_next().await {
+            if let Ok((key, result)) = joined {
+                let _ = tx.send(BackgroundMessage::TicketDetailFetched { key, result });
+            }
+
+            if let Some(next_key) = iter.next() {
+                tasks.spawn(async move {
+                    let result = jira_client::fetch_ticket_detail(&next_key)
+                        .await
+                        .map_err(|e| e.to_string());
+                    (next_key, result)
+                });
+            }
+        }
+    });
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -28,26 +98,75 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new();
+    let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
 
     // Fetch data on startup
     let cache = jira_client::fetch_all().await?;
     app.cache = cache;
     app.loading = false;
+    app.epics_refreshing = true;
+    app.flash = Some("Refreshing epic relationships...".to_string());
+    spawn_epics_refresh(&bg_tx);
+    let prefetch_keys = app
+        .missing_detail_ticket_keys()
+        .into_iter()
+        .filter(|k| app.begin_detail_fetch(k))
+        .collect::<Vec<_>>();
+    spawn_ticket_detail_prefetch(&bg_tx, prefetch_keys);
 
     // Main loop
     loop {
+        while let Ok(message) = bg_rx.try_recv() {
+            match message {
+                BackgroundMessage::EpicsRefreshed(result) => {
+                    app.epics_refreshing = false;
+                    match result {
+                        Ok(epics) => {
+                            jira_client::attach_epics_to_tickets(
+                                &mut app.cache.my_tickets,
+                                &mut app.cache.team_tickets,
+                                &epics,
+                            );
+                            app.cache.epics = epics;
+                            app.clamp_selection();
+                            app.flash = Some("Epic relationships refreshed".to_string());
+                        }
+                        Err(e) => {
+                            app.flash = Some(format!("Epic refresh failed: {}", e));
+                        }
+                    }
+                }
+                BackgroundMessage::TicketDetailFetched { key, result } => {
+                    app.end_detail_fetch(&key);
+                    match result {
+                        Ok(detail) => {
+                            app.enrich_ticket(&key, &detail);
+                            if let Err(e) = jira_client::upsert_ticket_detail_cache(&detail) {
+                                app.flash = Some(format!("Detail cache write failed: {}", e));
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+
         terminal.draw(|f| ui(f, &app))?;
 
-        if let Event::Key(key) = event::read()? {
-            // Clear flash on any keypress
-            app.flash = None;
+        if event::poll(Duration::from_millis(120))? {
+            if let Event::Key(key) = event::read()? {
+                // Clear flash on any keypress
+                app.flash = None;
 
-            if app.is_detail_open() {
-                handle_detail_keys(&mut app, key.code);
-            } else if app.search.is_some() {
-                handle_search_keys(&mut app, key.code);
-            } else {
-                handle_main_keys(&mut app, key.code, key.modifiers).await;
+                if app.show_keybindings {
+                    handle_keybindings_keys(&mut app, key.code);
+                } else if app.is_detail_open() {
+                    handle_detail_keys(&mut app, key.code);
+                } else if app.search.is_some() {
+                    handle_search_keys(&mut app, key.code, key.modifiers, &bg_tx).await;
+                } else {
+                    handle_main_keys(&mut app, key.code, key.modifiers, &bg_tx).await;
+                }
             }
         }
 
@@ -169,8 +288,22 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     } else if let Some(ref search) = app.search {
         Span::styled(format!("/{}", search), Style::default().fg(Color::Yellow))
     } else {
+        let done_state = if app.show_done { "on" } else { "off" };
+        let epic_state = if app.epics_refreshing {
+            "syncing"
+        } else {
+            "ready"
+        };
+        let focus_state = app
+            .status_focus
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("all");
         Span::styled(
-            " Tab: switch  j/k: navigate  Enter: detail  r: refresh  /: search  q: quit ",
+            format!(
+                " Tab: switch  j/k: navigate  Enter: detail  d: done({})  p/w/n/v: focus({})  ?: keys  e:{}  r: refresh  /: search  q: quit ",
+                done_state, focus_state, epic_state
+            ),
             Style::default().fg(Color::DarkGray),
         )
     };
@@ -182,6 +315,16 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     // Detail overlay
     if app.is_detail_open() {
         widgets::ticket_detail::render(f, app);
+    }
+    if app.show_keybindings {
+        widgets::keybindings_help::render(f);
+    }
+}
+
+fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => app.close_keybindings(),
+        _ => {}
     }
 }
 
@@ -244,15 +387,25 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
     }
 }
 
-fn handle_search_keys(app: &mut App, key: KeyCode) {
+async fn handle_search_keys(
+    app: &mut App,
+    key: KeyCode,
+    modifiers: KeyModifiers,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+) {
     match key {
         KeyCode::Esc => {
             app.search = None;
             app.clamp_selection();
         }
         KeyCode::Enter => {
-            // Search is active, just close the input
-            // The filter remains applied until Esc
+            if let Some(key) = app.selected_ticket_key() {
+                let detail_loaded = app.is_ticket_detail_loaded(&key);
+                app.open_detail(key.clone());
+                if !detail_loaded && app.begin_detail_fetch(&key) {
+                    spawn_ticket_detail_fetch(bg_tx, key);
+                }
+            }
         }
         KeyCode::Backspace => {
             if let Some(ref mut s) = app.search {
@@ -263,6 +416,16 @@ fn handle_search_keys(app: &mut App, key: KeyCode) {
             }
             app.clamp_selection();
         }
+        KeyCode::Down => app.move_selection_down(),
+        KeyCode::Up => app.move_selection_up(),
+        KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.move_selection_down()
+        }
+        KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => app.move_selection_up(),
+        KeyCode::Char('n') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.move_selection_down()
+        }
+        KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => app.move_selection_up(),
         KeyCode::Char(c) => {
             if let Some(ref mut s) = app.search {
                 s.push(c);
@@ -273,19 +436,79 @@ fn handle_search_keys(app: &mut App, key: KeyCode) {
     }
 }
 
-async fn handle_main_keys(app: &mut App, key: KeyCode, _modifiers: KeyModifiers) {
+async fn handle_main_keys(
+    app: &mut App,
+    key: KeyCode,
+    _modifiers: KeyModifiers,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+) {
     match key {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Tab => app.next_tab(),
         KeyCode::Char('j') | KeyCode::Down => app.move_selection_down(),
         KeyCode::Char('k') | KeyCode::Up => app.move_selection_up(),
         KeyCode::Char('/') => app.search = Some(String::new()),
+        KeyCode::Char('?') => app.toggle_keybindings(),
+        KeyCode::Char('d') => {
+            app.toggle_show_done();
+            app.flash = Some(if app.show_done {
+                "Showing Done tickets".to_string()
+            } else {
+                "Hiding Done tickets".to_string()
+            });
+        }
+        KeyCode::Char('p') => {
+            app.toggle_status_focus(Status::InProgress);
+            app.flash = Some(
+                app.status_focus
+                    .as_ref()
+                    .map(|s| format!("Focus: {}", s.as_str()))
+                    .unwrap_or_else(|| "Focus: all".to_string()),
+            );
+        }
+        KeyCode::Char('w') => {
+            app.toggle_status_focus(Status::ReadyForWork);
+            app.flash = Some(
+                app.status_focus
+                    .as_ref()
+                    .map(|s| format!("Focus: {}", s.as_str()))
+                    .unwrap_or_else(|| "Focus: all".to_string()),
+            );
+        }
+        KeyCode::Char('n') => {
+            app.toggle_status_focus(Status::NeedsTriage);
+            app.flash = Some(
+                app.status_focus
+                    .as_ref()
+                    .map(|s| format!("Focus: {}", s.as_str()))
+                    .unwrap_or_else(|| "Focus: all".to_string()),
+            );
+        }
+        KeyCode::Char('v') => {
+            app.toggle_status_focus(Status::InReview);
+            app.flash = Some(
+                app.status_focus
+                    .as_ref()
+                    .map(|s| format!("Focus: {}", s.as_str()))
+                    .unwrap_or_else(|| "Focus: all".to_string()),
+            );
+        }
         KeyCode::Char('r') => {
             app.loading = true;
             match jira_client::fetch_all().await {
                 Ok(cache) => {
                     app.cache = cache;
-                    app.flash = Some("Refreshed!".to_string());
+                    if !app.epics_refreshing {
+                        app.epics_refreshing = true;
+                        spawn_epics_refresh(bg_tx);
+                    }
+                    let prefetch_keys = app
+                        .missing_detail_ticket_keys()
+                        .into_iter()
+                        .filter(|k| app.begin_detail_fetch(k))
+                        .collect::<Vec<_>>();
+                    spawn_ticket_detail_prefetch(bg_tx, prefetch_keys);
+                    app.flash = Some("Refreshed! Syncing epic relationships...".to_string());
                 }
                 Err(e) => {
                     app.flash = Some(format!("Refresh failed: {}", e));
@@ -296,11 +519,11 @@ async fn handle_main_keys(app: &mut App, key: KeyCode, _modifiers: KeyModifiers)
         }
         KeyCode::Enter => {
             if let Some(key) = app.selected_ticket_key() {
-                // Fetch full ticket detail (JSON) for description and accurate fields
-                if let Ok(detail) = jira_client::fetch_ticket_detail(&key).await {
-                    app.enrich_ticket(&key, &detail);
+                let detail_loaded = app.is_ticket_detail_loaded(&key);
+                app.open_detail(key.clone());
+                if !detail_loaded && app.begin_detail_fetch(&key) {
+                    spawn_ticket_detail_fetch(bg_tx, key);
                 }
-                app.open_detail(key);
             }
         }
         _ => {}

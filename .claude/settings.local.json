@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(jira me:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo build:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

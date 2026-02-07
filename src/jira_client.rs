@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
@@ -7,6 +8,9 @@ use crate::cache::{Cache, Epic, Status, TeamMember, Ticket};
 
 const JIRA_BASE_URL: &str = "https://jira.mongodb.org/browse";
 const PROJECT: &str = "AMP";
+const RECENT_DONE_WINDOW: &str = "-14d";
+const EPICS_CACHE_FILE_NAME: &str = "lazyjira_epics_cache_AMP.json";
+const DETAILS_CACHE_FILE_NAME: &str = "lazyjira_ticket_details_cache_AMP.json";
 
 /// Run a CLI command and return stdout as a String.
 async fn run_cmd(program: &str, args: &[&str]) -> Result<String> {
@@ -60,6 +64,27 @@ fn load_team_roster() -> Result<Vec<TeamMember>> {
     Ok(members)
 }
 
+fn name_from_email(email: &str) -> String {
+    let local = email.split('@').next().unwrap_or(email);
+    local
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut out = String::new();
+                    out.push(first.to_ascii_uppercase());
+                    out.push_str(chars.as_str());
+                    out
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Parse a line of tab-separated ticket output into a Ticket.
 /// Expected columns: key, status, assignee, summary
 /// Summary is last because the jira CLI uses tab-padding for alignment,
@@ -78,12 +103,19 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
     }
 
     let status_str = fields[1].trim();
-    let assignee = Some(fields[2].trim().to_string()).filter(|s| !s.is_empty());
-    // Summary is everything from field 3 onward (joined in case of tab splits)
-    let summary = if fields.len() > 3 {
-        fields[3..].iter().map(|s| s.trim()).collect::<Vec<_>>().join(" ")
+    // When assignee is empty, jira-cli tab padding can collapse to 3 fields after filtering.
+    // In that case, treat field 2 as summary.
+    let (assignee, summary) = if fields.len() == 3 {
+        (None, fields[2].trim().to_string())
     } else {
-        String::new()
+        (
+            Some(fields[2].trim().to_string()).filter(|s| !s.is_empty()),
+            fields[3..]
+                .iter()
+                .map(|s| s.trim())
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
     };
     let url = format!("{}/{}", JIRA_BASE_URL, key);
 
@@ -94,10 +126,117 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
         assignee,
         assignee_email: None,
         description: None,
+        labels: Vec::new(),
         epic_key: None,
         epic_name: None,
+        detail_loaded: false,
         url,
     })
+}
+
+/// Fetch tickets for a JQL query with pagination.
+async fn fetch_tickets_for_query(query: &str) -> Result<Vec<Ticket>> {
+    let mut all_tickets = Vec::new();
+    let mut from = 0usize;
+    let page_size = 100usize;
+
+    loop {
+        let paginate = format!("{}:{}", from, page_size);
+        let output = match run_cmd(
+            "jira",
+            &[
+                "issue",
+                "list",
+                "-p",
+                PROJECT,
+                "-q",
+                query,
+                "--plain",
+                "--no-headers",
+                "--columns",
+                "key,status,assignee,summary",
+                "--paginate",
+                &paginate,
+            ],
+        )
+        .await
+        {
+            Ok(output) => output,
+            Err(e) => {
+                // jira-cli returns exit code 1 for empty JQL results.
+                if e.to_string().contains("No result found for given query") {
+                    break;
+                }
+                return Err(e);
+            }
+        };
+
+        if output.is_empty() {
+            break;
+        }
+
+        let batch: Vec<Ticket> = output.lines().filter_map(parse_ticket_line).collect();
+        let batch_len = batch.len();
+        all_tickets.extend(batch);
+
+        if batch_len < page_size {
+            break;
+        }
+        from += page_size;
+    }
+
+    Ok(all_tickets)
+}
+
+/// Fetch epic children using both company-managed (Epic Link) and team-managed (parent) style links.
+async fn fetch_children_for_epic(epic_key: &str, epic_summary: &str) -> Result<Vec<Ticket>> {
+    let epic_link_query = format!("\"Epic Link\" = {}", epic_key);
+    let parent_query = format!("parent = {}", epic_key);
+
+    let (epic_link_result, parent_result) = tokio::join!(
+        fetch_tickets_for_query(&epic_link_query),
+        fetch_tickets_for_query(&parent_query)
+    );
+
+    let mut children_by_key: HashMap<String, Ticket> = HashMap::new();
+    let mut success_count = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
+    match epic_link_result {
+        Ok(tickets) => {
+            success_count += 1;
+            for mut t in tickets {
+                t.epic_key = Some(epic_key.to_string());
+                t.epic_name = Some(epic_summary.to_string());
+                children_by_key.entry(t.key.clone()).or_insert(t);
+            }
+        }
+        Err(e) => errors.push(format!("Epic Link query error: {}", e)),
+    }
+
+    match parent_result {
+        Ok(tickets) => {
+            success_count += 1;
+            for mut t in tickets {
+                t.epic_key = Some(epic_key.to_string());
+                t.epic_name = Some(epic_summary.to_string());
+                children_by_key.entry(t.key.clone()).or_insert(t);
+            }
+        }
+        Err(e) => errors.push(format!("parent query error: {}", e)),
+    }
+
+    if success_count == 0 {
+        anyhow::bail!(
+            "Failed to fetch children for {} via Epic Link and parent queries. {}",
+            epic_key,
+            errors.join(" | ")
+        );
+    }
+
+    let mut children: Vec<Ticket> = children_by_key.into_values().collect();
+    children.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(children)
 }
 
 /// Fetch full ticket detail as JSON via `jira issue view KEY --raw`.
@@ -111,9 +250,21 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
 
     let summary = fields["summary"].as_str().unwrap_or("").to_string();
     let status = fields["status"]["name"].as_str().unwrap_or("To Do");
-    let assignee = fields["assignee"]["displayName"].as_str().map(|s| s.to_string());
-    let assignee_email = fields["assignee"]["emailAddress"].as_str().map(|s| s.to_string());
+    let assignee = fields["assignee"]["displayName"]
+        .as_str()
+        .map(|s| s.to_string());
+    let assignee_email = fields["assignee"]["emailAddress"]
+        .as_str()
+        .map(|s| s.to_string());
     let description = fields["description"].as_str().map(|s| s.to_string());
+    let labels = fields["labels"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let epic_key = fields["customfield_12551"]
         .as_array()
         .and_then(|a| a.first())
@@ -134,156 +285,275 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
         assignee,
         assignee_email,
         description,
+        labels,
         epic_key,
         epic_name: None,
+        detail_loaded: true,
         url,
     })
 }
 
 /// Fetch tickets assigned to a specific user, setting assignee_email on results.
 async fn fetch_tickets_for_user(email: &str) -> Result<Vec<Ticket>> {
-    let assignee_flag = format!("-a{}", email);
-    let output = run_cmd(
-        "jira",
-        &[
-            "issue",
-            "list",
-            &assignee_flag,
-            "-s",
-            "To Do",
-            "-s",
-            "In Progress",
-            "-s",
-            "In Review",
-            "-s",
-            "Blocked",
-            "-s",
-            "Done",
-            "-p",
-            PROJECT,
-            "--plain",
-            "--no-headers",
-            "--columns",
-            "key,status,assignee,summary",
-        ],
-    )
-    .await?;
+    // Startup scope: all active work + recently completed work.
+    let active_query = format!(
+        "assignee = \"{}\" AND status in (\"Needs Triage\", \"Ready for Work\", \"To Do\", \"In Progress\", \"In Review\", \"Blocked\")",
+        email
+    );
+    let recent_done_query = format!(
+        "assignee = \"{}\" AND status in (Done, Closed) AND updated >= {}",
+        email, RECENT_DONE_WINDOW
+    );
 
-    Ok(output
-        .lines()
-        .filter_map(|line| {
-            let mut ticket = parse_ticket_line(line)?;
-            ticket.assignee_email = Some(email.to_string());
-            Some(ticket)
-        })
-        .collect())
+    let (active_result, done_result) = tokio::join!(
+        fetch_tickets_for_query(&active_query),
+        fetch_tickets_for_query(&recent_done_query)
+    );
+
+    let mut tickets_by_key: HashMap<String, Ticket> = HashMap::new();
+
+    for mut ticket in active_result? {
+        ticket.assignee_email = Some(email.to_string());
+        tickets_by_key.insert(ticket.key.clone(), ticket);
+    }
+    for mut ticket in done_result? {
+        ticket.assignee_email = Some(email.to_string());
+        tickets_by_key.insert(ticket.key.clone(), ticket);
+    }
+
+    let mut tickets: Vec<Ticket> = tickets_by_key.into_values().collect();
+    tickets.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(tickets)
 }
 
-/// Fetch all epics and their children concurrently.
+/// Fetch all epics and their children.
 async fn fetch_epics() -> Result<Vec<Epic>> {
-    let epics_output = run_cmd(
-        "jira",
-        &[
-            "issue",
-            "list",
-            "-t",
-            "Epic",
-            "-p",
-            PROJECT,
-            "--plain",
-            "--no-headers",
-            "--columns",
-            "key,status,summary",
-        ],
-    )
-    .await?;
+    let mut from = 0usize;
+    let page_size = 100usize;
+    let mut epic_stubs_map: HashMap<String, String> = HashMap::new();
 
-    let epic_stubs: Vec<(String, String)> = epics_output
-        .lines()
-        .filter_map(|line| {
+    loop {
+        let paginate = format!("{}:{}", from, page_size);
+        let epics_output = run_cmd(
+            "jira",
+            &[
+                "issue",
+                "list",
+                "-t",
+                "Epic",
+                "-p",
+                PROJECT,
+                "--plain",
+                "--no-headers",
+                "--columns",
+                "key,status,summary",
+                "--paginate",
+                &paginate,
+            ],
+        )
+        .await?;
+
+        if epics_output.is_empty() {
+            break;
+        }
+
+        let mut batch_count = 0usize;
+        for line in epics_output.lines() {
             let fields: Vec<&str> = line.split('\t').filter(|s| !s.is_empty()).collect();
             if fields.len() >= 2 {
                 let key = fields[0].trim().to_string();
                 // Summary is after status (field 2+)
                 let summary = if fields.len() > 2 {
-                    fields[2..].iter().map(|s| s.trim()).collect::<Vec<_>>().join(" ")
+                    fields[2..]
+                        .iter()
+                        .map(|s| s.trim())
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 } else {
                     String::new()
                 };
                 if !key.is_empty() {
-                    return Some((key, summary));
+                    epic_stubs_map.entry(key).or_insert(summary);
+                    batch_count += 1;
                 }
             }
-            None
-        })
-        .collect();
+        }
 
-    // Fetch children for each epic concurrently
-    let mut handles = Vec::new();
-    for (epic_key, epic_summary) in epic_stubs {
-        handles.push(tokio::spawn(async move {
-            let query = format!("parent={}", epic_key);
-            let children_output = run_cmd(
-                "jira",
-                &[
-                    "issue",
-                    "list",
-                    "-q",
-                    &query,
-                    "--plain",
-                    "--no-headers",
-                    "--columns",
-                    "key,status,assignee,summary",
-                ],
-            )
-            .await
-            .unwrap_or_default();
-
-            let children: Vec<Ticket> = children_output
-                .lines()
-                .filter_map(|line| {
-                    let mut t = parse_ticket_line(line)?;
-                    t.epic_key = Some(epic_key.clone());
-                    t.epic_name = Some(epic_summary.clone());
-                    Some(t)
-                })
-                .collect();
-
-            Epic {
-                key: epic_key,
-                summary: epic_summary,
-                children,
-            }
-        }));
+        if batch_count < page_size {
+            break;
+        }
+        from += page_size;
     }
 
-    let mut epics = Vec::new();
-    for handle in handles {
-        epics.push(handle.await?);
+    let mut epic_stubs: Vec<(String, String)> = epic_stubs_map.into_iter().collect();
+    epic_stubs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut epics = Vec::with_capacity(epic_stubs.len());
+    for (epic_key, epic_summary) in epic_stubs {
+        let children = match fetch_children_for_epic(&epic_key, &epic_summary).await {
+            Ok(children) => children,
+            Err(e) => {
+                eprintln!("Warning: {}. Showing this epic with no related tickets.", e);
+                Vec::new()
+            }
+        };
+        epics.push(Epic {
+            key: epic_key,
+            summary: epic_summary,
+            children,
+        });
     }
 
     Ok(epics)
 }
 
+fn epics_cache_path() -> PathBuf {
+    std::env::temp_dir().join(EPICS_CACHE_FILE_NAME)
+}
+
+fn details_cache_path() -> PathBuf {
+    std::env::temp_dir().join(DETAILS_CACHE_FILE_NAME)
+}
+
+fn load_epics_cache() -> Vec<Epic> {
+    let path = epics_cache_path();
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(_) => return Vec::new(),
+    };
+
+    match serde_json::from_str::<Vec<Epic>>(&content) {
+        Ok(epics) => epics,
+        Err(_) => Vec::new(),
+    }
+}
+
+fn save_epics_cache(epics: &[Epic]) -> Result<()> {
+    let path = epics_cache_path();
+    let json = serde_json::to_string(epics).context("Failed to serialize epics cache")?;
+    std::fs::write(&path, json)
+        .with_context(|| format!("Failed to write epics cache file: {}", path.display()))?;
+    Ok(())
+}
+
+fn load_details_cache() -> HashMap<String, Ticket> {
+    let path = details_cache_path();
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(_) => return HashMap::new(),
+    };
+
+    serde_json::from_str::<HashMap<String, Ticket>>(&content).unwrap_or_default()
+}
+
+fn save_details_cache(details_by_key: &HashMap<String, Ticket>) -> Result<()> {
+    let path = details_cache_path();
+    let json =
+        serde_json::to_string(details_by_key).context("Failed to serialize details cache")?;
+    std::fs::write(&path, json)
+        .with_context(|| format!("Failed to write details cache file: {}", path.display()))?;
+    Ok(())
+}
+
+fn hydrate_ticket_from_details_cache(
+    ticket: &mut Ticket,
+    details_by_key: &HashMap<String, Ticket>,
+) {
+    let Some(detail) = details_by_key.get(&ticket.key) else {
+        return;
+    };
+
+    ticket.detail_loaded = true;
+    ticket.description = detail.description.clone();
+    ticket.labels = detail.labels.clone();
+    if detail.assignee.is_some() {
+        ticket.assignee = detail.assignee.clone();
+    }
+    if detail.assignee_email.is_some() {
+        ticket.assignee_email = detail.assignee_email.clone();
+    }
+    if detail.epic_key.is_some() {
+        ticket.epic_key = detail.epic_key.clone();
+    }
+    if detail.epic_name.is_some() {
+        ticket.epic_name = detail.epic_name.clone();
+    }
+}
+
+fn hydrate_tickets_from_details_cache(
+    tickets: &mut [Ticket],
+    details_by_key: &HashMap<String, Ticket>,
+) {
+    for ticket in tickets {
+        hydrate_ticket_from_details_cache(ticket, details_by_key);
+    }
+}
+
+pub fn attach_epics_to_tickets(
+    my_tickets: &mut [Ticket],
+    team_tickets: &mut [Ticket],
+    epics: &[Epic],
+) {
+    let epic_by_ticket: HashMap<String, (String, String)> = epics
+        .iter()
+        .flat_map(|epic| {
+            epic.children
+                .iter()
+                .map(|child| (child.key.clone(), (epic.key.clone(), epic.summary.clone())))
+        })
+        .collect();
+
+    let attach_epic = |ticket: &mut Ticket| {
+        if let Some((epic_key, epic_name)) = epic_by_ticket.get(&ticket.key) {
+            ticket.epic_key = Some(epic_key.clone());
+            ticket.epic_name = Some(epic_name.clone());
+        }
+    };
+
+    for ticket in my_tickets {
+        attach_epic(ticket);
+    }
+    for ticket in team_tickets {
+        attach_epic(ticket);
+    }
+}
+
+/// Refresh the full epic relationship graph and write it to local cache.
+pub async fn refresh_epics_cache() -> Result<Vec<Epic>> {
+    let epics = fetch_epics().await?;
+    save_epics_cache(&epics)?;
+    Ok(epics)
+}
+
+pub fn upsert_ticket_detail_cache(detail: &Ticket) -> Result<()> {
+    let mut details_by_key = load_details_cache();
+    let mut cached = detail.clone();
+    cached.detail_loaded = true;
+    details_by_key.insert(cached.key.clone(), cached);
+    save_details_cache(&details_by_key)
+}
+
 /// Fetch all Jira data concurrently and return a populated Cache.
 pub async fn fetch_all() -> Result<Cache> {
-    let team_members = load_team_roster().unwrap_or_default();
+    let mut team_members = load_team_roster().unwrap_or_default();
 
-    // Fetch my email and epics concurrently
-    let (my_email_result, epics_result) = tokio::join!(fetch_my_email(), fetch_epics(),);
-
-    let my_email = my_email_result?;
-    let epics = epics_result?;
+    // Fast startup path: load lightweight ticket set and cached epic relationships.
+    let my_email = fetch_my_email().await?;
+    if !team_members.iter().any(|member| member.email == my_email) {
+        team_members.push(TeamMember {
+            name: name_from_email(&my_email),
+            email: my_email.clone(),
+        });
+    }
+    let details_by_key = load_details_cache();
+    let mut epics = load_epics_cache();
 
     // Fetch my tickets
-    let my_tickets = fetch_tickets_for_user(&my_email).await?;
+    let mut my_tickets = fetch_tickets_for_user(&my_email).await?;
 
     // Fetch team tickets concurrently (skip self to avoid duplicating my_tickets)
     let mut team_handles = Vec::new();
     for member in &team_members {
-        if member.email == my_email {
-            continue;
-        }
         let email = member.email.clone();
         team_handles.push(tokio::spawn(async move {
             fetch_tickets_for_user(&email).await.unwrap_or_default()
@@ -296,12 +566,18 @@ pub async fn fetch_all() -> Result<Cache> {
         team_tickets.extend(tickets);
     }
 
+    attach_epics_to_tickets(&mut my_tickets, &mut team_tickets, &epics);
+    hydrate_tickets_from_details_cache(&mut my_tickets, &details_by_key);
+    hydrate_tickets_from_details_cache(&mut team_tickets, &details_by_key);
+    for epic in &mut epics {
+        hydrate_tickets_from_details_cache(&mut epic.children, &details_by_key);
+    }
+
     Ok(Cache {
         my_tickets,
         team_tickets,
         epics,
         team_members,
-        my_email,
     })
 }
 
@@ -309,4 +585,33 @@ pub async fn fetch_all() -> Result<Cache> {
 pub async fn move_ticket(key: &str, status: &str) -> Result<()> {
     run_cmd("jira", &["issue", "move", key, status]).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ticket_line;
+
+    #[test]
+    fn parse_ticket_line_handles_empty_assignee() {
+        let line = "AMP-2842\tNeeds Triage\t\t\t\tevals cli export doesn't support packages";
+        let ticket = parse_ticket_line(line).expect("ticket should parse");
+        assert_eq!(ticket.key, "AMP-2842");
+        assert_eq!(ticket.assignee, None);
+        assert_eq!(
+            ticket.summary,
+            "evals cli export doesn't support packages".to_string()
+        );
+    }
+
+    #[test]
+    fn parse_ticket_line_handles_assignee_and_summary() {
+        let line = "AMP-2815\tIn Progress\tMohammad Mazraeh\tRun evals ci in Olympus in parallel";
+        let ticket = parse_ticket_line(line).expect("ticket should parse");
+        assert_eq!(ticket.key, "AMP-2815");
+        assert_eq!(ticket.assignee, Some("Mohammad Mazraeh".to_string()));
+        assert_eq!(
+            ticket.summary,
+            "Run evals ci in Olympus in parallel".to_string()
+        );
+    }
 }

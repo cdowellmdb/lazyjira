@@ -8,6 +8,8 @@ use crate::cache::Status;
 
 fn status_color(status: &Status) -> Color {
     match status {
+        Status::NeedsTriage => Color::White,
+        Status::ReadyForWork => Color::Blue,
         Status::InProgress => Color::Yellow,
         Status::ToDo => Color::White,
         Status::InReview => Color::Cyan,
@@ -34,6 +36,134 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+fn parse_heading(line: &str) -> Option<(u8, &str)> {
+    let trimmed = line.trim_start();
+
+    for level in 1..=6u8 {
+        let jira_prefix = format!("h{}. ", level);
+        if let Some(rest) = trimmed.strip_prefix(&jira_prefix) {
+            return Some((level, rest.trim()));
+        }
+    }
+
+    for level in (1..=6u8).rev() {
+        let md_prefix = "#".repeat(level as usize) + " ";
+        if let Some(rest) = trimmed.strip_prefix(&md_prefix) {
+            return Some((level, rest.trim()));
+        }
+    }
+
+    for level in 1..=6u8 {
+        let open = format!("<h{}>", level);
+        let close = format!("</h{}>", level);
+        if trimmed.starts_with(&open) && trimmed.ends_with(&close) {
+            let content = trimmed
+                .trim_start_matches(&open)
+                .trim_end_matches(&close)
+                .trim();
+            return Some((level, content));
+        }
+    }
+
+    None
+}
+
+fn parse_bullet(line: &str) -> Option<(usize, String)> {
+    let trimmed = line.trim_start();
+    let ws = line.len().saturating_sub(trimmed.len());
+
+    let stars = trimmed.chars().take_while(|c| *c == '*').count();
+    if stars > 0
+        && trimmed
+            .chars()
+            .nth(stars)
+            .map(|c| c == ' ')
+            .unwrap_or(false)
+    {
+        let text = trimmed[stars + 1..].trim().to_string();
+        return Some((ws + (stars.saturating_sub(1) * 2), text));
+    }
+
+    let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+    if hashes > 0
+        && trimmed
+            .chars()
+            .nth(hashes)
+            .map(|c| c == ' ')
+            .unwrap_or(false)
+    {
+        let text = trimmed[hashes + 1..].trim().to_string();
+        return Some((ws + (hashes.saturating_sub(1) * 2), format!("1. {}", text)));
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("- ") {
+        return Some((ws, rest.trim().to_string()));
+    }
+
+    None
+}
+
+fn normalize_inline(s: &str) -> String {
+    s.replace("{{", "`").replace("}}", "`")
+}
+
+fn push_description_lines(lines: &mut Vec<Line>, desc: &str) {
+    let mut in_code = false;
+
+    for raw in desc.lines() {
+        let trimmed = raw.trim();
+
+        if trimmed == "{code}" || trimmed.starts_with("{code:") || trimmed == "```" {
+            in_code = !in_code;
+            lines.push(Line::from(Span::styled(
+                "---- code ----",
+                Style::default().fg(Color::DarkGray),
+            )));
+            continue;
+        }
+
+        if in_code {
+            lines.push(Line::from(Span::styled(
+                raw.to_string(),
+                Style::default().fg(Color::White),
+            )));
+            continue;
+        }
+
+        if let Some((level, text)) = parse_heading(raw) {
+            lines.push(Line::from(""));
+            let marker = match level {
+                1 => "H1",
+                2 => "H2",
+                3 => "H3",
+                _ => "H",
+            };
+            let heading_text = format!("{} {}", marker, normalize_inline(text));
+            lines.push(Line::from(Span::styled(
+                heading_text,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            continue;
+        }
+
+        if let Some((indent, item)) = parse_bullet(raw) {
+            let prefix = " ".repeat(indent);
+            lines.push(Line::from(Span::styled(
+                format!("{}• {}", prefix, normalize_inline(&item)),
+                Style::default().fg(Color::Gray),
+            )));
+            continue;
+        }
+
+        lines.push(Line::from(Span::styled(
+            normalize_inline(raw),
+            Style::default().fg(Color::Gray),
+        )));
+    }
 }
 
 pub fn render(f: &mut ratatui::Frame, app: &App) {
@@ -90,10 +220,7 @@ fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket
     lines.push(Line::from(""));
 
     // Line 3: Status + Assignee
-    let assignee_str = ticket
-        .assignee
-        .as_deref()
-        .unwrap_or("Unassigned");
+    let assignee_str = ticket.assignee.as_deref().unwrap_or("Unassigned");
     lines.push(Line::from(vec![
         Span::raw("Status: "),
         Span::styled(
@@ -123,17 +250,18 @@ fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket
     // Line 5: empty
     lines.push(Line::from(""));
 
-    // Line 6+: Description
-    let desc = ticket
-        .description
-        .as_deref()
-        .unwrap_or("(no description)");
-    for line in desc.lines() {
-        lines.push(Line::from(Span::styled(
-            line.to_string(),
-            Style::default().fg(Color::Gray),
-        )));
+    // Labels
+    if !ticket.labels.is_empty() {
+        lines.push(Line::from(vec![
+            Span::raw("Labels: "),
+            Span::styled(ticket.labels.join(", "), Style::default().fg(Color::Yellow)),
+        ]));
+        lines.push(Line::from(""));
     }
+
+    // Line 6+: Description
+    let desc = ticket.description.as_deref().unwrap_or("(no description)");
+    push_description_lines(&mut lines, desc);
 
     let body = Paragraph::new(lines).wrap(Wrap { trim: false });
     f.render_widget(body, body_area);
@@ -180,9 +308,7 @@ fn render_move_picker(
         let prefix = if i == selected { "> " } else { "  " };
         let mut style = Style::default().fg(status_color(status));
         if i == selected {
-            style = style
-                .add_modifier(Modifier::BOLD)
-                .bg(Color::DarkGray);
+            style = style.add_modifier(Modifier::BOLD).bg(Color::DarkGray);
         }
         lines.push(Line::from(Span::styled(
             format!("{}{}", prefix, status.as_str()),
