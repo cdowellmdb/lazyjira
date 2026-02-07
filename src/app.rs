@@ -10,6 +10,12 @@ const NO_EPIC_SUMMARY: &str = "No Epic";
 pub const ISSUE_TYPES: &[&str] = &["Task", "Bug", "Story"];
 
 #[derive(Debug, Clone)]
+pub struct CommentState {
+    pub ticket_key: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct CreateTicketState {
     pub focused_field: usize, // 0=type, 1=summary, 2=assignee, 3=epic
     pub issue_type_idx: usize,
@@ -122,6 +128,8 @@ pub struct App {
     pub should_quit: bool,
     /// State for the create ticket modal overlay.
     pub create_ticket: Option<CreateTicketState>,
+    /// State for the comment modal overlay.
+    pub comment_state: Option<CommentState>,
 }
 
 impl App {
@@ -147,6 +155,7 @@ impl App {
             visible_keys_cache: RefCell::new(VisibleKeysCache::default()),
             should_quit: false,
             create_ticket: None,
+            comment_state: None,
         }
     }
 
@@ -582,6 +591,10 @@ impl App {
 
     pub fn is_create_ticket_open(&self) -> bool {
         self.create_ticket.is_some()
+    }
+
+    pub fn is_comment_open(&self) -> bool {
+        self.comment_state.is_some()
     }
 
     pub fn begin_detail_fetch(&mut self, key: &str) -> bool {

@@ -57,6 +57,7 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  v: focus In Review"),
         Line::from("  /: search (tickets, labels, and team member names)"),
         Line::from("  (while searching) Up/Down or Ctrl+j/Ctrl+k: navigate"),
+        Line::from("  Unassigned tab: tickets are grouped by epic"),
         Line::from(""),
         Line::from(Span::styled(
             "Actions",
@@ -76,6 +77,7 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  Up / Down: scroll detail"),
         Line::from("  o: open ticket in browser"),
         Line::from("  m: move ticket"),
+        Line::from("  C: add comment"),
         Line::from("  (in move picker) j/k or Up/Down: choose status"),
         Line::from("  (in move picker) p/w/n/t/v/b/d: choose + confirm prompt"),
         Line::from("  (in move picker) Shift+key: move immediately"),

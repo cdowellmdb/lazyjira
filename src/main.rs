@@ -40,6 +40,7 @@ enum BackgroundMessage {
         result: std::result::Result<crate::cache::Ticket, String>,
     },
     TicketCreated(std::result::Result<String, String>),
+    CommentAdded(std::result::Result<String, String>),
 }
 
 fn spawn_epics_refresh(tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
@@ -290,6 +291,16 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+                BackgroundMessage::CommentAdded(result) => {
+                    match result {
+                        Ok(key) => {
+                            app.flash = Some(format!("Comment added to {}", key));
+                        }
+                        Err(e) => {
+                            app.flash = Some(format!("Comment failed: {}", e));
+                        }
+                    }
+                }
             }
         }
 
@@ -309,6 +320,8 @@ async fn main() -> Result<()> {
 
                     if app.is_create_ticket_open() {
                         handle_create_ticket_keys(&mut app, key.code, key.modifiers, &bg_tx, &config).await;
+                    } else if app.is_comment_open() {
+                        handle_comment_keys(&mut app, key.code, &bg_tx);
                     } else if app.show_keybindings {
                         handle_keybindings_keys(&mut app, key.code);
                     } else if app.is_detail_open() {
@@ -494,6 +507,9 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     if app.is_create_ticket_open() {
         widgets::create_ticket::render(f, app);
     }
+    if app.is_comment_open() {
+        widgets::comment::render(f, app);
+    }
     if app.show_keybindings {
         widgets::keybindings_help::render(f);
     }
@@ -560,6 +576,14 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
                     selected: 0,
                     confirm_target: None,
                 };
+            }
+            KeyCode::Char('C') => {
+                if let Some(ref key) = app.detail_ticket_key {
+                    app.comment_state = Some(app::CommentState {
+                        ticket_key: key.clone(),
+                        body: String::new(),
+                    });
+                }
             }
             _ => {}
         },
@@ -790,6 +814,53 @@ async fn handle_create_ticket_keys(
             }
             _ => {}
         },
+        _ => {}
+    }
+}
+
+fn handle_comment_keys(
+    app: &mut App,
+    key: KeyCode,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+) {
+    match key {
+        KeyCode::Esc => {
+            app.comment_state = None;
+        }
+        KeyCode::Enter => {
+            let state = match &app.comment_state {
+                Some(s) => s,
+                None => return,
+            };
+            if state.body.trim().is_empty() {
+                app.flash = Some("Comment body is required".to_string());
+                return;
+            }
+            let ticket_key = state.ticket_key.clone();
+            let body = state.body.clone();
+            app.comment_state = None;
+            app.flash = Some(format!("Adding comment to {}...", ticket_key));
+
+            let tx = bg_tx.clone();
+            let key_clone = ticket_key.clone();
+            tokio::spawn(async move {
+                let result = jira_client::add_comment(&key_clone, &body)
+                    .await
+                    .map(|_| key_clone)
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(BackgroundMessage::CommentAdded(result));
+            });
+        }
+        KeyCode::Backspace => {
+            if let Some(ref mut state) = app.comment_state {
+                state.body.pop();
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Some(ref mut state) = app.comment_state {
+                state.body.push(c);
+            }
+        }
         _ => {}
     }
 }

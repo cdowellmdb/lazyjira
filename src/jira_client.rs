@@ -776,6 +776,12 @@ pub async fn move_ticket(key: &str, status: &str) -> Result<()> {
     Ok(())
 }
 
+/// Add a comment to a ticket via `jira issue comment add`.
+pub async fn add_comment(key: &str, body: &str) -> Result<()> {
+    run_cmd("jira", &["issue", "comment", "add", key, body]).await?;
+    Ok(())
+}
+
 /// Create a new ticket via `jira issue create`.
 pub async fn create_ticket(
     project: &str,
