@@ -233,6 +233,10 @@ async fn handle_main_keys(app: &mut App, key: KeyCode, _modifiers: KeyModifiers)
         }
         KeyCode::Enter => {
             if let Some(key) = app.selected_ticket_key() {
+                // Fetch full ticket detail (JSON) for description and accurate fields
+                if let Ok(detail) = jira_client::fetch_ticket_detail(&key).await {
+                    app.enrich_ticket(&key, &detail);
+                }
                 app.open_detail(key);
             }
         }

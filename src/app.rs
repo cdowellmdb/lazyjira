@@ -91,6 +91,18 @@ impl App {
         self.detail_ticket_key.is_some()
     }
 
+    /// Team members sorted by active ticket count (most active first).
+    /// Must match the order used in views/team.rs.
+    pub fn sorted_team_members(&self) -> Vec<&crate::cache::TeamMember> {
+        let mut members: Vec<_> = self.cache.team_members.iter().collect();
+        members.sort_by(|a, b| {
+            let ac = self.cache.active_tickets_for(&a.email).len();
+            let bc = self.cache.active_tickets_for(&b.email).len();
+            bc.cmp(&ac)
+        });
+        members
+    }
+
     /// Get the currently selected ticket key based on the active tab and selected index.
     pub fn selected_ticket_key(&self) -> Option<String> {
         match self.active_tab {
@@ -105,9 +117,8 @@ impl App {
                 flat.get(self.selected_index).map(|k| k.to_string())
             }
             Tab::Team => {
-                // For team view, flatten all active team tickets
                 let mut flat: Vec<&str> = Vec::new();
-                for member in &self.cache.team_members {
+                for member in self.sorted_team_members() {
                     for t in self.cache.active_tickets_for(&member.email) {
                         flat.push(&t.key);
                     }
@@ -115,7 +126,6 @@ impl App {
                 flat.get(self.selected_index).map(|k| k.to_string())
             }
             Tab::Epics => {
-                // For epics view, flatten all epic children
                 let mut flat: Vec<&str> = Vec::new();
                 for epic in &self.cache.epics {
                     for t in &epic.children {
@@ -170,6 +180,30 @@ impl App {
                     .flat_map(|e| e.children.iter())
                     .find(|t| t.key == key)
             })
+    }
+
+    /// Enrich a cached ticket with full detail from JSON (description, accurate status/assignee).
+    pub fn enrich_ticket(&mut self, key: &str, detail: &crate::cache::Ticket) {
+        let update = |ticket: &mut crate::cache::Ticket| {
+            ticket.status = detail.status.clone();
+            ticket.assignee = detail.assignee.clone();
+            ticket.assignee_email = detail.assignee_email.clone();
+            ticket.description = detail.description.clone();
+            if detail.epic_key.is_some() {
+                ticket.epic_key = detail.epic_key.clone();
+            }
+        };
+        for ticket in &mut self.cache.my_tickets {
+            if ticket.key == key { update(ticket); }
+        }
+        for ticket in &mut self.cache.team_tickets {
+            if ticket.key == key { update(ticket); }
+        }
+        for epic in &mut self.cache.epics {
+            for ticket in &mut epic.children {
+                if ticket.key == key { update(ticket); }
+            }
+        }
     }
 
     /// Update a ticket's status in the cache (optimistic update).

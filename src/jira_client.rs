@@ -61,9 +61,13 @@ fn load_team_roster() -> Result<Vec<TeamMember>> {
 }
 
 /// Parse a line of tab-separated ticket output into a Ticket.
-/// Expected columns: key, summary, status, assignee[, type]
+/// Expected columns: key, status, assignee, summary
+/// Summary is last because the jira CLI uses tab-padding for alignment,
+/// which inserts extra tabs after long text fields. Putting summary last
+/// avoids corrupting the status/assignee parsing.
 fn parse_ticket_line(line: &str) -> Option<Ticket> {
-    let fields: Vec<&str> = line.split('\t').collect();
+    // Filter out empty fields caused by tab-padding alignment
+    let fields: Vec<&str> = line.split('\t').filter(|s| !s.is_empty()).collect();
     if fields.len() < 3 {
         return None;
     }
@@ -73,22 +77,64 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
         return None;
     }
 
-    let summary = fields[1].trim().to_string();
-    let status_str = fields[2].trim();
-    let assignee = fields
-        .get(3)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let status_str = fields[1].trim();
+    let assignee = Some(fields[2].trim().to_string()).filter(|s| !s.is_empty());
+    // Summary is everything from field 3 onward (joined in case of tab splits)
+    let summary = if fields.len() > 3 {
+        fields[3..].iter().map(|s| s.trim()).collect::<Vec<_>>().join(" ")
+    } else {
+        String::new()
+    };
     let url = format!("{}/{}", JIRA_BASE_URL, key);
 
     Some(Ticket {
         key,
         summary,
         status: Status::from_str(status_str),
-        assignee: assignee.clone(),
+        assignee,
         assignee_email: None,
         description: None,
         epic_key: None,
+        epic_name: None,
+        url,
+    })
+}
+
+/// Fetch full ticket detail as JSON via `jira issue view KEY --raw`.
+/// Returns the ticket with description populated.
+pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
+    let output = run_cmd("jira", &["issue", "view", key, "--raw"]).await?;
+    let json: serde_json::Value = serde_json::from_str(&output)
+        .with_context(|| format!("Failed to parse JSON for {}", key))?;
+
+    let fields = json.get("fields").context("No fields in response")?;
+
+    let summary = fields["summary"].as_str().unwrap_or("").to_string();
+    let status = fields["status"]["name"].as_str().unwrap_or("To Do");
+    let assignee = fields["assignee"]["displayName"].as_str().map(|s| s.to_string());
+    let assignee_email = fields["assignee"]["emailAddress"].as_str().map(|s| s.to_string());
+    let description = fields["description"].as_str().map(|s| s.to_string());
+    let epic_key = fields["customfield_12551"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            // Try parent field for epic link
+            fields["parent"]["key"].as_str().map(|s| s.to_string())
+        });
+
+    let ticket_key = json["key"].as_str().unwrap_or(key).to_string();
+    let url = format!("{}/{}", JIRA_BASE_URL, ticket_key);
+
+    Ok(Ticket {
+        key: ticket_key,
+        summary,
+        status: Status::from_str(status),
+        assignee,
+        assignee_email,
+        description,
+        epic_key,
         epic_name: None,
         url,
     })
@@ -118,7 +164,7 @@ async fn fetch_tickets_for_user(email: &str) -> Result<Vec<Ticket>> {
             "--plain",
             "--no-headers",
             "--columns",
-            "key,summary,status,assignee,type",
+            "key,status,assignee,summary",
         ],
     )
     .await?;
@@ -147,7 +193,7 @@ async fn fetch_epics() -> Result<Vec<Epic>> {
             "--plain",
             "--no-headers",
             "--columns",
-            "key,summary,status",
+            "key,status,summary",
         ],
     )
     .await?;
@@ -155,10 +201,15 @@ async fn fetch_epics() -> Result<Vec<Epic>> {
     let epic_stubs: Vec<(String, String)> = epics_output
         .lines()
         .filter_map(|line| {
-            let fields: Vec<&str> = line.split('\t').collect();
+            let fields: Vec<&str> = line.split('\t').filter(|s| !s.is_empty()).collect();
             if fields.len() >= 2 {
                 let key = fields[0].trim().to_string();
-                let summary = fields[1].trim().to_string();
+                // Summary is after status (field 2+)
+                let summary = if fields.len() > 2 {
+                    fields[2..].iter().map(|s| s.trim()).collect::<Vec<_>>().join(" ")
+                } else {
+                    String::new()
+                };
                 if !key.is_empty() {
                     return Some((key, summary));
                 }
@@ -182,7 +233,7 @@ async fn fetch_epics() -> Result<Vec<Epic>> {
                     "--plain",
                     "--no-headers",
                     "--columns",
-                    "key,summary,status,assignee",
+                    "key,status,assignee,summary",
                 ],
             )
             .await
