@@ -18,6 +18,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::cache::Status;
+use crate::config::AppConfig;
 use app::{App, DetailMode, Tab, TicketSyncStage};
 
 #[derive(Debug, Clone, Copy)]
@@ -39,23 +40,25 @@ enum BackgroundMessage {
     },
 }
 
-fn spawn_epics_refresh(tx: &UnboundedSender<BackgroundMessage>) {
+fn spawn_epics_refresh(tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
     let tx = tx.clone();
+    let config = config.clone();
     tokio::spawn(async move {
-        let result = jira_client::refresh_epics_cache()
+        let result = jira_client::refresh_epics_cache(&config)
             .await
             .map_err(|e| e.to_string());
         let _ = tx.send(BackgroundMessage::EpicsRefreshed(result));
     });
 }
 
-fn spawn_cache_refresh(tx: &UnboundedSender<BackgroundMessage>, phase: CacheRefreshPhase) {
+fn spawn_cache_refresh(tx: &UnboundedSender<BackgroundMessage>, phase: CacheRefreshPhase, config: &AppConfig) {
     let tx = tx.clone();
+    let config = config.clone();
     tokio::spawn(async move {
         let result = match phase {
-            CacheRefreshPhase::ActiveOnly => jira_client::fetch_active_only().await,
-            CacheRefreshPhase::Full => jira_client::fetch_all().await,
-            CacheRefreshPhase::Manual => jira_client::fetch_all().await,
+            CacheRefreshPhase::ActiveOnly => jira_client::fetch_active_only(&config).await,
+            CacheRefreshPhase::Full => jira_client::fetch_all(&config).await,
+            CacheRefreshPhase::Manual => jira_client::fetch_all(&config).await,
         }
         .map_err(|e| e.to_string());
         let _ = tx.send(BackgroundMessage::CacheRefreshed { phase, result });
@@ -131,28 +134,31 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    let config = config::load_config()?
+        .expect("No config found. Run lazyjira to set up.");
+
     let mut app = App::new();
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
-    let detail_cache_tx = jira_client::spawn_detail_cache_writer();
+    let detail_cache_tx = jira_client::spawn_detail_cache_writer(&config.jira.project);
 
     // Fast startup: load persisted snapshot immediately, then revalidate in stages.
-    if let Some(snapshot) = jira_client::load_startup_cache_snapshot() {
+    if let Some(snapshot) = jira_client::load_startup_cache_snapshot(&config.jira.project) {
         app.replace_cache(snapshot.cache);
         app.loading = false;
         app.cache_stale_age_secs = Some(snapshot.age_secs);
         app.ticket_sync_stage = Some(TicketSyncStage::ActiveOnly);
         app.flash = Some("Loaded cached data. Refreshing active tickets...".to_string());
-        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::ActiveOnly);
+        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::ActiveOnly, &config);
     } else {
-        let cache = jira_client::fetch_active_only().await?;
+        let cache = jira_client::fetch_active_only(&config).await?;
         app.replace_cache(cache);
         app.loading = false;
         app.ticket_sync_stage = Some(TicketSyncStage::Full);
         app.flash = Some("Loaded active tickets. Syncing recently done...".to_string());
-        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full);
+        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full, &config);
     }
 
-    spawn_epics_refresh(&bg_tx);
+    spawn_epics_refresh(&bg_tx, &config);
     app.epics_refreshing = true;
     queue_detail_prefetch(&mut app, &bg_tx);
 
@@ -194,7 +200,7 @@ async fn main() -> Result<()> {
                         queue_detail_prefetch(&mut app, &bg_tx);
                         app.flash =
                             Some("Active tickets refreshed. Syncing recently done...".to_string());
-                        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full);
+                        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full, &config);
                     }
                     (CacheRefreshPhase::ActiveOnly, Err(e))
                         if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
@@ -204,7 +210,7 @@ async fn main() -> Result<()> {
                             "Active refresh failed ({}). Trying full refresh...",
                             e
                         ));
-                        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full);
+                        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full, &config);
                     }
                     (CacheRefreshPhase::Full, Ok(cache))
                         if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
@@ -214,7 +220,7 @@ async fn main() -> Result<()> {
                         app.ticket_sync_stage = None;
                         app.clamp_selection();
                         queue_detail_prefetch(&mut app, &bg_tx);
-                        if let Err(e) = jira_client::save_full_cache_snapshot(&app.cache) {
+                        if let Err(e) = jira_client::save_full_cache_snapshot(&config.jira.project, &app.cache) {
                             app.flash = Some(format!("Cache snapshot write failed: {}", e));
                         } else {
                             app.flash = Some("Ticket cache is up to date".to_string());
@@ -233,7 +239,7 @@ async fn main() -> Result<()> {
                         app.ticket_sync_stage = None;
                         app.clamp_selection();
                         queue_detail_prefetch(&mut app, &bg_tx);
-                        if let Err(e) = jira_client::save_full_cache_snapshot(&app.cache) {
+                        if let Err(e) = jira_client::save_full_cache_snapshot(&config.jira.project, &app.cache) {
                             app.flash = Some(format!("Refreshed (cache save failed: {})", e));
                         } else {
                             app.flash =
@@ -241,7 +247,7 @@ async fn main() -> Result<()> {
                         }
                         if !app.epics_refreshing {
                             app.epics_refreshing = true;
-                            spawn_epics_refresh(&bg_tx);
+                            spawn_epics_refresh(&bg_tx, &config);
                         }
                     }
                     (CacheRefreshPhase::Manual, Err(e)) => {
@@ -288,7 +294,7 @@ async fn main() -> Result<()> {
                     } else if app.search.is_some() {
                         handle_search_keys(&mut app, key.code, key.modifiers, &bg_tx).await;
                     } else {
-                        handle_main_keys(&mut app, key.code, key.modifiers, &bg_tx).await;
+                        handle_main_keys(&mut app, key.code, key.modifiers, &bg_tx, &config).await;
                     }
                     draw_needed = true;
                 }
@@ -657,6 +663,7 @@ async fn handle_main_keys(
     key: KeyCode,
     _modifiers: KeyModifiers,
     bg_tx: &UnboundedSender<BackgroundMessage>,
+    config: &AppConfig,
 ) {
     match key {
         KeyCode::Char('q') => app.should_quit = true,
@@ -716,7 +723,7 @@ async fn handle_main_keys(
                 app.loading = true;
                 app.ticket_sync_stage = None;
                 app.flash = Some("Refreshing tickets...".to_string());
-                spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual);
+                spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual, config);
             }
         }
         KeyCode::Enter => {

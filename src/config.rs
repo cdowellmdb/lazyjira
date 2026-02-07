@@ -69,6 +69,36 @@ pub struct SavedFilter {
     pub jql: String,
 }
 
+impl AppConfig {
+    pub fn team_members(&self) -> Vec<crate::cache::TeamMember> {
+        let mut seen = std::collections::HashSet::new();
+        let mut members = Vec::new();
+        for (name, email) in &self.team {
+            if !email.is_empty() && seen.insert(email.clone()) {
+                members.push(crate::cache::TeamMember {
+                    name: name.clone(),
+                    email: email.clone(),
+                });
+            }
+        }
+        members
+    }
+
+    pub fn active_status_clause(&self) -> String {
+        let quoted: Vec<String> = self.statuses.active.iter().map(|s| format!("\"{}\"", s)).collect();
+        format!("({})", quoted.join(", "))
+    }
+
+    pub fn done_status_clause(&self) -> String {
+        let quoted: Vec<String> = self.statuses.done.iter().map(|s| format!("\"{}\"", s)).collect();
+        format!("({})", quoted.join(", "))
+    }
+
+    pub fn done_window(&self) -> String {
+        format!("-{}d", self.jira.done_window_days)
+    }
+}
+
 /// Returns the lazyjira config directory path (`~/.config/lazyjira/`).
 pub fn config_dir() -> Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME not set")?;

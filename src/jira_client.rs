@@ -7,13 +7,11 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::cache::{Cache, Epic, Status, TeamMember, Ticket};
+use crate::config::AppConfig;
 
 const JIRA_BASE_URL: &str = "https://jira.mongodb.org/browse";
-const PROJECT: &str = "AMP";
-const RECENT_DONE_WINDOW: &str = "-14d";
-const EPICS_CACHE_FILE_NAME: &str = "lazyjira_epics_cache_AMP.json";
-const DETAILS_CACHE_FILE_NAME: &str = "lazyjira_ticket_details_cache_AMP.json";
-const FULL_CACHE_FILE_NAME: &str = "lazyjira_full_cache_AMP.json";
+const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
+const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
 const FULL_CACHE_DIR_NAME: &str = "lazyjira";
 
 #[derive(Debug, Clone, Copy)]
@@ -51,42 +49,11 @@ async fn run_cmd(program: &str, args: &[&str]) -> Result<String> {
 }
 
 /// Fetch current user email via `jira me`.
-async fn fetch_my_email() -> Result<String> {
+pub async fn fetch_my_email() -> Result<String> {
     run_cmd("jira", &["me"]).await
 }
 
-/// Load team roster from ~/.claude/skills/jira/team.yml, deduplicating by email.
-fn load_team_roster() -> Result<Vec<TeamMember>> {
-    let home = std::env::var("HOME").context("HOME not set")?;
-    let path = format!("{}/.claude/skills/jira/team.yml", home);
-    let content = std::fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read team file: {}", path))?;
-
-    let yaml: serde_yaml::Value =
-        serde_yaml::from_str(&content).context("Failed to parse team.yml")?;
-
-    let team_map = yaml
-        .get("team")
-        .and_then(|v| v.as_mapping())
-        .context("Expected 'team' mapping in team.yml")?;
-
-    let mut seen_emails: HashMap<String, ()> = HashMap::new();
-    let mut members = Vec::new();
-
-    for (name_val, email_val) in team_map {
-        let name = name_val.as_str().unwrap_or_default().to_string();
-        let email = email_val.as_str().unwrap_or_default().to_string();
-
-        if !email.is_empty() && !seen_emails.contains_key(&email) {
-            seen_emails.insert(email.clone(), ());
-            members.push(TeamMember { name, email });
-        }
-    }
-
-    Ok(members)
-}
-
-fn name_from_email(email: &str) -> String {
+pub fn name_from_email(email: &str) -> String {
     let local = email.split('@').next().unwrap_or(email);
     local
         .split('.')
@@ -157,10 +124,11 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
 }
 
 /// Fetch tickets for a JQL query with pagination.
-async fn fetch_tickets_for_query(query: &str) -> Result<Vec<Ticket>> {
+async fn fetch_tickets_for_query(config: &AppConfig, query: &str) -> Result<Vec<Ticket>> {
     let mut all_tickets = Vec::new();
     let mut from = 0usize;
     let page_size = 100usize;
+    let project = &config.jira.project;
 
     loop {
         let paginate = format!("{}:{}", from, page_size);
@@ -170,7 +138,7 @@ async fn fetch_tickets_for_query(query: &str) -> Result<Vec<Ticket>> {
                 "issue",
                 "list",
                 "-p",
-                PROJECT,
+                project,
                 "-q",
                 query,
                 "--plain",
@@ -211,13 +179,13 @@ async fn fetch_tickets_for_query(query: &str) -> Result<Vec<Ticket>> {
 }
 
 /// Fetch epic children using both company-managed (Epic Link) and team-managed (parent) style links.
-async fn fetch_children_for_epic(epic_key: &str, epic_summary: &str) -> Result<Vec<Ticket>> {
+async fn fetch_children_for_epic(config: &AppConfig, epic_key: &str, epic_summary: &str) -> Result<Vec<Ticket>> {
     let epic_link_query = format!("\"Epic Link\" = {}", epic_key);
     let parent_query = format!("parent = {}", epic_key);
 
     let (epic_link_result, parent_result) = tokio::join!(
-        fetch_tickets_for_query(&epic_link_query),
-        fetch_tickets_for_query(&parent_query)
+        fetch_tickets_for_query(config, &epic_link_query),
+        fetch_tickets_for_query(config, &parent_query)
     );
 
     let mut children_by_key: HashMap<String, Ticket> = HashMap::new();
@@ -316,29 +284,29 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
 }
 
 /// Fetch tickets assigned to a specific user, setting assignee_email on results.
-async fn fetch_tickets_for_user(email: &str, scope: TicketFetchScope) -> Result<Vec<Ticket>> {
+async fn fetch_tickets_for_user(config: &AppConfig, email: &str, scope: TicketFetchScope) -> Result<Vec<Ticket>> {
     let active_query = format!(
-        "assignee = \"{}\" AND status in (\"Needs Triage\", \"Ready for Work\", \"To Do\", \"In Progress\", \"In Review\", \"Blocked\")",
-        email
+        "assignee = \"{}\" AND status in {}",
+        email, config.active_status_clause()
     );
 
     let mut tickets_by_key: HashMap<String, Ticket> = HashMap::new();
 
     match scope {
         TicketFetchScope::ActiveOnly => {
-            for mut ticket in fetch_tickets_for_query(&active_query).await? {
+            for mut ticket in fetch_tickets_for_query(config, &active_query).await? {
                 ticket.assignee_email = Some(email.to_string());
                 tickets_by_key.insert(ticket.key.clone(), ticket);
             }
         }
         TicketFetchScope::ActiveAndRecentDone => {
             let recent_done_query = format!(
-                "assignee = \"{}\" AND status in (Done, Closed) AND updated >= {}",
-                email, RECENT_DONE_WINDOW
+                "assignee = \"{}\" AND status in {} AND updated >= {}",
+                email, config.done_status_clause(), config.done_window()
             );
             let (active_result, done_result) = tokio::join!(
-                fetch_tickets_for_query(&active_query),
-                fetch_tickets_for_query(&recent_done_query)
+                fetch_tickets_for_query(config, &active_query),
+                fetch_tickets_for_query(config, &recent_done_query)
             );
             for mut ticket in active_result? {
                 ticket.assignee_email = Some(email.to_string());
@@ -356,13 +324,31 @@ async fn fetch_tickets_for_user(email: &str, scope: TicketFetchScope) -> Result<
     Ok(tickets)
 }
 
+fn unassigned_team_active_query(config: &AppConfig) -> String {
+    format!(
+        "assignee is EMPTY AND \"Assigned Teams\" = \"{}\" AND status in {}",
+        config.jira.team_name, config.active_status_clause()
+    )
+}
+
+async fn fetch_unassigned_team_tickets(config: &AppConfig) -> Result<Vec<Ticket>> {
+    let mut tickets = fetch_tickets_for_query(config, &unassigned_team_active_query(config)).await?;
+    for ticket in &mut tickets {
+        ticket.assignee = Some(UNASSIGNED_TEAM_NAME.to_string());
+        ticket.assignee_email = Some(UNASSIGNED_TEAM_EMAIL.to_string());
+    }
+    tickets.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(tickets)
+}
+
 /// Fetch all epics and their children.
-async fn fetch_epics() -> Result<Vec<Epic>> {
+async fn fetch_epics(config: &AppConfig) -> Result<Vec<Epic>> {
     const MAX_EPIC_CHILD_FETCH_CONCURRENCY: usize = 8;
 
     let mut from = 0usize;
     let page_size = 100usize;
     let mut epic_stubs_map: HashMap<String, String> = HashMap::new();
+    let project = &config.jira.project;
 
     loop {
         let paginate = format!("{}:{}", from, page_size);
@@ -374,7 +360,7 @@ async fn fetch_epics() -> Result<Vec<Epic>> {
                 "-t",
                 "Epic",
                 "-p",
-                PROJECT,
+                project,
                 "--plain",
                 "--no-headers",
                 "--columns",
@@ -425,6 +411,7 @@ async fn fetch_epics() -> Result<Vec<Epic>> {
         return Ok(Vec::new());
     }
 
+    let config_arc = std::sync::Arc::new(config.clone());
     let mut epics_by_index: Vec<Option<Epic>> = vec![None; epic_count];
     let mut iter = epic_stubs.into_iter().enumerate();
     let mut tasks = tokio::task::JoinSet::new();
@@ -432,8 +419,9 @@ async fn fetch_epics() -> Result<Vec<Epic>> {
     let initial_workers = MAX_EPIC_CHILD_FETCH_CONCURRENCY.min(epic_count);
     for _ in 0..initial_workers {
         if let Some((idx, (epic_key, epic_summary))) = iter.next() {
+            let cfg = config_arc.clone();
             tasks.spawn(async move {
-                let children = match fetch_children_for_epic(&epic_key, &epic_summary).await {
+                let children = match fetch_children_for_epic(&cfg, &epic_key, &epic_summary).await {
                     Ok(children) => children,
                     Err(e) => {
                         eprintln!("Warning: {}. Showing this epic with no related tickets.", e);
@@ -464,8 +452,9 @@ async fn fetch_epics() -> Result<Vec<Epic>> {
         }
 
         if let Some((idx, (epic_key, epic_summary))) = iter.next() {
+            let cfg = config_arc.clone();
             tasks.spawn(async move {
-                let children = match fetch_children_for_epic(&epic_key, &epic_summary).await {
+                let children = match fetch_children_for_epic(&cfg, &epic_key, &epic_summary).await {
                     Ok(children) => children,
                     Err(e) => {
                         eprintln!("Warning: {}. Showing this epic with no related tickets.", e);
@@ -504,12 +493,24 @@ async fn fetch_epics() -> Result<Vec<Epic>> {
     Ok(epics)
 }
 
-fn epics_cache_path() -> PathBuf {
-    std::env::temp_dir().join(EPICS_CACHE_FILE_NAME)
+fn epics_cache_file_name(project: &str) -> String {
+    format!("lazyjira_epics_cache_{}.json", project)
 }
 
-fn details_cache_path() -> PathBuf {
-    std::env::temp_dir().join(DETAILS_CACHE_FILE_NAME)
+fn details_cache_file_name(project: &str) -> String {
+    format!("lazyjira_ticket_details_cache_{}.json", project)
+}
+
+fn full_cache_file_name(project: &str) -> String {
+    format!("lazyjira_full_cache_{}.json", project)
+}
+
+fn epics_cache_path(project: &str) -> PathBuf {
+    std::env::temp_dir().join(epics_cache_file_name(project))
+}
+
+fn details_cache_path(project: &str) -> PathBuf {
+    std::env::temp_dir().join(details_cache_file_name(project))
 }
 
 fn full_cache_dir() -> PathBuf {
@@ -519,8 +520,8 @@ fn full_cache_dir() -> PathBuf {
     }
 }
 
-fn full_cache_path() -> PathBuf {
-    full_cache_dir().join(FULL_CACHE_FILE_NAME)
+fn full_cache_path(project: &str) -> PathBuf {
+    full_cache_dir().join(full_cache_file_name(project))
 }
 
 fn now_unix_secs() -> u64 {
@@ -530,8 +531,8 @@ fn now_unix_secs() -> u64 {
     }
 }
 
-pub fn load_startup_cache_snapshot() -> Option<StartupCacheSnapshot> {
-    let path = full_cache_path();
+pub fn load_startup_cache_snapshot(project: &str) -> Option<StartupCacheSnapshot> {
+    let path = full_cache_path(project);
     let content = std::fs::read_to_string(&path).ok()?;
     let snapshot: CacheSnapshot = serde_json::from_str(&content).ok()?;
     let age_secs = now_unix_secs().saturating_sub(snapshot.saved_at_unix_secs);
@@ -541,7 +542,7 @@ pub fn load_startup_cache_snapshot() -> Option<StartupCacheSnapshot> {
     })
 }
 
-pub fn save_full_cache_snapshot(cache: &Cache) -> Result<()> {
+pub fn save_full_cache_snapshot(project: &str, cache: &Cache) -> Result<()> {
     let dir = full_cache_dir();
     std::fs::create_dir_all(&dir).with_context(|| {
         format!(
@@ -550,7 +551,7 @@ pub fn save_full_cache_snapshot(cache: &Cache) -> Result<()> {
         )
     })?;
 
-    let path = full_cache_path();
+    let path = full_cache_path(project);
     let snapshot = CacheSnapshot {
         saved_at_unix_secs: now_unix_secs(),
         cache: cache.clone(),
@@ -561,8 +562,8 @@ pub fn save_full_cache_snapshot(cache: &Cache) -> Result<()> {
     Ok(())
 }
 
-fn load_epics_cache() -> Vec<Epic> {
-    let path = epics_cache_path();
+fn load_epics_cache(project: &str) -> Vec<Epic> {
+    let path = epics_cache_path(project);
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
         Err(_) => return Vec::new(),
@@ -574,16 +575,16 @@ fn load_epics_cache() -> Vec<Epic> {
     }
 }
 
-fn save_epics_cache(epics: &[Epic]) -> Result<()> {
-    let path = epics_cache_path();
+fn save_epics_cache(project: &str, epics: &[Epic]) -> Result<()> {
+    let path = epics_cache_path(project);
     let json = serde_json::to_string(epics).context("Failed to serialize epics cache")?;
     std::fs::write(&path, json)
         .with_context(|| format!("Failed to write epics cache file: {}", path.display()))?;
     Ok(())
 }
 
-fn load_details_cache() -> HashMap<String, Ticket> {
-    let path = details_cache_path();
+fn load_details_cache(project: &str) -> HashMap<String, Ticket> {
+    let path = details_cache_path(project);
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
         Err(_) => return HashMap::new(),
@@ -592,8 +593,8 @@ fn load_details_cache() -> HashMap<String, Ticket> {
     serde_json::from_str::<HashMap<String, Ticket>>(&content).unwrap_or_default()
 }
 
-fn save_details_cache(details_by_key: &HashMap<String, Ticket>) -> Result<()> {
-    let path = details_cache_path();
+fn save_details_cache(project: &str, details_by_key: &HashMap<String, Ticket>) -> Result<()> {
+    let path = details_cache_path(project);
     let json =
         serde_json::to_string(details_by_key).context("Failed to serialize details cache")?;
     std::fs::write(&path, json)
@@ -665,17 +666,18 @@ pub fn attach_epics_to_tickets(
 }
 
 /// Refresh the full epic relationship graph and write it to local cache.
-pub async fn refresh_epics_cache() -> Result<Vec<Epic>> {
-    let epics = fetch_epics().await?;
-    save_epics_cache(&epics)?;
+pub async fn refresh_epics_cache(config: &AppConfig) -> Result<Vec<Epic>> {
+    let epics = fetch_epics(config).await?;
+    save_epics_cache(&config.jira.project, &epics)?;
     Ok(epics)
 }
 
-pub fn spawn_detail_cache_writer() -> mpsc::UnboundedSender<Ticket> {
+pub fn spawn_detail_cache_writer(project: &str) -> mpsc::UnboundedSender<Ticket> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Ticket>();
+    let project = project.to_string();
 
     tokio::spawn(async move {
-        let mut details_by_key = load_details_cache();
+        let mut details_by_key = load_details_cache(&project);
 
         while let Some(mut detail) = rx.recv().await {
             detail.detail_loaded = true;
@@ -686,7 +688,7 @@ pub fn spawn_detail_cache_writer() -> mpsc::UnboundedSender<Ticket> {
                 details_by_key.insert(queued.key.clone(), queued);
             }
 
-            if let Err(e) = save_details_cache(&details_by_key) {
+            if let Err(e) = save_details_cache(&project, &details_by_key) {
                 eprintln!("Warning: failed to persist details cache: {}", e);
             }
         }
@@ -695,8 +697,8 @@ pub fn spawn_detail_cache_writer() -> mpsc::UnboundedSender<Ticket> {
     tx
 }
 
-async fn fetch_with_scope(scope: TicketFetchScope) -> Result<Cache> {
-    let mut team_members = load_team_roster().unwrap_or_default();
+async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result<Cache> {
+    let mut team_members = config.team_members();
 
     let my_email = fetch_my_email().await?;
     if !team_members.iter().any(|member| member.email == my_email) {
@@ -705,10 +707,11 @@ async fn fetch_with_scope(scope: TicketFetchScope) -> Result<Cache> {
             email: my_email.clone(),
         });
     }
-    let details_by_key = load_details_cache();
-    let mut epics = load_epics_cache();
+    let project = &config.jira.project;
+    let details_by_key = load_details_cache(project);
+    let mut epics = load_epics_cache(project);
 
-    let mut my_tickets = fetch_tickets_for_user(&my_email, scope).await?;
+    let mut my_tickets = fetch_tickets_for_user(config, &my_email, scope).await?;
 
     // Seed team view with my current tickets to avoid refetching self.
     let mut team_tickets = my_tickets.clone();
@@ -718,8 +721,9 @@ async fn fetch_with_scope(scope: TicketFetchScope) -> Result<Cache> {
             continue;
         }
         let email = member.email.clone();
+        let cfg = config.clone();
         team_handles.push(tokio::spawn(async move {
-            fetch_tickets_for_user(&email, scope).await
+            fetch_tickets_for_user(&cfg, &email, scope).await
         }));
     }
 
@@ -727,6 +731,19 @@ async fn fetch_with_scope(scope: TicketFetchScope) -> Result<Cache> {
         let tickets = handle.await??;
         team_tickets.extend(tickets);
     }
+
+    let unassigned_team_tickets = fetch_unassigned_team_tickets(config).await?;
+    if !unassigned_team_tickets.is_empty()
+        && !team_members
+            .iter()
+            .any(|member| member.email == UNASSIGNED_TEAM_EMAIL)
+    {
+        team_members.push(TeamMember {
+            name: UNASSIGNED_TEAM_NAME.to_string(),
+            email: UNASSIGNED_TEAM_EMAIL.to_string(),
+        });
+    }
+    team_tickets.extend(unassigned_team_tickets);
 
     attach_epics_to_tickets(&mut my_tickets, &mut team_tickets, &epics);
     hydrate_tickets_from_details_cache(&mut my_tickets, &details_by_key);
@@ -744,13 +761,13 @@ async fn fetch_with_scope(scope: TicketFetchScope) -> Result<Cache> {
 }
 
 /// Fetch active (non-Done) tickets first for fast startup accuracy.
-pub async fn fetch_active_only() -> Result<Cache> {
-    fetch_with_scope(TicketFetchScope::ActiveOnly).await
+pub async fn fetch_active_only(config: &AppConfig) -> Result<Cache> {
+    fetch_with_scope(config, TicketFetchScope::ActiveOnly).await
 }
 
 /// Fetch active + recently done tickets for a complete cache refresh.
-pub async fn fetch_all() -> Result<Cache> {
-    fetch_with_scope(TicketFetchScope::ActiveAndRecentDone).await
+pub async fn fetch_all(config: &AppConfig) -> Result<Cache> {
+    fetch_with_scope(config, TicketFetchScope::ActiveAndRecentDone).await
 }
 
 /// Move a ticket to a new status via `jira issue move`.
@@ -761,7 +778,9 @@ pub async fn move_ticket(key: &str, status: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ticket_line;
+    use super::*;
+    use std::collections::BTreeMap;
+    use crate::config::{JiraConfig, StatusConfig};
 
     #[test]
     fn parse_ticket_line_handles_empty_assignee() {
@@ -785,5 +804,18 @@ mod tests {
             ticket.summary,
             "Run evals ci in Olympus in parallel".to_string()
         );
+    }
+
+    #[test]
+    fn unassigned_query_filters_for_team_name_from_config() {
+        let config = AppConfig {
+            jira: JiraConfig { project: "AMP".into(), team_name: "Code Generation".into(), done_window_days: 14 },
+            team: BTreeMap::new(),
+            statuses: StatusConfig::default(),
+            filters: vec![],
+        };
+        let query = unassigned_team_active_query(&config);
+        assert!(query.contains("assignee is EMPTY"));
+        assert!(query.contains("\"Assigned Teams\" = \"Code Generation\""));
     }
 }
