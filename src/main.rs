@@ -1,5 +1,6 @@
 mod app;
 mod cache;
+mod config;
 mod jira_client;
 mod views;
 mod widgets;
@@ -395,6 +396,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
             Tab::MyWork => 0,
             Tab::Team => 1,
             Tab::Epics => 2,
+            Tab::Unassigned => 3,
         })
         .style(Style::default().fg(Color::Gray))
         .highlight_style(
@@ -414,6 +416,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
             Tab::MyWork => views::my_work::render(f, chunks[1], app),
             Tab::Team => views::team::render(f, chunks[1], app),
             Tab::Epics => views::epics::render(f, chunks[1], app),
+            Tab::Unassigned => views::unassigned::render(f, chunks[1], app),
         }
     }
 
