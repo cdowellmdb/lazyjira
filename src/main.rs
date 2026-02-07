@@ -819,9 +819,8 @@ async fn handle_search_keys(
         }
         KeyCode::Enter => {
             if let Some(key) = app.selected_ticket_key() {
-                let detail_loaded = app.is_ticket_detail_loaded(&key);
                 app.open_detail(key.clone());
-                if !detail_loaded && app.begin_detail_fetch(&key) {
+                if app.begin_detail_fetch(&key) {
                     spawn_ticket_detail_fetch(bg_tx, key);
                 }
             }
@@ -1459,9 +1458,8 @@ async fn handle_main_keys(
         }
         KeyCode::Enter => {
             if let Some(key) = app.selected_ticket_key() {
-                let detail_loaded = app.is_ticket_detail_loaded(&key);
                 app.open_detail(key.clone());
-                if !detail_loaded && app.begin_detail_fetch(&key) {
+                if app.begin_detail_fetch(&key) {
                     spawn_ticket_detail_fetch(bg_tx, key);
                 }
             }
