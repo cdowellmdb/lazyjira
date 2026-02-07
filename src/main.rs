@@ -23,6 +23,7 @@ use app::{App, DetailMode, Tab, TicketSyncStage};
 enum CacheRefreshPhase {
     ActiveOnly,
     Full,
+    Manual,
 }
 
 enum BackgroundMessage {
@@ -53,6 +54,7 @@ fn spawn_cache_refresh(tx: &UnboundedSender<BackgroundMessage>, phase: CacheRefr
         let result = match phase {
             CacheRefreshPhase::ActiveOnly => jira_client::fetch_active_only().await,
             CacheRefreshPhase::Full => jira_client::fetch_all().await,
+            CacheRefreshPhase::Manual => jira_client::fetch_all().await,
         }
         .map_err(|e| e.to_string());
         let _ = tx.send(BackgroundMessage::CacheRefreshed { phase, result });
@@ -153,9 +155,13 @@ async fn main() -> Result<()> {
     app.epics_refreshing = true;
     queue_detail_prefetch(&mut app, &bg_tx);
 
+    let mut draw_needed = true;
+
     // Main loop
     loop {
+        let mut state_changed = false;
         while let Ok(message) = bg_rx.try_recv() {
+            state_changed = true;
             match message {
                 BackgroundMessage::EpicsRefreshed(result) => {
                     app.epics_refreshing = false;
@@ -219,6 +225,28 @@ async fn main() -> Result<()> {
                         app.ticket_sync_stage = None;
                         app.flash = Some(format!("Full refresh failed: {}", e));
                     }
+                    (CacheRefreshPhase::Manual, Ok(cache)) => {
+                        app.loading = false;
+                        app.replace_cache(cache);
+                        app.cache_stale_age_secs = None;
+                        app.ticket_sync_stage = None;
+                        app.clamp_selection();
+                        queue_detail_prefetch(&mut app, &bg_tx);
+                        if let Err(e) = jira_client::save_full_cache_snapshot(&app.cache) {
+                            app.flash = Some(format!("Refreshed (cache save failed: {})", e));
+                        } else {
+                            app.flash =
+                                Some("Refreshed! Syncing epic relationships...".to_string());
+                        }
+                        if !app.epics_refreshing {
+                            app.epics_refreshing = true;
+                            spawn_epics_refresh(&bg_tx);
+                        }
+                    }
+                    (CacheRefreshPhase::Manual, Err(e)) => {
+                        app.loading = false;
+                        app.flash = Some(format!("Refresh failed: {}", e));
+                    }
                     _ => {}
                 },
                 BackgroundMessage::TicketDetailFetched { key, result } => {
@@ -238,22 +266,33 @@ async fn main() -> Result<()> {
             }
         }
 
-        terminal.draw(|f| ui(f, &app))?;
+        if state_changed {
+            draw_needed = true;
+        }
+        if draw_needed {
+            terminal.draw(|f| ui(f, &app))?;
+            draw_needed = false;
+        }
 
         if event::poll(Duration::from_millis(120))? {
-            if let Event::Key(key) = event::read()? {
-                // Clear flash on any keypress
-                app.flash = None;
+            match event::read()? {
+                Event::Key(key) => {
+                    // Clear flash on any keypress
+                    app.flash = None;
 
-                if app.show_keybindings {
-                    handle_keybindings_keys(&mut app, key.code);
-                } else if app.is_detail_open() {
-                    handle_detail_keys(&mut app, key.code);
-                } else if app.search.is_some() {
-                    handle_search_keys(&mut app, key.code, key.modifiers, &bg_tx).await;
-                } else {
-                    handle_main_keys(&mut app, key.code, key.modifiers, &bg_tx).await;
+                    if app.show_keybindings {
+                        handle_keybindings_keys(&mut app, key.code);
+                    } else if app.is_detail_open() {
+                        handle_detail_keys(&mut app, key.code);
+                    } else if app.search.is_some() {
+                        handle_search_keys(&mut app, key.code, key.modifiers, &bg_tx).await;
+                    } else {
+                        handle_main_keys(&mut app, key.code, key.modifiers, &bg_tx).await;
+                    }
+                    draw_needed = true;
                 }
+                Event::Resize(_, _) => draw_needed = true,
+                _ => {}
             }
         }
 
@@ -599,29 +638,14 @@ async fn handle_main_keys(
             );
         }
         KeyCode::Char('r') => {
-            app.loading = true;
-            match jira_client::fetch_all().await {
-                Ok(cache) => {
-                    app.replace_cache(cache);
-                    app.cache_stale_age_secs = None;
-                    app.ticket_sync_stage = None;
-                    if let Err(e) = jira_client::save_full_cache_snapshot(&app.cache) {
-                        app.flash = Some(format!("Refreshed (cache save failed: {})", e));
-                    } else {
-                        app.flash = Some("Refreshed! Syncing epic relationships...".to_string());
-                    }
-                    if !app.epics_refreshing {
-                        app.epics_refreshing = true;
-                        spawn_epics_refresh(bg_tx);
-                    }
-                    queue_detail_prefetch(app, bg_tx);
-                }
-                Err(e) => {
-                    app.flash = Some(format!("Refresh failed: {}", e));
-                }
+            if app.loading {
+                app.flash = Some("Refresh already in progress".to_string());
+            } else {
+                app.loading = true;
+                app.ticket_sync_stage = None;
+                app.flash = Some("Refreshing tickets...".to_string());
+                spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual);
             }
-            app.loading = false;
-            app.clamp_selection();
         }
         KeyCode::Enter => {
             if let Some(key) = app.selected_ticket_key() {

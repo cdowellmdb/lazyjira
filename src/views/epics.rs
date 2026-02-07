@@ -19,10 +19,8 @@ fn status_color(status: &Status) -> Color {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() > max {
-        let end = max.saturating_sub(3);
-        let mut result: String = chars[..end].iter().collect();
+    if s.chars().count() > max {
+        let mut result: String = s.chars().take(max.saturating_sub(3)).collect();
         result.push_str("...");
         result
     } else {

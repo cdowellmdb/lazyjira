@@ -358,6 +358,8 @@ async fn fetch_tickets_for_user(email: &str, scope: TicketFetchScope) -> Result<
 
 /// Fetch all epics and their children.
 async fn fetch_epics() -> Result<Vec<Epic>> {
+    const MAX_EPIC_CHILD_FETCH_CONCURRENCY: usize = 8;
+
     let mut from = 0usize;
     let page_size = 100usize;
     let mut epic_stubs_map: HashMap<String, String> = HashMap::new();
@@ -418,20 +420,85 @@ async fn fetch_epics() -> Result<Vec<Epic>> {
     let mut epic_stubs: Vec<(String, String)> = epic_stubs_map.into_iter().collect();
     epic_stubs.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let mut epics = Vec::with_capacity(epic_stubs.len());
-    for (epic_key, epic_summary) in epic_stubs {
-        let children = match fetch_children_for_epic(&epic_key, &epic_summary).await {
-            Ok(children) => children,
-            Err(e) => {
-                eprintln!("Warning: {}. Showing this epic with no related tickets.", e);
-                Vec::new()
+    let epic_count = epic_stubs.len();
+    if epic_count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut epics_by_index: Vec<Option<Epic>> = vec![None; epic_count];
+    let mut iter = epic_stubs.into_iter().enumerate();
+    let mut tasks = tokio::task::JoinSet::new();
+
+    let initial_workers = MAX_EPIC_CHILD_FETCH_CONCURRENCY.min(epic_count);
+    for _ in 0..initial_workers {
+        if let Some((idx, (epic_key, epic_summary))) = iter.next() {
+            tasks.spawn(async move {
+                let children = match fetch_children_for_epic(&epic_key, &epic_summary).await {
+                    Ok(children) => children,
+                    Err(e) => {
+                        eprintln!("Warning: {}. Showing this epic with no related tickets.", e);
+                        Vec::new()
+                    }
+                };
+
+                (
+                    idx,
+                    Epic {
+                        key: epic_key,
+                        summary: epic_summary,
+                        children,
+                    },
+                )
+            });
+        }
+    }
+
+    while let Some(joined) = tasks.join_next().await {
+        match joined {
+            Ok((idx, epic)) => {
+                epics_by_index[idx] = Some(epic);
             }
-        };
-        epics.push(Epic {
-            key: epic_key,
-            summary: epic_summary,
-            children,
-        });
+            Err(e) => {
+                eprintln!("Warning: epic fetch task failed: {}", e);
+            }
+        }
+
+        if let Some((idx, (epic_key, epic_summary))) = iter.next() {
+            tasks.spawn(async move {
+                let children = match fetch_children_for_epic(&epic_key, &epic_summary).await {
+                    Ok(children) => children,
+                    Err(e) => {
+                        eprintln!("Warning: {}. Showing this epic with no related tickets.", e);
+                        Vec::new()
+                    }
+                };
+
+                (
+                    idx,
+                    Epic {
+                        key: epic_key,
+                        summary: epic_summary,
+                        children,
+                    },
+                )
+            });
+        }
+    }
+
+    let mut epics = Vec::with_capacity(epic_count);
+    let mut dropped = 0usize;
+    for epic in epics_by_index {
+        if let Some(epic) = epic {
+            epics.push(epic);
+        } else {
+            dropped += 1;
+        }
+    }
+    if dropped > 0 {
+        eprintln!(
+            "Warning: dropped {} epic rows due to unexpected task failure.",
+            dropped
+        );
     }
 
     Ok(epics)

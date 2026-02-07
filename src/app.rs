@@ -228,18 +228,40 @@ impl App {
             .filter(|s| !s.is_empty())
     }
 
+    fn contains_case_insensitive_ascii(haystack: &[u8], needle: &[u8]) -> bool {
+        if needle.is_empty() {
+            return true;
+        }
+        if needle.len() > haystack.len() {
+            return false;
+        }
+        haystack
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle))
+    }
+
+    fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> bool {
+        if haystack.is_ascii() && needle_lower.is_ascii() {
+            return Self::contains_case_insensitive_ascii(
+                haystack.as_bytes(),
+                needle_lower.as_bytes(),
+            );
+        }
+        haystack.to_lowercase().contains(needle_lower)
+    }
+
     fn ticket_matches_search(ticket: &crate::cache::Ticket, search: &str) -> bool {
-        ticket.key.to_lowercase().contains(search)
-            || ticket.summary.to_lowercase().contains(search)
+        Self::contains_case_insensitive(&ticket.key, search)
+            || Self::contains_case_insensitive(&ticket.summary, search)
             || ticket
                 .assignee
                 .as_ref()
-                .map(|a| a.to_lowercase().contains(search))
+                .map(|a| Self::contains_case_insensitive(a, search))
                 .unwrap_or(false)
             || ticket
                 .labels
                 .iter()
-                .any(|label| label.to_lowercase().contains(search))
+                .any(|label| Self::contains_case_insensitive(label, search))
     }
 
     fn epic_status_rank(status: &crate::cache::Status) -> usize {
@@ -272,8 +294,8 @@ impl App {
         for epic in &self.cache.epics {
             match &search {
                 Some(s) => {
-                    let epic_matches = epic.key.to_lowercase().contains(s.as_str())
-                        || epic.summary.to_lowercase().contains(s.as_str());
+                    let epic_matches = Self::contains_case_insensitive(&epic.key, s)
+                        || Self::contains_case_insensitive(&epic.summary, s);
                     if epic_matches {
                         let mut children: Vec<_> = epic.children.iter().collect();
                         Self::sort_epic_children(&mut children);
@@ -381,12 +403,10 @@ impl App {
                 .get(member.email.as_str())
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            let member_name = member.name.to_lowercase();
-            let member_email = member.email.to_lowercase();
             let filtered: Vec<_> = match &search {
                 Some(s) => {
-                    let member_match =
-                        member_name.contains(s.as_str()) || member_email.contains(s.as_str());
+                    let member_match = Self::contains_case_insensitive(&member.name, s)
+                        || Self::contains_case_insensitive(&member.email, s);
                     if member_match {
                         member_tickets.to_vec()
                     } else {
