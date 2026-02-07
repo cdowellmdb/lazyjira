@@ -776,6 +776,48 @@ pub async fn move_ticket(key: &str, status: &str) -> Result<()> {
     Ok(())
 }
 
+/// Create a new ticket via `jira issue create`.
+pub async fn create_ticket(
+    project: &str,
+    issue_type: &str,
+    summary: &str,
+    assignee_email: Option<&str>,
+    epic_key: Option<&str>,
+) -> Result<String> {
+    let mut args = vec![
+        "issue", "create",
+        "-t", issue_type,
+        "-s", summary,
+        "--no-input",
+        "-p", project,
+    ];
+
+    let assignee_str;
+    if let Some(email) = assignee_email {
+        assignee_str = email.to_string();
+        args.push("-a");
+        args.push(&assignee_str);
+    }
+
+    // Epic link via parent field
+    let parent_str;
+    if let Some(ek) = epic_key {
+        parent_str = ek.to_string();
+        args.push("--parent");
+        args.push(&parent_str);
+    }
+
+    let output = run_cmd("jira", &args).await?;
+    // jira-cli typically outputs something like "Issue AMP-1234 created"
+    // Extract the key
+    let key = output
+        .split_whitespace()
+        .find(|w| w.contains('-'))
+        .map(|w| w.to_string())
+        .unwrap_or(output.trim().to_string());
+    Ok(key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

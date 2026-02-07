@@ -39,6 +39,7 @@ enum BackgroundMessage {
         key: String,
         result: std::result::Result<crate::cache::Ticket, String>,
     },
+    TicketCreated(std::result::Result<String, String>),
 }
 
 fn spawn_epics_refresh(tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
@@ -273,6 +274,22 @@ async fn main() -> Result<()> {
                         Err(_) => {}
                     }
                 }
+                BackgroundMessage::TicketCreated(result) => {
+                    match result {
+                        Ok(key) => {
+                            app.flash = Some(format!("Created {}", key));
+                            // Trigger a manual refresh to pick up the new ticket
+                            if !app.loading {
+                                app.loading = true;
+                                app.ticket_sync_stage = None;
+                                spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Manual, &config);
+                            }
+                        }
+                        Err(e) => {
+                            app.flash = Some(format!("Create failed: {}", e));
+                        }
+                    }
+                }
             }
         }
 
@@ -290,7 +307,9 @@ async fn main() -> Result<()> {
                     // Clear flash on any keypress
                     app.flash = None;
 
-                    if app.show_keybindings {
+                    if app.is_create_ticket_open() {
+                        handle_create_ticket_keys(&mut app, key.code, key.modifiers, &bg_tx, &config).await;
+                    } else if app.show_keybindings {
                         handle_keybindings_keys(&mut app, key.code);
                     } else if app.is_detail_open() {
                         handle_detail_keys(&mut app, key.code);
@@ -471,6 +490,9 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     // Detail overlay
     if app.is_detail_open() {
         widgets::ticket_detail::render(f, app);
+    }
+    if app.is_create_ticket_open() {
+        widgets::create_ticket::render(f, app);
     }
     if app.show_keybindings {
         widgets::keybindings_help::render(f);
@@ -661,6 +683,117 @@ async fn handle_search_keys(
     }
 }
 
+async fn handle_create_ticket_keys(
+    app: &mut App,
+    key: KeyCode,
+    _modifiers: KeyModifiers,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+    config: &AppConfig,
+) {
+    let state = match &mut app.create_ticket {
+        Some(s) => s,
+        None => return,
+    };
+
+    match key {
+        KeyCode::Esc => {
+            app.create_ticket = None;
+        }
+        KeyCode::Tab => {
+            let state = app.create_ticket.as_mut().unwrap();
+            state.focused_field = (state.focused_field + 1) % 4;
+        }
+        KeyCode::BackTab => {
+            let state = app.create_ticket.as_mut().unwrap();
+            state.focused_field = if state.focused_field == 0 { 3 } else { state.focused_field - 1 };
+        }
+        KeyCode::Enter => {
+            if state.summary.trim().is_empty() {
+                app.flash = Some("Summary is required".to_string());
+                return;
+            }
+
+            let issue_type = app::ISSUE_TYPES[state.issue_type_idx].to_string();
+            let summary = state.summary.clone();
+
+            let assignee_email = if state.assignee_idx == 0 {
+                None
+            } else {
+                app.cache
+                    .team_members
+                    .get(state.assignee_idx - 1)
+                    .map(|m| m.email.clone())
+            };
+
+            let epic_key = if state.epic_idx == 0 {
+                None
+            } else {
+                app.cache
+                    .epics
+                    .get(state.epic_idx - 1)
+                    .map(|e| e.key.clone())
+            };
+
+            app.create_ticket = None;
+            app.flash = Some("Creating ticket...".to_string());
+
+            let project = config.jira.project.clone();
+            let tx = bg_tx.clone();
+            tokio::spawn(async move {
+                let result = jira_client::create_ticket(
+                    &project,
+                    &issue_type,
+                    &summary,
+                    assignee_email.as_deref(),
+                    epic_key.as_deref(),
+                )
+                .await
+                .map_err(|e| e.to_string());
+                let _ = tx.send(BackgroundMessage::TicketCreated(result));
+            });
+        }
+        KeyCode::Char(c) if state.focused_field == 1 => {
+            state.summary.push(c);
+        }
+        KeyCode::Backspace if state.focused_field == 1 => {
+            state.summary.pop();
+        }
+        KeyCode::Char('j') | KeyCode::Down => match state.focused_field {
+            0 => {
+                if state.issue_type_idx < app::ISSUE_TYPES.len() - 1 {
+                    state.issue_type_idx += 1;
+                }
+            }
+            2 => {
+                let max = app.cache.team_members.len(); // options are 0..=max
+                if state.assignee_idx < max {
+                    state.assignee_idx += 1;
+                }
+            }
+            3 => {
+                let max = app.cache.epics.len(); // options are 0..=max
+                if state.epic_idx < max {
+                    state.epic_idx += 1;
+                }
+            }
+            _ => {}
+        },
+        KeyCode::Char('k') | KeyCode::Up => match state.focused_field {
+            0 => {
+                state.issue_type_idx = state.issue_type_idx.saturating_sub(1);
+            }
+            2 => {
+                state.assignee_idx = state.assignee_idx.saturating_sub(1);
+            }
+            3 => {
+                state.epic_idx = state.epic_idx.saturating_sub(1);
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+}
+
 async fn handle_main_keys(
     app: &mut App,
     key: KeyCode,
@@ -728,6 +861,15 @@ async fn handle_main_keys(
                 app.flash = Some("Refreshing tickets...".to_string());
                 spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual, config);
             }
+        }
+        KeyCode::Char('c') => {
+            app.create_ticket = Some(app::CreateTicketState {
+                focused_field: 0,
+                issue_type_idx: 0,
+                summary: String::new(),
+                assignee_idx: 0,
+                epic_idx: 0,
+            });
         }
         KeyCode::Enter => {
             if let Some(key) = app.selected_ticket_key() {

@@ -7,6 +7,17 @@ const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
 const NO_EPIC_KEY: &str = "NO-EPIC";
 const NO_EPIC_SUMMARY: &str = "No Epic";
 
+pub const ISSUE_TYPES: &[&str] = &["Task", "Bug", "Story"];
+
+#[derive(Debug, Clone)]
+pub struct CreateTicketState {
+    pub focused_field: usize, // 0=type, 1=summary, 2=assignee, 3=epic
+    pub issue_type_idx: usize,
+    pub summary: String,
+    pub assignee_idx: usize, // 0 = "None", then 1..N = team members
+    pub epic_idx: usize,     // 0 = "None", then 1..N = cached epics
+}
+
 /// Which tab is currently active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -109,6 +120,8 @@ pub struct App {
     /// Cached visible ticket keys for selection/counting in the active tab.
     visible_keys_cache: RefCell<VisibleKeysCache>,
     pub should_quit: bool,
+    /// State for the create ticket modal overlay.
+    pub create_ticket: Option<CreateTicketState>,
 }
 
 impl App {
@@ -133,6 +146,7 @@ impl App {
             view_generation: 0,
             visible_keys_cache: RefCell::new(VisibleKeysCache::default()),
             should_quit: false,
+            create_ticket: None,
         }
     }
 
@@ -564,6 +578,10 @@ impl App {
 
     pub fn close_keybindings(&mut self) {
         self.show_keybindings = false;
+    }
+
+    pub fn is_create_ticket_open(&self) -> bool {
+        self.create_ticket.is_some()
     }
 
     pub fn begin_detail_fetch(&mut self, key: &str) -> bool {
