@@ -788,6 +788,26 @@ pub async fn assign_ticket(key: &str, email: &str) -> Result<()> {
     Ok(())
 }
 
+/// Edit ticket fields via `jira issue edit`.
+pub async fn edit_ticket(key: &str, summary: Option<&str>, labels: Option<&[String]>) -> Result<()> {
+    let mut args = vec!["issue", "edit", key, "--no-input"];
+
+    if let Some(s) = summary {
+        args.push("-s");
+        args.push(s);
+    }
+
+    if let Some(lbls) = labels {
+        for label in lbls {
+            args.push("-l");
+            args.push(label);
+        }
+    }
+
+    run_cmd("jira", &args).await?;
+    Ok(())
+}
+
 /// Create a new ticket via `jira issue create`.
 pub async fn create_ticket(
     project: &str,

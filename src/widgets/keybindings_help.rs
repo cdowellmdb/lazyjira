@@ -79,6 +79,7 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  m: move ticket"),
         Line::from("  C: add comment"),
         Line::from("  a: assign/reassign ticket"),
+        Line::from("  e: edit summary and labels"),
         Line::from("  (in move picker) j/k or Up/Down: choose status"),
         Line::from("  (in move picker) p/w/n/t/v/b/d: choose + confirm prompt"),
         Line::from("  (in move picker) Shift+key: move immediately"),

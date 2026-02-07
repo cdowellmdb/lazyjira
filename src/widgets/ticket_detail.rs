@@ -274,7 +274,7 @@ fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket
 
     // Footer
     let footer = Paragraph::new(Line::from(Span::styled(
-        "[↑/↓] scroll   [Esc] close   [o] open in browser   [m] move",
+        "[↑/↓] scroll  [Esc] close  [o] browser  [m] move  [C] comment  [a] assign  [e] edit",
         Style::default().fg(Color::DarkGray),
     )));
     f.render_widget(footer, footer_area);

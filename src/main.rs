@@ -45,6 +45,10 @@ enum BackgroundMessage {
         key: String,
         result: std::result::Result<(), String>,
     },
+    TicketEdited {
+        key: String,
+        result: std::result::Result<(), String>,
+    },
 }
 
 fn spawn_epics_refresh(tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
@@ -315,6 +319,16 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+                BackgroundMessage::TicketEdited { key, result } => {
+                    match result {
+                        Ok(()) => {
+                            app.flash = Some(format!("Updated {}", key));
+                        }
+                        Err(e) => {
+                            app.flash = Some(format!("Edit failed for {}: {}", key, e));
+                        }
+                    }
+                }
             }
         }
 
@@ -338,6 +352,8 @@ async fn main() -> Result<()> {
                         handle_comment_keys(&mut app, key.code, &bg_tx);
                     } else if app.is_assign_open() {
                         handle_assign_keys(&mut app, key.code, &bg_tx);
+                    } else if app.is_edit_open() {
+                        handle_edit_keys(&mut app, key.code, &bg_tx);
                     } else if app.show_keybindings {
                         handle_keybindings_keys(&mut app, key.code);
                     } else if app.is_detail_open() {
@@ -529,6 +545,9 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     if app.is_assign_open() {
         widgets::assign::render(f, app);
     }
+    if app.is_edit_open() {
+        widgets::edit_fields::render(f, app);
+    }
     if app.show_keybindings {
         widgets::keybindings_help::render(f);
     }
@@ -609,6 +628,21 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
                     app.assign_state = Some(app::AssignState {
                         ticket_key: key.clone(),
                         selected: 0,
+                    });
+                }
+            }
+            KeyCode::Char('e') => {
+                if let Some(ref key) = app.detail_ticket_key {
+                    let ticket = app.find_ticket(key);
+                    let summary = ticket.map(|t| t.summary.clone()).unwrap_or_default();
+                    let labels = ticket
+                        .map(|t| t.labels.join(", "))
+                        .unwrap_or_default();
+                    app.edit_state = Some(app::EditFieldsState {
+                        ticket_key: key.clone(),
+                        focused_field: 0,
+                        summary,
+                        labels,
                     });
                 }
             }
@@ -965,6 +999,112 @@ fn handle_assign_keys(
                     result,
                 });
             });
+        }
+        _ => {}
+    }
+}
+
+fn handle_edit_keys(
+    app: &mut App,
+    key: KeyCode,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+) {
+    match key {
+        KeyCode::Esc => {
+            app.edit_state = None;
+        }
+        KeyCode::Tab => {
+            if let Some(ref mut state) = app.edit_state {
+                state.focused_field = (state.focused_field + 1) % 2;
+            }
+        }
+        KeyCode::BackTab => {
+            if let Some(ref mut state) = app.edit_state {
+                state.focused_field = if state.focused_field == 0 { 1 } else { 0 };
+            }
+        }
+        KeyCode::Enter => {
+            let state = match &app.edit_state {
+                Some(s) => s,
+                None => return,
+            };
+
+            let ticket_key = state.ticket_key.clone();
+            let new_summary = state.summary.clone();
+            let new_labels_str = state.labels.clone();
+            let new_labels: Vec<String> = new_labels_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            // Optimistic cache update
+            for ticket in &mut app.cache.my_tickets {
+                if ticket.key == ticket_key {
+                    ticket.summary = new_summary.clone();
+                    ticket.labels = new_labels.clone();
+                }
+            }
+            for ticket in &mut app.cache.team_tickets {
+                if ticket.key == ticket_key {
+                    ticket.summary = new_summary.clone();
+                    ticket.labels = new_labels.clone();
+                }
+            }
+            for epic in &mut app.cache.epics {
+                for ticket in &mut epic.children {
+                    if ticket.key == ticket_key {
+                        ticket.summary = new_summary.clone();
+                        ticket.labels = new_labels.clone();
+                    }
+                }
+            }
+            app.mark_cache_changed();
+
+            app.edit_state = None;
+            app.flash = Some(format!("Updating {}...", ticket_key));
+
+            let tx = bg_tx.clone();
+            let key_clone = ticket_key.clone();
+            let summary_clone = new_summary.clone();
+            let labels_clone = new_labels.clone();
+            tokio::spawn(async move {
+                let summary_opt = if summary_clone.is_empty() {
+                    None
+                } else {
+                    Some(summary_clone.as_str())
+                };
+                let labels_opt = if labels_clone.is_empty() {
+                    None
+                } else {
+                    Some(labels_clone.as_slice())
+                };
+                let result = jira_client::edit_ticket(&key_clone, summary_opt, labels_opt)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(BackgroundMessage::TicketEdited {
+                    key: key_clone,
+                    result,
+                });
+            });
+        }
+        KeyCode::Backspace => {
+            if let Some(ref mut state) = app.edit_state {
+                match state.focused_field {
+                    0 => { state.summary.pop(); }
+                    1 => { state.labels.pop(); }
+                    _ => {}
+                }
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Some(ref mut state) = app.edit_state {
+                match state.focused_field {
+                    0 => state.summary.push(c),
+                    1 => state.labels.push(c),
+                    _ => {}
+                }
+            }
         }
         _ => {}
     }

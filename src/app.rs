@@ -22,6 +22,14 @@ pub struct AssignState {
 }
 
 #[derive(Debug, Clone)]
+pub struct EditFieldsState {
+    pub ticket_key: String,
+    pub focused_field: usize, // 0=summary, 1=labels
+    pub summary: String,
+    pub labels: String, // comma-separated
+}
+
+#[derive(Debug, Clone)]
 pub struct CreateTicketState {
     pub focused_field: usize, // 0=type, 1=summary, 2=assignee, 3=epic
     pub issue_type_idx: usize,
@@ -138,6 +146,8 @@ pub struct App {
     pub comment_state: Option<CommentState>,
     /// State for the assign/reassign modal overlay.
     pub assign_state: Option<AssignState>,
+    /// State for the edit fields modal overlay.
+    pub edit_state: Option<EditFieldsState>,
 }
 
 impl App {
@@ -165,6 +175,7 @@ impl App {
             create_ticket: None,
             comment_state: None,
             assign_state: None,
+            edit_state: None,
         }
     }
 
@@ -608,6 +619,10 @@ impl App {
 
     pub fn is_assign_open(&self) -> bool {
         self.assign_state.is_some()
+    }
+
+    pub fn is_edit_open(&self) -> bool {
+        self.edit_state.is_some()
     }
 
     pub fn begin_detail_fetch(&mut self, key: &str) -> bool {
