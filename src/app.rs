@@ -1,5 +1,6 @@
 use crate::cache::Cache;
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 /// Which tab is currently active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +47,21 @@ pub enum TicketSyncStage {
     Full,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VisibleKeysState {
+    active_tab: Tab,
+    search: Option<String>,
+    show_done: bool,
+    status_focus: Option<crate::cache::Status>,
+    view_generation: u64,
+}
+
+#[derive(Default)]
+struct VisibleKeysCache {
+    state: Option<VisibleKeysState>,
+    keys: Vec<String>,
+}
+
 /// Full application state.
 pub struct App {
     pub cache: Cache,
@@ -75,6 +91,10 @@ pub struct App {
     pub show_keybindings: bool,
     /// Ticket keys currently being fetched for rich detail.
     detail_fetching: HashSet<String>,
+    /// Monotonic generation used to invalidate derived visibility caches.
+    view_generation: u64,
+    /// Cached visible ticket keys for selection/counting in the active tab.
+    visible_keys_cache: RefCell<VisibleKeysCache>,
     pub should_quit: bool,
 }
 
@@ -96,8 +116,22 @@ impl App {
             cache_stale_age_secs: None,
             show_keybindings: false,
             detail_fetching: HashSet::new(),
+            view_generation: 0,
+            visible_keys_cache: RefCell::new(VisibleKeysCache::default()),
             should_quit: false,
         }
+    }
+
+    pub fn replace_cache(&mut self, cache: Cache) {
+        self.cache = cache;
+        self.mark_cache_changed();
+    }
+
+    pub fn mark_cache_changed(&mut self) {
+        self.view_generation = self.view_generation.wrapping_add(1);
+        let cache = self.visible_keys_cache.get_mut();
+        cache.state = None;
+        cache.keys.clear();
     }
 
     pub fn next_tab(&mut self) {
@@ -129,13 +163,62 @@ impl App {
     /// Team members sorted by active ticket count (most active first).
     /// Must match the order used in views/team.rs.
     pub fn sorted_team_members(&self) -> Vec<&crate::cache::TeamMember> {
+        let mut active_counts_by_email: HashMap<&str, usize> = HashMap::new();
+        for ticket in &self.cache.team_tickets {
+            if ticket.status == crate::cache::Status::Done {
+                continue;
+            }
+            if let Some(email) = ticket.assignee_email.as_deref() {
+                *active_counts_by_email.entry(email).or_insert(0) += 1;
+            }
+        }
+
         let mut members: Vec<_> = self.cache.team_members.iter().collect();
         members.sort_by(|a, b| {
-            let ac = self.cache.active_tickets_for(&a.email).len();
-            let bc = self.cache.active_tickets_for(&b.email).len();
+            let ac = active_counts_by_email
+                .get(a.email.as_str())
+                .copied()
+                .unwrap_or(0);
+            let bc = active_counts_by_email
+                .get(b.email.as_str())
+                .copied()
+                .unwrap_or(0);
             bc.cmp(&ac)
         });
         members
+    }
+
+    fn visible_keys_state(&self) -> VisibleKeysState {
+        VisibleKeysState {
+            active_tab: self.active_tab,
+            search: self.search.clone().filter(|s| !s.is_empty()),
+            show_done: self.show_done,
+            status_focus: self.status_focus.clone(),
+            view_generation: self.view_generation,
+        }
+    }
+
+    fn compute_visible_ticket_keys_for_tab(&self, tab: Tab) -> Vec<String> {
+        match tab {
+            Tab::MyWork => self.my_work_visible_ticket_keys(),
+            Tab::Team => self.team_visible_ticket_keys(),
+            Tab::Epics => self.epics_visible_ticket_keys(),
+        }
+    }
+
+    fn ensure_visible_keys_cache(&self) {
+        let state = self.visible_keys_state();
+        {
+            let cache = self.visible_keys_cache.borrow();
+            if cache.state.as_ref() == Some(&state) {
+                return;
+            }
+        }
+
+        let keys = self.compute_visible_ticket_keys_for_tab(state.active_tab);
+        let mut cache = self.visible_keys_cache.borrow_mut();
+        cache.state = Some(state);
+        cache.keys = keys;
     }
 
     fn normalized_search(&self) -> Option<String> {
@@ -286,9 +369,18 @@ impl App {
     )> {
         let search = self.normalized_search();
         let mut visible = Vec::new();
+        let mut tickets_by_email: HashMap<&str, Vec<&crate::cache::Ticket>> = HashMap::new();
+        for ticket in &self.cache.team_tickets {
+            if let Some(email) = ticket.assignee_email.as_deref() {
+                tickets_by_email.entry(email).or_default().push(ticket);
+            }
+        }
 
         for member in self.sorted_team_members() {
-            let tickets = self.cache.tickets_for(&member.email);
+            let member_tickets = tickets_by_email
+                .get(member.email.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             let member_name = member.name.to_lowercase();
             let member_email = member.email.to_lowercase();
             let filtered: Vec<_> = match &search {
@@ -296,15 +388,16 @@ impl App {
                     let member_match =
                         member_name.contains(s.as_str()) || member_email.contains(s.as_str());
                     if member_match {
-                        tickets
+                        member_tickets.to_vec()
                     } else {
-                        tickets
+                        member_tickets
                             .into_iter()
+                            .copied()
                             .filter(|t| Self::ticket_matches_search(t, s))
                             .collect()
                     }
                 }
-                None => tickets,
+                None => member_tickets.to_vec(),
             };
 
             if search.is_some() && filtered.is_empty() {
@@ -395,29 +488,18 @@ impl App {
 
     /// Get the currently selected ticket key based on the active tab and selected index.
     pub fn selected_ticket_key(&self) -> Option<String> {
-        match self.active_tab {
-            Tab::MyWork => self
-                .my_work_visible_ticket_keys()
-                .get(self.selected_index)
-                .cloned(),
-            Tab::Team => self
-                .team_visible_ticket_keys()
-                .get(self.selected_index)
-                .cloned(),
-            Tab::Epics => self
-                .epics_visible_ticket_keys()
-                .get(self.selected_index)
-                .cloned(),
-        }
+        self.ensure_visible_keys_cache();
+        self.visible_keys_cache
+            .borrow()
+            .keys
+            .get(self.selected_index)
+            .cloned()
     }
 
     /// Total number of selectable items in the current tab.
     pub fn item_count(&self) -> usize {
-        match self.active_tab {
-            Tab::MyWork => self.my_work_visible_ticket_keys().len(),
-            Tab::Team => self.team_visible_ticket_keys().len(),
-            Tab::Epics => self.epics_visible_ticket_keys().len(),
-        }
+        self.ensure_visible_keys_cache();
+        self.visible_keys_cache.borrow().keys.len()
     }
 
     pub fn clamp_selection(&mut self) {
@@ -460,6 +542,7 @@ impl App {
 
     /// Enrich a cached ticket with full detail from JSON (description, accurate status/assignee).
     pub fn enrich_ticket(&mut self, key: &str, detail: &crate::cache::Ticket) {
+        let mut changed = false;
         let update = |ticket: &mut crate::cache::Ticket| {
             ticket.status = detail.status.clone();
             ticket.assignee = detail.assignee.clone();
@@ -477,40 +560,53 @@ impl App {
         for ticket in &mut self.cache.my_tickets {
             if ticket.key == key {
                 update(ticket);
+                changed = true;
             }
         }
         for ticket in &mut self.cache.team_tickets {
             if ticket.key == key {
                 update(ticket);
+                changed = true;
             }
         }
         for epic in &mut self.cache.epics {
             for ticket in &mut epic.children {
                 if ticket.key == key {
                     update(ticket);
+                    changed = true;
                 }
             }
+        }
+        if changed {
+            self.mark_cache_changed();
         }
     }
 
     /// Update a ticket's status in the cache (optimistic update).
     pub fn update_ticket_status(&mut self, key: &str, new_status: crate::cache::Status) {
+        let mut changed = false;
         for ticket in &mut self.cache.my_tickets {
             if ticket.key == key {
                 ticket.status = new_status.clone();
+                changed = true;
             }
         }
         for ticket in &mut self.cache.team_tickets {
             if ticket.key == key {
                 ticket.status = new_status.clone();
+                changed = true;
             }
         }
         for epic in &mut self.cache.epics {
             for ticket in &mut epic.children {
                 if ticket.key == key {
                     ticket.status = new_status.clone();
+                    changed = true;
                 }
             }
+        }
+        if changed {
+            self.mark_cache_changed();
         }
     }
 }

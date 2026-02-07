@@ -130,10 +130,11 @@ async fn main() -> Result<()> {
 
     let mut app = App::new();
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
+    let detail_cache_tx = jira_client::spawn_detail_cache_writer();
 
     // Fast startup: load persisted snapshot immediately, then revalidate in stages.
     if let Some(snapshot) = jira_client::load_startup_cache_snapshot() {
-        app.cache = snapshot.cache;
+        app.replace_cache(snapshot.cache);
         app.loading = false;
         app.cache_stale_age_secs = Some(snapshot.age_secs);
         app.ticket_sync_stage = Some(TicketSyncStage::ActiveOnly);
@@ -141,7 +142,7 @@ async fn main() -> Result<()> {
         spawn_cache_refresh(&bg_tx, CacheRefreshPhase::ActiveOnly);
     } else {
         let cache = jira_client::fetch_active_only().await?;
-        app.cache = cache;
+        app.replace_cache(cache);
         app.loading = false;
         app.ticket_sync_stage = Some(TicketSyncStage::Full);
         app.flash = Some("Loaded active tickets. Syncing recently done...".to_string());
@@ -166,6 +167,7 @@ async fn main() -> Result<()> {
                                 &epics,
                             );
                             app.cache.epics = epics;
+                            app.mark_cache_changed();
                             app.clamp_selection();
                             app.flash = Some("Epic relationships refreshed".to_string());
                         }
@@ -178,7 +180,7 @@ async fn main() -> Result<()> {
                     (CacheRefreshPhase::ActiveOnly, Ok(cache))
                         if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
                     {
-                        app.cache = cache;
+                        app.replace_cache(cache);
                         app.cache_stale_age_secs = None;
                         app.ticket_sync_stage = Some(TicketSyncStage::Full);
                         app.clamp_selection();
@@ -200,7 +202,7 @@ async fn main() -> Result<()> {
                     (CacheRefreshPhase::Full, Ok(cache))
                         if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
                     {
-                        app.cache = cache;
+                        app.replace_cache(cache);
                         app.cache_stale_age_secs = None;
                         app.ticket_sync_stage = None;
                         app.clamp_selection();
@@ -224,8 +226,10 @@ async fn main() -> Result<()> {
                     match result {
                         Ok(detail) => {
                             app.enrich_ticket(&key, &detail);
-                            if let Err(e) = jira_client::upsert_ticket_detail_cache(&detail) {
-                                app.flash = Some(format!("Detail cache write failed: {}", e));
+                            if detail_cache_tx.send(detail).is_err() {
+                                app.flash = Some(
+                                    "Detail cache writer unavailable; skipping write".to_string(),
+                                );
                             }
                         }
                         Err(_) => {}
@@ -598,7 +602,7 @@ async fn handle_main_keys(
             app.loading = true;
             match jira_client::fetch_all().await {
                 Ok(cache) => {
-                    app.cache = cache;
+                    app.replace_cache(cache);
                     app.cache_stale_age_secs = None;
                     app.ticket_sync_stage = None;
                     if let Err(e) = jira_client::save_full_cache_snapshot(&app.cache) {

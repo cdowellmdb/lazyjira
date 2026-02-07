@@ -136,20 +136,4 @@ impl Cache {
             team_members: Vec::new(),
         }
     }
-
-    /// Get tickets for a specific team member by email.
-    pub fn tickets_for(&self, email: &str) -> Vec<&Ticket> {
-        self.team_tickets
-            .iter()
-            .filter(|t| t.assignee_email.as_deref() == Some(email))
-            .collect()
-    }
-
-    /// Get active (non-Done) tickets for a team member.
-    pub fn active_tickets_for(&self, email: &str) -> Vec<&Ticket> {
-        self.tickets_for(email)
-            .into_iter()
-            .filter(|t| t.status != Status::Done)
-            .collect()
-    }
 }

@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
+use tokio::sync::mpsc;
 
 use crate::cache::{Cache, Epic, Status, TeamMember, Ticket};
 
@@ -603,12 +604,28 @@ pub async fn refresh_epics_cache() -> Result<Vec<Epic>> {
     Ok(epics)
 }
 
-pub fn upsert_ticket_detail_cache(detail: &Ticket) -> Result<()> {
-    let mut details_by_key = load_details_cache();
-    let mut cached = detail.clone();
-    cached.detail_loaded = true;
-    details_by_key.insert(cached.key.clone(), cached);
-    save_details_cache(&details_by_key)
+pub fn spawn_detail_cache_writer() -> mpsc::UnboundedSender<Ticket> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<Ticket>();
+
+    tokio::spawn(async move {
+        let mut details_by_key = load_details_cache();
+
+        while let Some(mut detail) = rx.recv().await {
+            detail.detail_loaded = true;
+            details_by_key.insert(detail.key.clone(), detail);
+
+            while let Ok(mut queued) = rx.try_recv() {
+                queued.detail_loaded = true;
+                details_by_key.insert(queued.key.clone(), queued);
+            }
+
+            if let Err(e) = save_details_cache(&details_by_key) {
+                eprintln!("Warning: failed to persist details cache: {}", e);
+            }
+        }
+    });
+
+    tx
 }
 
 async fn fetch_with_scope(scope: TicketFetchScope) -> Result<Cache> {
