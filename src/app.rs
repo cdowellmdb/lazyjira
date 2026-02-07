@@ -740,6 +740,9 @@ impl App {
             if detail.epic_name.is_some() {
                 ticket.epic_name = detail.epic_name.clone();
             }
+            if !detail.activity.is_empty() {
+                ticket.activity = detail.activity.clone();
+            }
             ticket.detail_loaded = true;
         };
         for ticket in &mut self.cache.my_tickets {
@@ -814,6 +817,7 @@ mod tests {
             epic_name: None,
             detail_loaded: false,
             url: format!("https://jira.mongodb.org/browse/{}", key),
+            activity: Vec::new(),
         }
     }
 

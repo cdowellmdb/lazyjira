@@ -86,6 +86,24 @@ impl Status {
     }
 }
 
+/// A single entry in a ticket's activity history (changelog or comment).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityEntry {
+    pub timestamp: String,
+    pub author: String,
+    pub author_email: Option<String>,
+    pub kind: ActivityKind,
+}
+
+/// The type of activity: status change, comment, assignee change, or generic field change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ActivityKind {
+    StatusChange { from: String, to: String },
+    Comment { body: String },
+    AssigneeChange { from: Option<String>, to: Option<String> },
+    FieldChange { field: String, from: String, to: String },
+}
+
 /// A single Jira ticket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticket {
@@ -101,6 +119,8 @@ pub struct Ticket {
     #[serde(default)]
     pub detail_loaded: bool,
     pub url: String,
+    #[serde(default)]
+    pub activity: Vec<ActivityEntry>,
 }
 
 /// An epic with aggregated child ticket info.

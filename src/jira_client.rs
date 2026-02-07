@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-use crate::cache::{Cache, Epic, Status, TeamMember, Ticket};
+use crate::cache::{ActivityEntry, ActivityKind, Cache, Epic, Status, TeamMember, Ticket};
 use crate::config::AppConfig;
 
 const JIRA_BASE_URL: &str = "https://jira.mongodb.org/browse";
@@ -120,6 +120,7 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
         epic_name: None,
         detail_loaded: false,
         url,
+        activity: Vec::new(),
     })
 }
 
@@ -265,6 +266,68 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
             fields["parent"]["key"].as_str().map(|s| s.to_string())
         });
 
+    let mut activity = Vec::new();
+
+    // Parse changelog
+    if let Some(histories) = json.get("changelog")
+        .and_then(|c| c.get("histories"))
+        .and_then(|h| h.as_array())
+    {
+        for history in histories {
+            let timestamp = history["created"].as_str().unwrap_or("").to_string();
+            let author = history["author"]["displayName"].as_str().unwrap_or("Unknown").to_string();
+            let author_email = history["author"]["emailAddress"].as_str().map(|s| s.to_string());
+
+            if let Some(items) = history["items"].as_array() {
+                for item in items {
+                    let field = item["field"].as_str().unwrap_or("");
+                    let from_str = item["fromString"].as_str().unwrap_or("").to_string();
+                    let to_str = item["toString"].as_str().unwrap_or("").to_string();
+
+                    let kind = match field {
+                        "status" => ActivityKind::StatusChange { from: from_str, to: to_str },
+                        "assignee" => ActivityKind::AssigneeChange {
+                            from: Some(from_str).filter(|s| !s.is_empty()),
+                            to: Some(to_str).filter(|s| !s.is_empty()),
+                        },
+                        _ => ActivityKind::FieldChange { field: field.to_string(), from: from_str, to: to_str },
+                    };
+
+                    activity.push(ActivityEntry {
+                        timestamp: timestamp.clone(),
+                        author: author.clone(),
+                        author_email: author_email.clone(),
+                        kind,
+                    });
+                }
+            }
+        }
+    }
+
+    // Parse comments
+    if let Some(comments) = json.get("fields")
+        .and_then(|f| f.get("comment"))
+        .and_then(|c| c.get("comments"))
+        .and_then(|c| c.as_array())
+    {
+        for comment in comments {
+            let timestamp = comment["created"].as_str().unwrap_or("").to_string();
+            let author = comment["author"]["displayName"].as_str().unwrap_or("Unknown").to_string();
+            let author_email = comment["author"]["emailAddress"].as_str().map(|s| s.to_string());
+            let body = comment["body"].as_str().unwrap_or("").to_string();
+
+            activity.push(ActivityEntry {
+                timestamp,
+                author,
+                author_email,
+                kind: ActivityKind::Comment { body },
+            });
+        }
+    }
+
+    // Sort newest first
+    activity.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
     let ticket_key = json["key"].as_str().unwrap_or(key).to_string();
     let url = format!("{}/{}", JIRA_BASE_URL, ticket_key);
 
@@ -280,6 +343,7 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
         epic_name: None,
         detail_loaded: true,
         url,
+        activity,
     })
 }
 
@@ -624,6 +688,9 @@ fn hydrate_ticket_from_details_cache(
     }
     if detail.epic_name.is_some() {
         ticket.epic_name = detail.epic_name.clone();
+    }
+    if !detail.activity.is_empty() {
+        ticket.activity = detail.activity.clone();
     }
 }
 
