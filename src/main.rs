@@ -2,6 +2,7 @@ mod app;
 mod cache;
 mod config;
 mod jira_client;
+mod setup;
 mod views;
 mod widgets;
 
@@ -134,8 +135,10 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let config = config::load_config()?
-        .expect("No config found. Run lazyjira to set up.");
+    let config = match config::load_config()? {
+        Some(config) => config,
+        None => setup::run_setup(&mut terminal).await?,
+    };
 
     let mut app = App::new();
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
