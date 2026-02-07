@@ -17,10 +17,20 @@ use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::cache::Status;
-use app::{App, DetailMode, Tab};
+use app::{App, DetailMode, Tab, TicketSyncStage};
+
+#[derive(Debug, Clone, Copy)]
+enum CacheRefreshPhase {
+    ActiveOnly,
+    Full,
+}
 
 enum BackgroundMessage {
     EpicsRefreshed(std::result::Result<Vec<crate::cache::Epic>, String>),
+    CacheRefreshed {
+        phase: CacheRefreshPhase,
+        result: std::result::Result<crate::cache::Cache, String>,
+    },
     TicketDetailFetched {
         key: String,
         result: std::result::Result<crate::cache::Ticket, String>,
@@ -34,6 +44,18 @@ fn spawn_epics_refresh(tx: &UnboundedSender<BackgroundMessage>) {
             .await
             .map_err(|e| e.to_string());
         let _ = tx.send(BackgroundMessage::EpicsRefreshed(result));
+    });
+}
+
+fn spawn_cache_refresh(tx: &UnboundedSender<BackgroundMessage>, phase: CacheRefreshPhase) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let result = match phase {
+            CacheRefreshPhase::ActiveOnly => jira_client::fetch_active_only().await,
+            CacheRefreshPhase::Full => jira_client::fetch_all().await,
+        }
+        .map_err(|e| e.to_string());
+        let _ = tx.send(BackgroundMessage::CacheRefreshed { phase, result });
     });
 }
 
@@ -86,6 +108,15 @@ fn spawn_ticket_detail_prefetch(tx: &UnboundedSender<BackgroundMessage>, keys: V
     });
 }
 
+fn queue_detail_prefetch(app: &mut App, bg_tx: &UnboundedSender<BackgroundMessage>) {
+    let prefetch_keys = app
+        .missing_detail_ticket_keys()
+        .into_iter()
+        .filter(|k| app.begin_detail_fetch(k))
+        .collect::<Vec<_>>();
+    spawn_ticket_detail_prefetch(bg_tx, prefetch_keys);
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     maybe_run_dev_mode()?;
@@ -100,19 +131,26 @@ async fn main() -> Result<()> {
     let mut app = App::new();
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    // Fetch data on startup
-    let cache = jira_client::fetch_all().await?;
-    app.cache = cache;
-    app.loading = false;
-    app.epics_refreshing = true;
-    app.flash = Some("Refreshing epic relationships...".to_string());
+    // Fast startup: load persisted snapshot immediately, then revalidate in stages.
+    if let Some(snapshot) = jira_client::load_startup_cache_snapshot() {
+        app.cache = snapshot.cache;
+        app.loading = false;
+        app.cache_stale_age_secs = Some(snapshot.age_secs);
+        app.ticket_sync_stage = Some(TicketSyncStage::ActiveOnly);
+        app.flash = Some("Loaded cached data. Refreshing active tickets...".to_string());
+        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::ActiveOnly);
+    } else {
+        let cache = jira_client::fetch_active_only().await?;
+        app.cache = cache;
+        app.loading = false;
+        app.ticket_sync_stage = Some(TicketSyncStage::Full);
+        app.flash = Some("Loaded active tickets. Syncing recently done...".to_string());
+        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full);
+    }
+
     spawn_epics_refresh(&bg_tx);
-    let prefetch_keys = app
-        .missing_detail_ticket_keys()
-        .into_iter()
-        .filter(|k| app.begin_detail_fetch(k))
-        .collect::<Vec<_>>();
-    spawn_ticket_detail_prefetch(&bg_tx, prefetch_keys);
+    app.epics_refreshing = true;
+    queue_detail_prefetch(&mut app, &bg_tx);
 
     // Main loop
     loop {
@@ -136,6 +174,51 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+                BackgroundMessage::CacheRefreshed { phase, result } => match (phase, result) {
+                    (CacheRefreshPhase::ActiveOnly, Ok(cache))
+                        if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
+                    {
+                        app.cache = cache;
+                        app.cache_stale_age_secs = None;
+                        app.ticket_sync_stage = Some(TicketSyncStage::Full);
+                        app.clamp_selection();
+                        queue_detail_prefetch(&mut app, &bg_tx);
+                        app.flash =
+                            Some("Active tickets refreshed. Syncing recently done...".to_string());
+                        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full);
+                    }
+                    (CacheRefreshPhase::ActiveOnly, Err(e))
+                        if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
+                    {
+                        app.ticket_sync_stage = Some(TicketSyncStage::Full);
+                        app.flash = Some(format!(
+                            "Active refresh failed ({}). Trying full refresh...",
+                            e
+                        ));
+                        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full);
+                    }
+                    (CacheRefreshPhase::Full, Ok(cache))
+                        if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
+                    {
+                        app.cache = cache;
+                        app.cache_stale_age_secs = None;
+                        app.ticket_sync_stage = None;
+                        app.clamp_selection();
+                        queue_detail_prefetch(&mut app, &bg_tx);
+                        if let Err(e) = jira_client::save_full_cache_snapshot(&app.cache) {
+                            app.flash = Some(format!("Cache snapshot write failed: {}", e));
+                        } else {
+                            app.flash = Some("Ticket cache is up to date".to_string());
+                        }
+                    }
+                    (CacheRefreshPhase::Full, Err(e))
+                        if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
+                    {
+                        app.ticket_sync_stage = None;
+                        app.flash = Some(format!("Full refresh failed: {}", e));
+                    }
+                    _ => {}
+                },
                 BackgroundMessage::TicketDetailFetched { key, result } => {
                     app.end_detail_fetch(&key);
                     match result {
@@ -237,6 +320,15 @@ fn maybe_run_dev_mode() -> Result<()> {
     std::process::exit(status.code().unwrap_or(1));
 }
 
+fn format_age_minutes(age_secs: u64) -> String {
+    let mins = age_secs / 60;
+    if mins == 0 {
+        "<1m".to_string()
+    } else {
+        format!("{}m", mins)
+    }
+}
+
 fn ui(f: &mut ratatui::Frame, app: &App) {
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::style::{Color, Modifier, Style};
@@ -294,6 +386,15 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         } else {
             "ready"
         };
+        let ticket_state = match app.ticket_sync_stage {
+            Some(TicketSyncStage::ActiveOnly) => "sync-active",
+            Some(TicketSyncStage::Full) => "sync-full",
+            None => "ready",
+        };
+        let freshness_state = app
+            .cache_stale_age_secs
+            .map(|age| format!("stale {}", format_age_minutes(age)))
+            .unwrap_or_else(|| "fresh".to_string());
         let focus_state = app
             .status_focus
             .as_ref()
@@ -301,8 +402,8 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
             .unwrap_or("all");
         Span::styled(
             format!(
-                " Tab: switch  j/k: navigate  Enter: detail  d: done({})  p/w/n/v: focus({})  ?: keys  e:{}  r: refresh  /: search  q: quit ",
-                done_state, focus_state, epic_state
+                " Tab: switch  j/k: navigate  Enter: detail  d: done({})  p/w/n/v: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
+                done_state, focus_state, ticket_state, freshness_state, epic_state
             ),
             Style::default().fg(Color::DarkGray),
         )
@@ -498,17 +599,18 @@ async fn handle_main_keys(
             match jira_client::fetch_all().await {
                 Ok(cache) => {
                     app.cache = cache;
+                    app.cache_stale_age_secs = None;
+                    app.ticket_sync_stage = None;
+                    if let Err(e) = jira_client::save_full_cache_snapshot(&app.cache) {
+                        app.flash = Some(format!("Refreshed (cache save failed: {})", e));
+                    } else {
+                        app.flash = Some("Refreshed! Syncing epic relationships...".to_string());
+                    }
                     if !app.epics_refreshing {
                         app.epics_refreshing = true;
                         spawn_epics_refresh(bg_tx);
                     }
-                    let prefetch_keys = app
-                        .missing_detail_ticket_keys()
-                        .into_iter()
-                        .filter(|k| app.begin_detail_fetch(k))
-                        .collect::<Vec<_>>();
-                    spawn_ticket_detail_prefetch(bg_tx, prefetch_keys);
-                    app.flash = Some("Refreshed! Syncing epic relationships...".to_string());
+                    queue_detail_prefetch(app, bg_tx);
                 }
                 Err(e) => {
                     app.flash = Some(format!("Refresh failed: {}", e));

@@ -53,5 +53,5 @@ Detail modal:
 
 ## Data/Cache Notes
 
-- Startup fetch loads active tickets plus recently updated done tickets.
+- Startup first loads a persisted full-cache snapshot (if present), then refreshes active tickets, then refreshes recently updated done tickets.
 - Epic relationships and rich ticket detail are cached in temp files and refreshed in the background.

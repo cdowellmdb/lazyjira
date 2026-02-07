@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
@@ -11,6 +12,26 @@ const PROJECT: &str = "AMP";
 const RECENT_DONE_WINDOW: &str = "-14d";
 const EPICS_CACHE_FILE_NAME: &str = "lazyjira_epics_cache_AMP.json";
 const DETAILS_CACHE_FILE_NAME: &str = "lazyjira_ticket_details_cache_AMP.json";
+const FULL_CACHE_FILE_NAME: &str = "lazyjira_full_cache_AMP.json";
+const FULL_CACHE_DIR_NAME: &str = "lazyjira";
+
+#[derive(Debug, Clone, Copy)]
+enum TicketFetchScope {
+    ActiveOnly,
+    ActiveAndRecentDone,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct CacheSnapshot {
+    saved_at_unix_secs: u64,
+    cache: Cache,
+}
+
+#[derive(Debug, Clone)]
+pub struct StartupCacheSnapshot {
+    pub cache: Cache,
+    pub age_secs: u64,
+}
 
 /// Run a CLI command and return stdout as a String.
 async fn run_cmd(program: &str, args: &[&str]) -> Result<String> {
@@ -294,31 +315,39 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
 }
 
 /// Fetch tickets assigned to a specific user, setting assignee_email on results.
-async fn fetch_tickets_for_user(email: &str) -> Result<Vec<Ticket>> {
-    // Startup scope: all active work + recently completed work.
+async fn fetch_tickets_for_user(email: &str, scope: TicketFetchScope) -> Result<Vec<Ticket>> {
     let active_query = format!(
         "assignee = \"{}\" AND status in (\"Needs Triage\", \"Ready for Work\", \"To Do\", \"In Progress\", \"In Review\", \"Blocked\")",
         email
     );
-    let recent_done_query = format!(
-        "assignee = \"{}\" AND status in (Done, Closed) AND updated >= {}",
-        email, RECENT_DONE_WINDOW
-    );
-
-    let (active_result, done_result) = tokio::join!(
-        fetch_tickets_for_query(&active_query),
-        fetch_tickets_for_query(&recent_done_query)
-    );
 
     let mut tickets_by_key: HashMap<String, Ticket> = HashMap::new();
 
-    for mut ticket in active_result? {
-        ticket.assignee_email = Some(email.to_string());
-        tickets_by_key.insert(ticket.key.clone(), ticket);
-    }
-    for mut ticket in done_result? {
-        ticket.assignee_email = Some(email.to_string());
-        tickets_by_key.insert(ticket.key.clone(), ticket);
+    match scope {
+        TicketFetchScope::ActiveOnly => {
+            for mut ticket in fetch_tickets_for_query(&active_query).await? {
+                ticket.assignee_email = Some(email.to_string());
+                tickets_by_key.insert(ticket.key.clone(), ticket);
+            }
+        }
+        TicketFetchScope::ActiveAndRecentDone => {
+            let recent_done_query = format!(
+                "assignee = \"{}\" AND status in (Done, Closed) AND updated >= {}",
+                email, RECENT_DONE_WINDOW
+            );
+            let (active_result, done_result) = tokio::join!(
+                fetch_tickets_for_query(&active_query),
+                fetch_tickets_for_query(&recent_done_query)
+            );
+            for mut ticket in active_result? {
+                ticket.assignee_email = Some(email.to_string());
+                tickets_by_key.insert(ticket.key.clone(), ticket);
+            }
+            for mut ticket in done_result? {
+                ticket.assignee_email = Some(email.to_string());
+                tickets_by_key.insert(ticket.key.clone(), ticket);
+            }
+        }
     }
 
     let mut tickets: Vec<Ticket> = tickets_by_key.into_values().collect();
@@ -413,6 +442,55 @@ fn epics_cache_path() -> PathBuf {
 
 fn details_cache_path() -> PathBuf {
     std::env::temp_dir().join(DETAILS_CACHE_FILE_NAME)
+}
+
+fn full_cache_dir() -> PathBuf {
+    match std::env::var("HOME") {
+        Ok(home) => PathBuf::from(home).join(".cache").join(FULL_CACHE_DIR_NAME),
+        Err(_) => std::env::temp_dir().join(FULL_CACHE_DIR_NAME),
+    }
+}
+
+fn full_cache_path() -> PathBuf {
+    full_cache_dir().join(FULL_CACHE_FILE_NAME)
+}
+
+fn now_unix_secs() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs(),
+        Err(_) => 0,
+    }
+}
+
+pub fn load_startup_cache_snapshot() -> Option<StartupCacheSnapshot> {
+    let path = full_cache_path();
+    let content = std::fs::read_to_string(&path).ok()?;
+    let snapshot: CacheSnapshot = serde_json::from_str(&content).ok()?;
+    let age_secs = now_unix_secs().saturating_sub(snapshot.saved_at_unix_secs);
+    Some(StartupCacheSnapshot {
+        cache: snapshot.cache,
+        age_secs,
+    })
+}
+
+pub fn save_full_cache_snapshot(cache: &Cache) -> Result<()> {
+    let dir = full_cache_dir();
+    std::fs::create_dir_all(&dir).with_context(|| {
+        format!(
+            "Failed to create persistent cache directory: {}",
+            dir.display()
+        )
+    })?;
+
+    let path = full_cache_path();
+    let snapshot = CacheSnapshot {
+        saved_at_unix_secs: now_unix_secs(),
+        cache: cache.clone(),
+    };
+    let json = serde_json::to_string(&snapshot).context("Failed to serialize full cache")?;
+    std::fs::write(&path, json)
+        .with_context(|| format!("Failed to write full cache snapshot: {}", path.display()))?;
+    Ok(())
 }
 
 fn load_epics_cache() -> Vec<Epic> {
@@ -533,11 +611,9 @@ pub fn upsert_ticket_detail_cache(detail: &Ticket) -> Result<()> {
     save_details_cache(&details_by_key)
 }
 
-/// Fetch all Jira data concurrently and return a populated Cache.
-pub async fn fetch_all() -> Result<Cache> {
+async fn fetch_with_scope(scope: TicketFetchScope) -> Result<Cache> {
     let mut team_members = load_team_roster().unwrap_or_default();
 
-    // Fast startup path: load lightweight ticket set and cached epic relationships.
     let my_email = fetch_my_email().await?;
     if !team_members.iter().any(|member| member.email == my_email) {
         team_members.push(TeamMember {
@@ -548,21 +624,23 @@ pub async fn fetch_all() -> Result<Cache> {
     let details_by_key = load_details_cache();
     let mut epics = load_epics_cache();
 
-    // Fetch my tickets
-    let mut my_tickets = fetch_tickets_for_user(&my_email).await?;
+    let mut my_tickets = fetch_tickets_for_user(&my_email, scope).await?;
 
-    // Fetch team tickets concurrently (skip self to avoid duplicating my_tickets)
+    // Seed team view with my current tickets to avoid refetching self.
+    let mut team_tickets = my_tickets.clone();
     let mut team_handles = Vec::new();
     for member in &team_members {
+        if member.email == my_email {
+            continue;
+        }
         let email = member.email.clone();
         team_handles.push(tokio::spawn(async move {
-            fetch_tickets_for_user(&email).await.unwrap_or_default()
+            fetch_tickets_for_user(&email, scope).await
         }));
     }
 
-    let mut team_tickets = Vec::new();
     for handle in team_handles {
-        let tickets = handle.await?;
+        let tickets = handle.await??;
         team_tickets.extend(tickets);
     }
 
@@ -579,6 +657,16 @@ pub async fn fetch_all() -> Result<Cache> {
         epics,
         team_members,
     })
+}
+
+/// Fetch active (non-Done) tickets first for fast startup accuracy.
+pub async fn fetch_active_only() -> Result<Cache> {
+    fetch_with_scope(TicketFetchScope::ActiveOnly).await
+}
+
+/// Fetch active + recently done tickets for a complete cache refresh.
+pub async fn fetch_all() -> Result<Cache> {
+    fetch_with_scope(TicketFetchScope::ActiveAndRecentDone).await
 }
 
 /// Move a ticket to a new status via `jira issue move`.

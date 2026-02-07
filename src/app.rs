@@ -40,6 +40,12 @@ pub enum DetailMode {
     MovePicker { selected: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TicketSyncStage {
+    ActiveOnly,
+    Full,
+}
+
 /// Full application state.
 pub struct App {
     pub cache: Cache,
@@ -61,6 +67,10 @@ pub struct App {
     pub status_focus: Option<crate::cache::Status>,
     /// True while full epic relationships are being refreshed in background.
     pub epics_refreshing: bool,
+    /// Ticket sync stage for background cache refresh.
+    pub ticket_sync_stage: Option<TicketSyncStage>,
+    /// Age of the cache snapshot loaded at startup, in seconds.
+    pub cache_stale_age_secs: Option<u64>,
     /// Whether the keybindings overlay is visible.
     pub show_keybindings: bool,
     /// Ticket keys currently being fetched for rich detail.
@@ -82,6 +92,8 @@ impl App {
             show_done: true,
             status_focus: None,
             epics_refreshing: false,
+            ticket_sync_stage: None,
+            cache_stale_age_secs: None,
             show_keybindings: false,
             detail_fetching: HashSet::new(),
             should_quit: false,

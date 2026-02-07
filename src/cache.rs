@@ -119,7 +119,7 @@ pub struct TeamMember {
 }
 
 /// The full in-memory cache, populated on startup.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cache {
     pub my_tickets: Vec<Ticket>,
     pub team_tickets: Vec<Ticket>,
