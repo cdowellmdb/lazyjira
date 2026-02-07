@@ -4,7 +4,6 @@ mod jira_client;
 mod views;
 mod widgets;
 
-use std::io;
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -12,11 +11,15 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use std::io;
+use std::process::Command;
 
 use app::{App, DetailMode, Tab};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    maybe_run_dev_mode()?;
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -65,6 +68,56 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn maybe_run_dev_mode() -> Result<()> {
+    let mut force_rebuild = false;
+    let mut release = false;
+    let mut show_help = false;
+    let mut passthrough_args = Vec::new();
+
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--dev" | "--rebuild" => force_rebuild = true,
+            "--dev-release" => {
+                force_rebuild = true;
+                release = true;
+            }
+            "--help" | "-h" => show_help = true,
+            _ => passthrough_args.push(arg),
+        }
+    }
+
+    if show_help {
+        println!("lazyjira");
+        println!("  --dev, --rebuild   Build from source and run (debug)");
+        println!("  --dev-release      Build from source and run (release)");
+        println!("  -h, --help         Show this help");
+        std::process::exit(0);
+    }
+
+    if !force_rebuild {
+        return Ok(());
+    }
+
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(env!("CARGO_MANIFEST_DIR"));
+    cmd.arg("run");
+
+    if release {
+        cmd.arg("--release");
+    }
+
+    cmd.arg("--manifest-path")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+
+    if !passthrough_args.is_empty() {
+        cmd.arg("--");
+        cmd.args(passthrough_args);
+    }
+
+    let status = cmd.status()?;
+    std::process::exit(status.code().unwrap_or(1));
+}
+
 fn ui(f: &mut ratatui::Frame, app: &App) {
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::style::{Color, Modifier, Style};
@@ -75,16 +128,13 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Tab bar
-            Constraint::Min(0),   // Content
+            Constraint::Min(0),    // Content
             Constraint::Length(1), // Status bar
         ])
         .split(f.area());
 
     // Tab bar
-    let tab_titles: Vec<Line> = Tab::all()
-        .iter()
-        .map(|t| Line::from(t.title()))
-        .collect();
+    let tab_titles: Vec<Line> = Tab::all().iter().map(|t| Line::from(t.title())).collect();
     let tabs = Tabs::new(tab_titles)
         .block(Block::default().borders(Borders::ALL).title(" lazyjira "))
         .select(match app.active_tab {
@@ -93,7 +143,11 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
             Tab::Epics => 2,
         })
         .style(Style::default().fg(Color::Gray))
-        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
     f.render_widget(tabs, chunks[0]);
 
     // Content area
@@ -120,7 +174,10 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
             Style::default().fg(Color::DarkGray),
         )
     };
-    f.render_widget(ratatui::widgets::Paragraph::new(Line::from(status_text)), chunks[2]);
+    f.render_widget(
+        ratatui::widgets::Paragraph::new(Line::from(status_text)),
+        chunks[2],
+    );
 
     // Detail overlay
     if app.is_detail_open() {
@@ -189,7 +246,10 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
 
 fn handle_search_keys(app: &mut App, key: KeyCode) {
     match key {
-        KeyCode::Esc => app.search = None,
+        KeyCode::Esc => {
+            app.search = None;
+            app.clamp_selection();
+        }
         KeyCode::Enter => {
             // Search is active, just close the input
             // The filter remains applied until Esc
@@ -201,11 +261,13 @@ fn handle_search_keys(app: &mut App, key: KeyCode) {
                     app.search = None;
                 }
             }
+            app.clamp_selection();
         }
         KeyCode::Char(c) => {
             if let Some(ref mut s) = app.search {
                 s.push(c);
             }
+            app.clamp_selection();
         }
         _ => {}
     }
@@ -230,6 +292,7 @@ async fn handle_main_keys(app: &mut App, key: KeyCode, _modifiers: KeyModifiers)
                 }
             }
             app.loading = false;
+            app.clamp_selection();
         }
         KeyCode::Enter => {
             if let Some(key) = app.selected_ticket_key() {
