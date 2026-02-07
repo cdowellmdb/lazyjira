@@ -646,6 +646,9 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
                     });
                 }
             }
+            KeyCode::Char('h') => {
+                app.detail_mode = DetailMode::History { scroll: 0 };
+            }
             _ => {}
         },
         DetailMode::MovePicker {
@@ -713,6 +716,16 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
                         }
                     }
                 }
+            }
+            _ => {}
+        },
+        DetailMode::History { scroll } => match key {
+            KeyCode::Esc => app.detail_mode = DetailMode::View,
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.detail_mode = DetailMode::History { scroll: scroll + 1 };
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.detail_mode = DetailMode::History { scroll: scroll.saturating_sub(1) };
             }
             _ => {}
         },

@@ -196,6 +196,9 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             selected,
             confirm_target,
         } => render_move_picker(f, inner, ticket, *selected, confirm_target.as_ref()),
+        DetailMode::History { scroll } => {
+            crate::widgets::activity::render(f, inner, &ticket.activity, *scroll);
+        }
     }
 }
 
@@ -274,7 +277,7 @@ fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket
 
     // Footer
     let footer = Paragraph::new(Line::from(Span::styled(
-        "[↑/↓] scroll  [Esc] close  [o] browser  [m] move  [C] comment  [a] assign  [e] edit",
+        "[↑/↓] scroll  [Esc] close  [o] browser  [m] move  [C] comment  [a] assign  [e] edit  [h] history",
         Style::default().fg(Color::DarkGray),
     )));
     f.render_widget(footer, footer_area);

@@ -81,6 +81,8 @@ pub enum DetailMode {
         selected: usize,
         confirm_target: Option<crate::cache::Status>,
     },
+    /// Showing the activity/history timeline with scroll offset.
+    History { scroll: u16 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
