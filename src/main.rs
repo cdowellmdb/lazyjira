@@ -20,7 +20,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::cache::Status;
 use crate::config::AppConfig;
-use app::{App, DetailMode, Tab, TicketSyncStage};
+use app::{App, DetailMode, FilterFocus, Tab, TicketSyncStage};
 
 #[derive(Debug, Clone, Copy)]
 enum CacheRefreshPhase {
@@ -49,6 +49,7 @@ enum BackgroundMessage {
         key: String,
         result: std::result::Result<(), String>,
     },
+    FilterResults(std::result::Result<Vec<crate::cache::Ticket>, String>),
 }
 
 fn spawn_epics_refresh(tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
@@ -145,7 +146,7 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let config = match config::load_config()? {
+    let mut config = match config::load_config()? {
         Some(config) => config,
         None => setup::run_setup(&mut terminal).await?,
     };
@@ -329,6 +330,24 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+                BackgroundMessage::FilterResults(result) => {
+                    app.filter_loading = false;
+                    match result {
+                        Ok(tickets) => {
+                            let count = tickets.len();
+                            app.filter_results = tickets;
+                            app.mark_cache_changed();
+                            app.filter_focus = FilterFocus::Results;
+                            app.selected_index = 0;
+                            app.flash = Some(format!("Filter returned {} tickets", count));
+                        }
+                        Err(e) => {
+                            app.filter_results.clear();
+                            app.mark_cache_changed();
+                            app.flash = Some(format!("Filter query failed: {}", e));
+                        }
+                    }
+                }
             }
         }
 
@@ -336,7 +355,7 @@ async fn main() -> Result<()> {
             draw_needed = true;
         }
         if draw_needed {
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &app, &config))?;
             draw_needed = false;
         }
 
@@ -346,7 +365,9 @@ async fn main() -> Result<()> {
                     // Clear flash on any keypress
                     app.flash = None;
 
-                    if app.is_create_ticket_open() {
+                    if app.is_filter_edit_open() {
+                        handle_filter_edit_keys(&mut app, key.code, &mut config);
+                    } else if app.is_create_ticket_open() {
                         handle_create_ticket_keys(&mut app, key.code, key.modifiers, &bg_tx, &config).await;
                     } else if app.is_comment_open() {
                         handle_comment_keys(&mut app, key.code, &bg_tx);
@@ -360,6 +381,8 @@ async fn main() -> Result<()> {
                         handle_detail_keys(&mut app, key.code);
                     } else if app.search.is_some() {
                         handle_search_keys(&mut app, key.code, key.modifiers, &bg_tx).await;
+                    } else if app.active_tab == Tab::Filters {
+                        handle_filter_keys(&mut app, key.code, &bg_tx, &mut config);
                     } else {
                         handle_main_keys(&mut app, key.code, key.modifiers, &bg_tx, &config).await;
                     }
@@ -446,7 +469,7 @@ fn format_age_minutes(age_secs: u64) -> String {
     }
 }
 
-fn ui(f: &mut ratatui::Frame, app: &App) {
+fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
@@ -470,6 +493,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
             Tab::Team => 1,
             Tab::Epics => 2,
             Tab::Unassigned => 3,
+            Tab::Filters => 4,
         })
         .style(Style::default().fg(Color::Gray))
         .highlight_style(
@@ -490,6 +514,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
             Tab::Team => views::team::render(f, chunks[1], app),
             Tab::Epics => views::epics::render(f, chunks[1], app),
             Tab::Unassigned => views::unassigned::render(f, chunks[1], app),
+            Tab::Filters => views::filters::render(f, chunks[1], app, config),
         }
     }
 
@@ -548,9 +573,44 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     if app.is_edit_open() {
         widgets::edit_fields::render(f, app);
     }
+    if app.is_filter_edit_open() {
+        render_filter_edit_modal(f, app);
+    }
     if app.show_keybindings {
         widgets::keybindings_help::render(f);
     }
+}
+
+fn render_filter_edit_modal(f: &mut ratatui::Frame, app: &App) {
+    use ratatui::style::{Color, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::Paragraph;
+
+    let state = match &app.filter_edit {
+        Some(s) => s,
+        None => return,
+    };
+
+    let title = if state.editing_idx.is_some() {
+        "Edit Filter"
+    } else {
+        "New Filter"
+    };
+
+    let inner = widgets::form::render_modal_frame(f, title, 60, 30);
+
+    let mut lines = Vec::new();
+    widgets::form::render_text_input(&mut lines, "Name", &state.name, state.focused_field == 0);
+    lines.push(Line::from(""));
+    widgets::form::render_text_input(&mut lines, "JQL", &state.jql, state.focused_field == 1);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Tab: switch field  Enter: save  Esc: cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let widget = Paragraph::new(lines);
+    f.render_widget(widget, inner);
 }
 
 fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
@@ -1117,6 +1177,189 @@ fn handle_edit_keys(
                     1 => state.labels.push(c),
                     _ => {}
                 }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_filter_edit_keys(app: &mut App, key: KeyCode, config: &mut AppConfig) {
+    let state = match &mut app.filter_edit {
+        Some(s) => s,
+        None => return,
+    };
+
+    match key {
+        KeyCode::Esc => {
+            app.filter_edit = None;
+        }
+        KeyCode::Tab | KeyCode::BackTab => {
+            state.focused_field = if state.focused_field == 0 { 1 } else { 0 };
+        }
+        KeyCode::Enter => {
+            if state.name.trim().is_empty() || state.jql.trim().is_empty() {
+                app.flash = Some("Both name and JQL are required".to_string());
+                return;
+            }
+            let filter = crate::config::SavedFilter {
+                name: state.name.trim().to_string(),
+                jql: state.jql.trim().to_string(),
+            };
+
+            if let Some(idx) = state.editing_idx {
+                if idx < config.filters.len() {
+                    config.filters[idx] = filter;
+                }
+            } else {
+                config.filters.push(filter);
+                app.filter_sidebar_idx = config.filters.len() - 1;
+            }
+
+            match crate::config::save_config(config) {
+                Ok(()) => {
+                    app.flash = Some("Filter saved".to_string());
+                }
+                Err(e) => {
+                    app.flash = Some(format!("Failed to save filter: {}", e));
+                }
+            }
+            app.filter_edit = None;
+        }
+        KeyCode::Backspace => match state.focused_field {
+            0 => { state.name.pop(); }
+            1 => { state.jql.pop(); }
+            _ => {}
+        },
+        KeyCode::Char(c) => match state.focused_field {
+            0 => state.name.push(c),
+            1 => state.jql.push(c),
+            _ => {}
+        },
+        _ => {}
+    }
+}
+
+fn handle_filter_keys(
+    app: &mut App,
+    key: KeyCode,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+    config: &mut AppConfig,
+) {
+    match key {
+        KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('?') => app.toggle_keybindings(),
+        KeyCode::Tab => {
+            if app.filter_focus == FilterFocus::Sidebar {
+                if !app.filter_results.is_empty() {
+                    app.filter_focus = FilterFocus::Results;
+                    app.selected_index = 0;
+                } else {
+                    app.next_tab();
+                }
+            } else {
+                app.next_tab();
+            }
+        }
+        KeyCode::BackTab => {
+            if app.filter_focus == FilterFocus::Results {
+                app.filter_focus = FilterFocus::Sidebar;
+            }
+        }
+        KeyCode::Char('n') => {
+            app.filter_edit = Some(app::FilterEditState {
+                focused_field: 0,
+                name: String::new(),
+                jql: String::new(),
+                editing_idx: None,
+            });
+        }
+        KeyCode::Char('e') => {
+            if app.filter_focus == FilterFocus::Sidebar {
+                if let Some(filter) = config.filters.get(app.filter_sidebar_idx) {
+                    app.filter_edit = Some(app::FilterEditState {
+                        focused_field: 0,
+                        name: filter.name.clone(),
+                        jql: filter.jql.clone(),
+                        editing_idx: Some(app.filter_sidebar_idx),
+                    });
+                }
+            }
+        }
+        KeyCode::Char('x') => {
+            if app.filter_focus == FilterFocus::Sidebar && !config.filters.is_empty() {
+                if app.filter_sidebar_idx < config.filters.len() {
+                    let removed_name = config.filters.remove(app.filter_sidebar_idx).name;
+                    match crate::config::save_config(config) {
+                        Ok(()) => {
+                            app.flash = Some(format!("Deleted filter '{}'", removed_name));
+                            if app.filter_sidebar_idx > 0
+                                && app.filter_sidebar_idx >= config.filters.len()
+                            {
+                                app.filter_sidebar_idx = config.filters.len().saturating_sub(1);
+                            }
+                        }
+                        Err(e) => {
+                            app.flash = Some(format!("Failed to delete filter: {}", e));
+                        }
+                    }
+                }
+            }
+        }
+        KeyCode::Char('j') | KeyCode::Down => match app.filter_focus {
+            FilterFocus::Sidebar => {
+                if !config.filters.is_empty()
+                    && app.filter_sidebar_idx < config.filters.len() - 1
+                {
+                    app.filter_sidebar_idx += 1;
+                }
+            }
+            FilterFocus::Results => app.move_selection_down(),
+        },
+        KeyCode::Char('k') | KeyCode::Up => match app.filter_focus {
+            FilterFocus::Sidebar => {
+                app.filter_sidebar_idx = app.filter_sidebar_idx.saturating_sub(1);
+            }
+            FilterFocus::Results => app.move_selection_up(),
+        },
+        KeyCode::Enter => match app.filter_focus {
+            FilterFocus::Sidebar => {
+                // Run the selected filter
+                if let Some(filter) = config.filters.get(app.filter_sidebar_idx) {
+                    app.filter_loading = true;
+                    app.filter_results.clear();
+                    app.mark_cache_changed();
+                    app.flash = Some(format!("Running filter '{}'...", filter.name));
+
+                    let tx = bg_tx.clone();
+                    let cfg = config.clone();
+                    let jql = filter.jql.clone();
+                    tokio::spawn(async move {
+                        let result = jira_client::fetch_jql_query(&cfg, &jql)
+                            .await
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(BackgroundMessage::FilterResults(result));
+                    });
+                }
+            }
+            FilterFocus::Results => {
+                if let Some(key) = app.selected_ticket_key() {
+                    let detail_loaded = app.is_ticket_detail_loaded(&key);
+                    app.open_detail(key.clone());
+                    if !detail_loaded && app.begin_detail_fetch(&key) {
+                        spawn_ticket_detail_fetch(bg_tx, key);
+                    }
+                }
+            }
+        },
+        KeyCode::Char('/') => app.search = Some(String::new()),
+        KeyCode::Char('r') => {
+            if app.loading {
+                app.flash = Some("Refresh already in progress".to_string());
+            } else {
+                app.loading = true;
+                app.ticket_sync_stage = None;
+                app.flash = Some("Refreshing tickets...".to_string());
+                spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual, config);
             }
         }
         _ => {}

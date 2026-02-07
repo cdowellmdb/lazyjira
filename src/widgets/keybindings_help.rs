@@ -65,6 +65,7 @@ pub fn render(f: &mut ratatui::Frame) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )),
+        Line::from("  c: create ticket"),
         Line::from("  r: refresh tickets"),
         Line::from(""),
         Line::from(Span::styled(
@@ -85,6 +86,20 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  (in move picker) p/w/n/t/v/b/d: choose + confirm prompt"),
         Line::from("  (in move picker) Shift+key: move immediately"),
         Line::from("  (in move picker) Enter or y: confirm pending move"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Filters Tab",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  j / k: navigate filters or results"),
+        Line::from("  Tab: switch to results / next tab"),
+        Line::from("  Shift+Tab: switch back to sidebar"),
+        Line::from("  Enter: run filter (sidebar) / open ticket (results)"),
+        Line::from("  n: new filter"),
+        Line::from("  e: edit selected filter"),
+        Line::from("  x: delete selected filter"),
         Line::from(""),
         Line::from(Span::styled(
             "Press ? or Esc to close",

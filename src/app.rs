@@ -45,6 +45,7 @@ pub enum Tab {
     Team,
     Epics,
     Unassigned,
+    Filters,
 }
 
 impl Tab {
@@ -53,7 +54,8 @@ impl Tab {
             Tab::MyWork => Tab::Team,
             Tab::Team => Tab::Epics,
             Tab::Epics => Tab::Unassigned,
-            Tab::Unassigned => Tab::MyWork,
+            Tab::Unassigned => Tab::Filters,
+            Tab::Filters => Tab::MyWork,
         }
     }
 
@@ -63,12 +65,30 @@ impl Tab {
             Tab::Team => "Team",
             Tab::Epics => "Epics",
             Tab::Unassigned => "Unassigned",
+            Tab::Filters => "Filters",
         }
     }
 
     pub fn all() -> &'static [Tab] {
-        &[Tab::MyWork, Tab::Team, Tab::Epics, Tab::Unassigned]
+        &[Tab::MyWork, Tab::Team, Tab::Epics, Tab::Unassigned, Tab::Filters]
     }
+}
+
+/// Which pane is focused in the Filters tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterFocus {
+    Sidebar,
+    Results,
+}
+
+/// State for the filter create/edit modal.
+#[derive(Debug, Clone)]
+pub struct FilterEditState {
+    pub focused_field: usize, // 0=name, 1=jql
+    pub name: String,
+    pub jql: String,
+    /// None = creating new, Some(idx) = editing existing filter at index.
+    pub editing_idx: Option<usize>,
 }
 
 /// What the detail overlay is showing.
@@ -150,6 +170,16 @@ pub struct App {
     pub assign_state: Option<AssignState>,
     /// State for the edit fields modal overlay.
     pub edit_state: Option<EditFieldsState>,
+    /// Which pane is focused in the Filters tab.
+    pub filter_focus: FilterFocus,
+    /// Index of the selected filter in the sidebar.
+    pub filter_sidebar_idx: usize,
+    /// Results of the currently running/active filter.
+    pub filter_results: Vec<crate::cache::Ticket>,
+    /// Whether a filter query is currently loading.
+    pub filter_loading: bool,
+    /// State for filter create/edit modal.
+    pub filter_edit: Option<FilterEditState>,
 }
 
 impl App {
@@ -178,6 +208,11 @@ impl App {
             comment_state: None,
             assign_state: None,
             edit_state: None,
+            filter_focus: FilterFocus::Sidebar,
+            filter_sidebar_idx: 0,
+            filter_results: Vec::new(),
+            filter_loading: false,
+            filter_edit: None,
         }
     }
 
@@ -265,6 +300,7 @@ impl App {
             Tab::Team => self.team_visible_ticket_keys(),
             Tab::Epics => self.epics_visible_ticket_keys(),
             Tab::Unassigned => self.unassigned_visible_ticket_keys(),
+            Tab::Filters => self.filter_results.iter().map(|t| t.key.clone()).collect(),
         }
     }
 
@@ -627,6 +663,10 @@ impl App {
         self.edit_state.is_some()
     }
 
+    pub fn is_filter_edit_open(&self) -> bool {
+        self.filter_edit.is_some()
+    }
+
     pub fn begin_detail_fetch(&mut self, key: &str) -> bool {
         self.detail_fetching.insert(key.to_string())
     }
@@ -721,6 +761,7 @@ impl App {
                     .flat_map(|e| e.children.iter())
                     .find(|t| t.key == key)
             })
+            .or_else(|| self.filter_results.iter().find(|t| t.key == key))
     }
 
     /// Enrich a cached ticket with full detail from JSON (description, accurate status/assignee).

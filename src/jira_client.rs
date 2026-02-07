@@ -875,6 +875,11 @@ pub async fn edit_ticket(key: &str, summary: Option<&str>, labels: Option<&[Stri
     Ok(())
 }
 
+/// Run an arbitrary JQL query and return matching tickets.
+pub async fn fetch_jql_query(config: &AppConfig, jql: &str) -> Result<Vec<Ticket>> {
+    fetch_tickets_for_query(config, jql).await
+}
+
 /// Create a new ticket via `jira issue create`.
 pub async fn create_ticket(
     project: &str,
