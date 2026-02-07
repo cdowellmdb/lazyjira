@@ -23,6 +23,14 @@
 cargo run
 ```
 
+## Install / Update CLI Binary
+
+If you run `lazyjira` directly from your shell, reinstall after code changes so the global binary matches your latest local code:
+
+```bash
+cargo install --path . --force
+```
+
 Dev rebuild modes:
 
 ```bash
