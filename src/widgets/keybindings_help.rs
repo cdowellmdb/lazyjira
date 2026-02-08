@@ -43,6 +43,8 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  Tab: switch tab"),
         Line::from("  j / k or Up / Down: move selection"),
         Line::from("  Enter: open ticket detail"),
+        Line::from("  z: fold/unfold group"),
+        Line::from("  Z: fold/unfold all groups"),
         Line::from(""),
         Line::from(Span::styled(
             "Filtering (My Work + Team)",
@@ -83,7 +85,7 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  e: edit summary and labels"),
         Line::from("  h: view activity history"),
         Line::from("  (in move picker) j/k or Up/Down: choose status"),
-        Line::from("  (in move picker) p/w/n/t/v/b/d: choose + confirm prompt"),
+        Line::from("  (in move picker) p/w/n/t/v/b/c: choose + confirm prompt"),
         Line::from("  (in move picker) Shift+key: move immediately"),
         Line::from("  (in move picker) Enter or y: confirm pending move"),
         Line::from(""),

@@ -14,7 +14,7 @@ fn status_color(status: &Status) -> Color {
         Status::ToDo => Color::White,
         Status::InReview => Color::Cyan,
         Status::Blocked => Color::Red,
-        Status::Done => Color::Green,
+        Status::Closed => Color::Green,
         Status::Other(_) => Color::Magenta,
     }
 }

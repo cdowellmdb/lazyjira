@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::app::App;
+use crate::app::{App, Tab};
 use crate::cache::Status;
 
 fn status_color(status: &Status) -> Color {
@@ -14,7 +14,7 @@ fn status_color(status: &Status) -> Color {
         Status::ToDo => Color::White,
         Status::InReview => Color::Cyan,
         Status::Blocked => Color::Red,
-        Status::Done => Color::Green,
+        Status::Closed => Color::Green,
         Status::Other(_) => Color::Magenta,
     }
 }
@@ -76,7 +76,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut ticket_idx: usize = 0;
+    let mut item_idx: usize = 0;
     let mut selected_visual_line: Option<usize> = None;
     let mut has_rows = false;
 
@@ -102,18 +102,36 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let total_count = tickets.len();
         has_rows = true;
 
+        let collapsed = app.is_collapsed(Tab::MyWork, status.as_str());
+        let indicator = if collapsed { ">" } else { "v" };
+
         // Status header
-        let header = format!("{} ({})", status.as_str().to_uppercase(), total_count);
-        lines.push(Line::from(Span::styled(
-            header,
+        let is_header_selected = item_idx == app.selected_index;
+        if is_header_selected {
+            selected_visual_line = Some(lines.len());
+        }
+        let header = format!("{} {} ({})", indicator, status.as_str().to_uppercase(), total_count);
+        let header_style = if is_header_selected {
             Style::default()
                 .fg(status_color(status))
-                .add_modifier(Modifier::BOLD),
-        )));
+                .add_modifier(Modifier::BOLD)
+                .bg(Color::DarkGray)
+        } else {
+            Style::default()
+                .fg(status_color(status))
+                .add_modifier(Modifier::BOLD)
+        };
+        lines.push(Line::from(Span::styled(header, header_style)));
+        item_idx += 1;
+
+        if collapsed {
+            lines.push(Line::from(""));
+            continue;
+        }
 
         // Ticket rows
         for ticket in tickets {
-            let is_selected = ticket_idx == app.selected_index;
+            let is_selected = item_idx == app.selected_index;
             if is_selected {
                 selected_visual_line = Some(lines.len());
             }
@@ -158,7 +176,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 ),
             ]));
 
-            ticket_idx += 1;
+            item_idx += 1;
         }
 
         // Blank line between groups

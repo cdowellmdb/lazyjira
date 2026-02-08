@@ -110,6 +110,7 @@ fn build_config(state: &SetupState) -> AppConfig {
         },
         team,
         statuses: StatusConfig::default(),
+        resolutions: crate::config::default_resolutions(),
         filters: vec![],
     }
 }

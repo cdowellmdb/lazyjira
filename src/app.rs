@@ -9,6 +9,13 @@ const NO_EPIC_SUMMARY: &str = "No Epic";
 
 pub const ISSUE_TYPES: &[&str] = &["Task", "Bug", "Story"];
 
+/// An item in the visible selection list — either a group header or a ticket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VisibleItem {
+    GroupHeader(String),
+    Ticket(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct CommentState {
     pub ticket_key: String,
@@ -101,6 +108,11 @@ pub enum DetailMode {
         selected: usize,
         confirm_target: Option<crate::cache::Status>,
     },
+    /// Showing the resolution picker after selecting a terminal status.
+    ResolutionPicker {
+        target_status: crate::cache::Status,
+        selected: usize,
+    },
     /// Showing the activity/history timeline with scroll offset.
     History { scroll: u16 },
 }
@@ -123,7 +135,7 @@ struct VisibleKeysState {
 #[derive(Default)]
 struct VisibleKeysCache {
     state: Option<VisibleKeysState>,
-    keys: Vec<String>,
+    items: Vec<VisibleItem>,
 }
 
 /// Full application state.
@@ -180,6 +192,11 @@ pub struct App {
     pub filter_loading: bool,
     /// State for filter create/edit modal.
     pub filter_edit: Option<FilterEditState>,
+    /// Collapsed groups per tab (group identifiers).
+    pub collapsed_my_work: HashSet<String>,
+    pub collapsed_team: HashSet<String>,
+    pub collapsed_epics: HashSet<String>,
+    pub collapsed_unassigned: HashSet<String>,
 }
 
 impl App {
@@ -213,6 +230,10 @@ impl App {
             filter_results: Vec::new(),
             filter_loading: false,
             filter_edit: None,
+            collapsed_my_work: HashSet::new(),
+            collapsed_team: HashSet::new(),
+            collapsed_epics: HashSet::new(),
+            collapsed_unassigned: HashSet::new(),
         }
     }
 
@@ -225,7 +246,7 @@ impl App {
         self.view_generation = self.view_generation.wrapping_add(1);
         let cache = self.visible_keys_cache.get_mut();
         cache.state = None;
-        cache.keys.clear();
+        cache.items.clear();
     }
 
     pub fn next_tab(&mut self) {
@@ -261,7 +282,7 @@ impl App {
     pub fn sorted_team_members(&self) -> Vec<&crate::cache::TeamMember> {
         let mut active_counts_by_email: HashMap<&str, usize> = HashMap::new();
         for ticket in &self.cache.team_tickets {
-            if ticket.status == crate::cache::Status::Done {
+            if ticket.status == crate::cache::Status::Closed {
                 continue;
             }
             if let Some(email) = ticket.assignee_email.as_deref() {
@@ -294,13 +315,17 @@ impl App {
         }
     }
 
-    fn compute_visible_ticket_keys_for_tab(&self, tab: Tab) -> Vec<String> {
+    fn compute_visible_items_for_tab(&self, tab: Tab) -> Vec<VisibleItem> {
         match tab {
-            Tab::MyWork => self.my_work_visible_ticket_keys(),
-            Tab::Team => self.team_visible_ticket_keys(),
-            Tab::Epics => self.epics_visible_ticket_keys(),
-            Tab::Unassigned => self.unassigned_visible_ticket_keys(),
-            Tab::Filters => self.filter_results.iter().map(|t| t.key.clone()).collect(),
+            Tab::MyWork => self.my_work_visible_items(),
+            Tab::Team => self.team_visible_items(),
+            Tab::Epics => self.epics_visible_items(),
+            Tab::Unassigned => self.unassigned_visible_items(),
+            Tab::Filters => self
+                .filter_results
+                .iter()
+                .map(|t| VisibleItem::Ticket(t.key.clone()))
+                .collect(),
         }
     }
 
@@ -313,10 +338,10 @@ impl App {
             }
         }
 
-        let keys = self.compute_visible_ticket_keys_for_tab(state.active_tab);
+        let items = self.compute_visible_items_for_tab(state.active_tab);
         let mut cache = self.visible_keys_cache.borrow_mut();
         cache.state = Some(state);
-        cache.keys = keys;
+        cache.items = items;
     }
 
     fn normalized_search(&self) -> Option<String> {
@@ -376,7 +401,7 @@ impl App {
             crate::cache::Status::InReview => 4,
             crate::cache::Status::Other(_) => 5,
             crate::cache::Status::Blocked => 6,
-            crate::cache::Status::Done => 7,
+            crate::cache::Status::Closed => 7,
         }
     }
 
@@ -429,11 +454,17 @@ impl App {
         visible
     }
 
-    pub(crate) fn epics_visible_ticket_keys(&self) -> Vec<String> {
-        self.epics_visible_epics()
-            .into_iter()
-            .flat_map(|(_, tickets)| tickets.into_iter().map(|t| t.key.clone()))
-            .collect()
+    fn epics_visible_items(&self) -> Vec<VisibleItem> {
+        let mut items = Vec::new();
+        for (epic, children) in self.epics_visible_epics() {
+            items.push(VisibleItem::GroupHeader(epic.key.clone()));
+            if !self.collapsed_epics.contains(&epic.key) {
+                for ticket in children {
+                    items.push(VisibleItem::Ticket(ticket.key.clone()));
+                }
+            }
+        }
+        items
     }
 
     /// Unassigned tickets grouped by epic.
@@ -500,11 +531,17 @@ impl App {
         visible
     }
 
-    pub(crate) fn unassigned_visible_ticket_keys(&self) -> Vec<String> {
-        self.unassigned_visible_by_epic()
-            .into_iter()
-            .flat_map(|(_, _, tickets)| tickets.into_iter().map(|t| t.key.clone()))
-            .collect()
+    fn unassigned_visible_items(&self) -> Vec<VisibleItem> {
+        let mut items = Vec::new();
+        for (epic_key, _, tickets) in self.unassigned_visible_by_epic() {
+            items.push(VisibleItem::GroupHeader(epic_key.clone()));
+            if !self.collapsed_unassigned.contains(&epic_key) {
+                for ticket in tickets {
+                    items.push(VisibleItem::Ticket(ticket.key.clone()));
+                }
+            }
+        }
+        items
     }
 
     /// Status groups and visible tickets in the exact order used by the My Work tab.
@@ -516,7 +553,7 @@ impl App {
         crate::cache::Status::all()
             .iter()
             .filter_map(|status| {
-                if *status == crate::cache::Status::Done {
+                if *status == crate::cache::Status::Closed {
                     if !self.show_done {
                         return None;
                     }
@@ -548,11 +585,17 @@ impl App {
             .collect()
     }
 
-    pub(crate) fn my_work_visible_ticket_keys(&self) -> Vec<String> {
-        self.my_work_visible_by_status()
-            .into_iter()
-            .flat_map(|(_, tickets)| tickets.into_iter().map(|t| t.key.clone()))
-            .collect()
+    fn my_work_visible_items(&self) -> Vec<VisibleItem> {
+        let mut items = Vec::new();
+        for (status, tickets) in self.my_work_visible_by_status() {
+            items.push(VisibleItem::GroupHeader(status.as_str().to_string()));
+            if !self.collapsed_my_work.contains(status.as_str()) {
+                for ticket in tickets {
+                    items.push(VisibleItem::Ticket(ticket.key.clone()));
+                }
+            }
+        }
+        items
     }
 
     /// Team members and visible tickets in the exact order used by the Team tab.
@@ -574,6 +617,9 @@ impl App {
         }
 
         for member in self.sorted_team_members() {
+            if member.email == UNASSIGNED_TEAM_EMAIL {
+                continue;
+            }
             let member_tickets = tickets_by_email
                 .get(member.email.as_str())
                 .map(Vec::as_slice)
@@ -602,7 +648,7 @@ impl App {
             let mut active = Vec::new();
             let mut done = Vec::new();
             for ticket in filtered {
-                if ticket.status == crate::cache::Status::Done {
+                if ticket.status == crate::cache::Status::Closed {
                     if self.show_done {
                         done.push(ticket);
                     }
@@ -621,17 +667,20 @@ impl App {
         visible
     }
 
-    pub(crate) fn team_visible_ticket_keys(&self) -> Vec<String> {
-        self.team_visible_tickets_by_member()
-            .into_iter()
-            .flat_map(|(_, active, done)| {
-                active
-                    .into_iter()
-                    .chain(done)
-                    .map(|t| t.key.clone())
-                    .collect::<Vec<_>>()
-            })
-            .collect()
+    fn team_visible_items(&self) -> Vec<VisibleItem> {
+        let mut items = Vec::new();
+        for (member, active, done) in self.team_visible_tickets_by_member() {
+            items.push(VisibleItem::GroupHeader(member.email.clone()));
+            if !self.collapsed_team.contains(&member.email) {
+                for ticket in active {
+                    items.push(VisibleItem::Ticket(ticket.key.clone()));
+                }
+                for ticket in done {
+                    items.push(VisibleItem::Ticket(ticket.key.clone()));
+                }
+            }
+        }
+        items
     }
 
     pub fn toggle_show_done(&mut self) {
@@ -665,6 +714,113 @@ impl App {
 
     pub fn is_filter_edit_open(&self) -> bool {
         self.filter_edit.is_some()
+    }
+
+    pub fn is_collapsed(&self, tab: Tab, group_id: &str) -> bool {
+        match tab {
+            Tab::MyWork => self.collapsed_my_work.contains(group_id),
+            Tab::Team => self.collapsed_team.contains(group_id),
+            Tab::Epics => self.collapsed_epics.contains(group_id),
+            Tab::Unassigned => self.collapsed_unassigned.contains(group_id),
+            Tab::Filters => false,
+        }
+    }
+
+    /// Get the group ID for the currently selected item (whether header or ticket).
+    pub fn selected_group_id(&self) -> Option<String> {
+        self.ensure_visible_keys_cache();
+        let cache = self.visible_keys_cache.borrow();
+        let items = &cache.items;
+        if items.is_empty() || self.selected_index >= items.len() {
+            return None;
+        }
+        // If on a header, return its group ID directly.
+        if let VisibleItem::GroupHeader(ref id) = items[self.selected_index] {
+            return Some(id.clone());
+        }
+        // Walk backwards to find the nearest header.
+        for i in (0..self.selected_index).rev() {
+            if let VisibleItem::GroupHeader(ref id) = items[i] {
+                return Some(id.clone());
+            }
+        }
+        None
+    }
+
+    pub fn toggle_group_collapse(&mut self, group_id: &str) {
+        let set = match self.active_tab {
+            Tab::MyWork => &mut self.collapsed_my_work,
+            Tab::Team => &mut self.collapsed_team,
+            Tab::Epics => &mut self.collapsed_epics,
+            Tab::Unassigned => &mut self.collapsed_unassigned,
+            Tab::Filters => return,
+        };
+        let collapsing = !set.remove(group_id);
+        if collapsing {
+            set.insert(group_id.to_string());
+        }
+        self.mark_cache_changed();
+        if collapsing {
+            // Move selection to the group header
+            self.ensure_visible_keys_cache();
+            let cache = self.visible_keys_cache.borrow();
+            if let Some(pos) = cache.items.iter().position(|item| {
+                matches!(item, VisibleItem::GroupHeader(ref id) if id == group_id)
+            }) {
+                drop(cache);
+                self.selected_index = pos;
+            }
+        }
+        self.clamp_selection();
+    }
+
+    pub fn toggle_all_groups_collapse(&mut self) {
+        let current_group = self.selected_group_id();
+        let (set, all_ids) = match self.active_tab {
+            Tab::MyWork => {
+                let ids: Vec<String> = self
+                    .my_work_visible_by_status()
+                    .iter()
+                    .map(|(s, _)| s.as_str().to_string())
+                    .collect();
+                (&mut self.collapsed_my_work, ids)
+            }
+            Tab::Team => {
+                let ids: Vec<String> = self
+                    .sorted_team_members()
+                    .iter()
+                    .filter(|m| m.email != "__unassigned__")
+                    .map(|m| m.email.clone())
+                    .collect();
+                (&mut self.collapsed_team, ids)
+            }
+            Tab::Epics => {
+                let ids: Vec<String> =
+                    self.cache.epics.iter().map(|e| e.key.clone()).collect();
+                (&mut self.collapsed_epics, ids)
+            }
+            Tab::Unassigned => {
+                let ids: Vec<String> = self
+                    .unassigned_visible_by_epic()
+                    .iter()
+                    .map(|(k, _, _)| k.clone())
+                    .collect();
+                (&mut self.collapsed_unassigned, ids)
+            }
+            Tab::Filters => return,
+        };
+        if set.is_empty() {
+            // Collapse all except the current group
+            for id in &all_ids {
+                if current_group.as_deref() != Some(id) {
+                    set.insert(id.clone());
+                }
+            }
+        } else {
+            set.clear();
+        }
+        self.mark_cache_changed();
+        self.clamp_selection();
     }
 
     pub fn begin_detail_fetch(&mut self, key: &str) -> bool {
@@ -701,20 +857,36 @@ impl App {
         self.clamp_selection();
     }
 
-    /// Get the currently selected ticket key based on the active tab and selected index.
-    pub fn selected_ticket_key(&self) -> Option<String> {
+    /// Get the currently selected item (header or ticket).
+    pub fn selected_item(&self) -> Option<VisibleItem> {
         self.ensure_visible_keys_cache();
         self.visible_keys_cache
             .borrow()
-            .keys
+            .items
             .get(self.selected_index)
             .cloned()
     }
 
-    /// Total number of selectable items in the current tab.
+    /// Get the currently selected ticket key, or None if a header is selected.
+    pub fn selected_ticket_key(&self) -> Option<String> {
+        match self.selected_item() {
+            Some(VisibleItem::Ticket(key)) => Some(key),
+            _ => None,
+        }
+    }
+
+    /// Get the group ID if a header is currently selected.
+    pub fn selected_header_group_id(&self) -> Option<String> {
+        match self.selected_item() {
+            Some(VisibleItem::GroupHeader(id)) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Total number of selectable items (headers + tickets) in the current tab.
     pub fn item_count(&self) -> usize {
         self.ensure_visible_keys_cache();
-        self.visible_keys_cache.borrow().keys.len()
+        self.visible_keys_cache.borrow().items.len()
     }
 
     pub fn clamp_selection(&mut self) {
@@ -891,7 +1063,8 @@ mod tests {
             },
         ]);
 
-        assert_eq!(app.item_count(), 3);
+        // 2 epic headers + 3 tickets
+        assert_eq!(app.item_count(), 5);
     }
 
     #[test]
@@ -909,7 +1082,8 @@ mod tests {
             },
         ]);
 
-        app.selected_index = 2;
+        // Items: H(AMP-100), T(AMP-1), T(AMP-2), H(AMP-200), T(AMP-3)
+        app.selected_index = 4;
         assert_eq!(app.selected_ticket_key(), Some("AMP-3".to_string()));
     }
 
@@ -935,19 +1109,15 @@ mod tests {
         ]);
 
         app.search = Some("session".to_string());
-        assert_eq!(
-            app.epics_visible_ticket_keys(),
-            vec!["AMP-1".to_string(), "AMP-3".to_string()]
-        );
+        // Items: H(AMP-100), T(AMP-1), H(AMP-200), T(AMP-3)
+        assert_eq!(app.item_count(), 4);
 
-        app.selected_index = 1;
+        app.selected_index = 3;
         assert_eq!(app.selected_ticket_key(), Some("AMP-3".to_string()));
 
         app.search = Some("auth".to_string());
-        assert_eq!(
-            app.epics_visible_ticket_keys(),
-            vec!["AMP-1".to_string(), "AMP-2".to_string()]
-        );
+        // Items: H(AMP-100), T(AMP-1), T(AMP-2)
+        assert_eq!(app.item_count(), 3);
     }
 
     #[test]
@@ -965,10 +1135,12 @@ mod tests {
             },
         ]);
 
-        assert_eq!(app.item_count(), 1);
+        // H(AMP-100), H(AMP-200), T(AMP-1)
+        assert_eq!(app.item_count(), 3);
 
         app.search = Some("empty".to_string());
-        assert_eq!(app.item_count(), 0);
+        // H(AMP-100) only, no children
+        assert_eq!(app.item_count(), 1);
         assert_eq!(app.selected_ticket_key(), None);
     }
 
@@ -984,7 +1156,9 @@ mod tests {
         app.cache.my_tickets = vec![t];
 
         app.search = Some("metis".to_string());
-        assert_eq!(app.item_count(), 1);
+        // H(In Progress) + T(AMP-1)
+        assert_eq!(app.item_count(), 2);
+        app.selected_index = 1;
         assert_eq!(app.selected_ticket_key(), Some("AMP-1".to_string()));
     }
 
@@ -1005,7 +1179,9 @@ mod tests {
         app.cache.team_tickets = vec![t];
 
         app.search = Some("infra".to_string());
-        assert_eq!(app.item_count(), 1);
+        // H(dev@example.com) + T(AMP-2)
+        assert_eq!(app.item_count(), 2);
+        app.selected_index = 1;
         assert_eq!(app.selected_ticket_key(), Some("AMP-2".to_string()));
     }
 
@@ -1022,7 +1198,9 @@ mod tests {
         }]);
 
         app.search = Some("perf".to_string());
-        assert_eq!(app.item_count(), 1);
+        // H(AMP-500) + T(AMP-55)
+        assert_eq!(app.item_count(), 2);
+        app.selected_index = 1;
         assert_eq!(app.selected_ticket_key(), Some("AMP-55".to_string()));
     }
 
@@ -1054,15 +1232,15 @@ mod tests {
 
         app.cache.team_tickets = vec![t3, assigned, t2, t1];
 
-        assert_eq!(app.item_count(), 3);
-        assert_eq!(
-            app.unassigned_visible_ticket_keys(),
-            vec![
-                "AMP-91".to_string(),
-                "AMP-92".to_string(),
-                "AMP-93".to_string()
-            ]
-        );
+        // 2 epic headers + 3 tickets
+        assert_eq!(app.item_count(), 5);
+        // Verify ticket keys are reachable by selection
+        app.selected_index = 1;
+        assert_eq!(app.selected_ticket_key(), Some("AMP-91".to_string()));
+        app.selected_index = 2;
+        assert_eq!(app.selected_ticket_key(), Some("AMP-92".to_string()));
+        app.selected_index = 4;
+        assert_eq!(app.selected_ticket_key(), Some("AMP-93".to_string()));
     }
 
     #[test]
@@ -1088,11 +1266,15 @@ mod tests {
         app.cache.team_tickets = vec![t1, t2];
 
         app.search = Some("parser".to_string());
-        assert_eq!(app.item_count(), 1);
+        // H(AMP-501) + T(AMP-101)
+        assert_eq!(app.item_count(), 2);
+        app.selected_index = 1;
         assert_eq!(app.selected_ticket_key(), Some("AMP-101".to_string()));
 
         app.search = Some("perf".to_string());
-        assert_eq!(app.item_count(), 1);
+        // H(AMP-502) + T(AMP-102)
+        assert_eq!(app.item_count(), 2);
+        app.selected_index = 1;
         assert_eq!(app.selected_ticket_key(), Some("AMP-102".to_string()));
     }
 }

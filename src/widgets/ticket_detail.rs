@@ -14,7 +14,7 @@ fn status_color(status: &Status) -> Color {
         Status::ToDo => Color::White,
         Status::InReview => Color::Cyan,
         Status::Blocked => Color::Red,
-        Status::Done => Color::Green,
+        Status::Closed => Color::Green,
         Status::Other(_) => Color::Magenta,
     }
 }
@@ -167,7 +167,7 @@ fn push_description_lines(lines: &mut Vec<Line>, desc: &str) {
     }
 }
 
-pub fn render(f: &mut ratatui::Frame, app: &App) {
+pub fn render(f: &mut ratatui::Frame, app: &App, resolutions: &[String]) {
     let ticket_key = match app.detail_ticket_key.as_ref() {
         Some(k) => k,
         None => return,
@@ -196,6 +196,10 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             selected,
             confirm_target,
         } => render_move_picker(f, inner, ticket, *selected, confirm_target.as_ref()),
+        DetailMode::ResolutionPicker {
+            target_status,
+            selected,
+        } => render_resolution_picker(f, inner, target_status, *selected, resolutions),
         DetailMode::History { scroll } => {
             crate::widgets::activity::render(f, inner, &ticket.activity, *scroll);
         }
@@ -350,7 +354,54 @@ fn render_move_picker(
 
     // Footer
     let footer = Paragraph::new(Line::from(Span::styled(
-        "[j/k/↑/↓] choose   [p/w/n/t/v/b/d] confirm   [Shift+key] move now   [Esc] cancel",
+        "[j/k/↑/↓] choose   [p/w/n/t/v/b/c] confirm   [Shift+key] move now   [Esc] cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    f.render_widget(footer, footer_area);
+}
+
+fn render_resolution_picker(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    target_status: &Status,
+    selected: usize,
+    resolutions: &[String],
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(area);
+
+    let body_area = chunks[0];
+    let footer_area = chunks[1];
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(Line::from(Span::styled(
+        format!("Moving to {} — select resolution:", target_status.as_str()),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    for (i, resolution) in resolutions.iter().enumerate() {
+        let prefix = if i == selected { "> " } else { "  " };
+        let mut style = Style::default().fg(Color::White);
+        if i == selected {
+            style = style.add_modifier(Modifier::BOLD).bg(Color::DarkGray);
+        }
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", prefix, resolution),
+            style,
+        )));
+    }
+
+    let body = Paragraph::new(lines);
+    f.render_widget(body, body_area);
+
+    let footer = Paragraph::new(Line::from(Span::styled(
+        "[j/k/↑/↓] choose   [Enter] confirm   [Esc] back",
         Style::default().fg(Color::DarkGray),
     )));
     f.render_widget(footer, footer_area);

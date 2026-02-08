@@ -679,7 +679,9 @@ fn hydrate_ticket_from_details_cache(
         return;
     };
 
-    ticket.detail_loaded = true;
+    // Only mark fully loaded if the cached detail has reporter (added later).
+    // Old cache entries missing reporter will be re-fetched once, then stay cached.
+    ticket.detail_loaded = detail.reporter.is_some();
     ticket.description = detail.description.clone();
     ticket.labels = detail.labels.clone();
     if detail.assignee.is_some() {
@@ -846,8 +848,11 @@ pub async fn fetch_all(config: &AppConfig) -> Result<Cache> {
 }
 
 /// Move a ticket to a new status via `jira issue move`.
-pub async fn move_ticket(key: &str, status: &str) -> Result<()> {
-    run_cmd("jira", &["issue", "move", key, status]).await?;
+pub async fn move_ticket(key: &str, status: &str, resolution: Option<&str>) -> Result<()> {
+    match resolution {
+        Some(res) => run_cmd("jira", &["issue", "move", key, status, "-R", res]).await?,
+        None => run_cmd("jira", &["issue", "move", key, status]).await?,
+    };
     Ok(())
 }
 
@@ -966,6 +971,7 @@ mod tests {
             jira: JiraConfig { project: "AMP".into(), team_name: "Code Generation".into(), done_window_days: 14 },
             team: BTreeMap::new(),
             statuses: StatusConfig::default(),
+            resolutions: crate::config::default_resolutions(),
             filters: vec![],
         };
         let query = unassigned_team_active_query(&config);

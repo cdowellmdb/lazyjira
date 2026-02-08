@@ -378,7 +378,7 @@ async fn main() -> Result<()> {
                     } else if app.show_keybindings {
                         handle_keybindings_keys(&mut app, key.code);
                     } else if app.is_detail_open() {
-                        handle_detail_keys(&mut app, key.code);
+                        handle_detail_keys(&mut app, key.code, &config);
                     } else if app.search.is_some() {
                         handle_search_keys(&mut app, key.code, key.modifiers, &bg_tx).await;
                     } else if app.active_tab == Tab::Filters {
@@ -559,7 +559,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
                 .unwrap_or("all");
             Span::styled(
                 format!(
-                    " Tab: switch  j/k: navigate  Enter: detail  d: done({})  p/w/n/v: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
+                    " Tab: switch  j/k: navigate  Enter: detail  z: fold  d: done({})  p/w/n/v: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
                     done_state, focus_state, ticket_state, freshness_state, epic_state
                 ),
                 Style::default().fg(Color::DarkGray),
@@ -573,7 +573,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
 
     // Detail overlay
     if app.is_detail_open() {
-        widgets::ticket_detail::render(f, app);
+        widgets::ticket_detail::render(f, app, &config.resolutions);
     }
     if app.is_create_ticket_open() {
         widgets::create_ticket::render(f, app);
@@ -654,22 +654,44 @@ fn queue_move_confirmation(app: &mut App, ticket_key: &str, selected: usize, new
     ));
 }
 
-fn perform_ticket_move(app: &mut App, ticket_key: String, new_status: Status) {
+fn perform_ticket_move(app: &mut App, ticket_key: String, new_status: Status, resolution: Option<String>) {
     let status_str = new_status.as_str().to_string();
     let key_clone = ticket_key.clone();
 
     // Optimistic update
     app.update_ticket_status(&ticket_key, new_status);
     app.detail_mode = DetailMode::View;
-    app.flash = Some(format!("Moving {} to {}...", key_clone, status_str));
+    let flash_msg = match &resolution {
+        Some(r) => format!("Moving {} to {} (resolution: {})...", key_clone, status_str, r),
+        None => format!("Moving {} to {}...", key_clone, status_str),
+    };
+    app.flash = Some(flash_msg);
 
     // Fire and forget the CLI call
     tokio::spawn(async move {
-        let _ = jira_client::move_ticket(&key_clone, &status_str).await;
+        let _ = jira_client::move_ticket(&key_clone, &status_str, resolution.as_deref()).await;
     });
 }
 
-fn handle_detail_keys(app: &mut App, key: KeyCode) {
+/// Returns true if the given status is a terminal/done status that requires a resolution.
+fn is_terminal_status(status: &Status) -> bool {
+    matches!(status, Status::Closed)
+}
+
+/// Either perform the move directly, or redirect to the resolution picker for terminal statuses.
+fn perform_or_pick_resolution(app: &mut App, ticket_key: String, new_status: Status) {
+    if is_terminal_status(&new_status) {
+        app.detail_mode = DetailMode::ResolutionPicker {
+            target_status: new_status,
+            selected: 0,
+        };
+        app.flash = Some("Select a resolution:".to_string());
+    } else {
+        perform_ticket_move(app, ticket_key, new_status, None);
+    }
+}
+
+fn handle_detail_keys(app: &mut App, key: KeyCode, config: &AppConfig) {
     match app.detail_mode.clone() {
         DetailMode::View => match key {
             KeyCode::Esc => app.close_detail(),
@@ -749,7 +771,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
                 if let Some(target) = confirm_target {
                     if let Some((ticket_key, options)) = current_move_options(app) {
                         if options.contains(&target) {
-                            perform_ticket_move(app, ticket_key, target);
+                            perform_or_pick_resolution(app, ticket_key, target);
                         }
                     }
                 } else if let Some((ticket_key, options)) = current_move_options(app) {
@@ -762,7 +784,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
                 if let Some(target) = confirm_target {
                     if let Some((ticket_key, options)) = current_move_options(app) {
                         if options.contains(&target) {
-                            perform_ticket_move(app, ticket_key, target);
+                            perform_or_pick_resolution(app, ticket_key, target);
                         }
                     }
                 }
@@ -772,7 +794,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
                     if let Some((ticket_key, options)) = current_move_options(app) {
                         if let Some(target_idx) = options.iter().position(|s| *s == target_status) {
                             if c.is_ascii_uppercase() {
-                                perform_ticket_move(app, ticket_key, target_status);
+                                perform_or_pick_resolution(app, ticket_key, target_status);
                             } else {
                                 queue_move_confirmation(
                                     app,
@@ -788,6 +810,38 @@ fn handle_detail_keys(app: &mut App, key: KeyCode) {
                                 target_status.as_str()
                             ));
                         }
+                    }
+                }
+            }
+            _ => {}
+        },
+        DetailMode::ResolutionPicker {
+            target_status,
+            selected,
+        } => match key {
+            KeyCode::Esc => {
+                app.detail_mode = DetailMode::MovePicker {
+                    selected: 0,
+                    confirm_target: None,
+                };
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let max = config.resolutions.len().saturating_sub(1);
+                app.detail_mode = DetailMode::ResolutionPicker {
+                    target_status,
+                    selected: (selected + 1).min(max),
+                };
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.detail_mode = DetailMode::ResolutionPicker {
+                    target_status,
+                    selected: selected.saturating_sub(1),
+                };
+            }
+            KeyCode::Enter => {
+                if let Some(resolution) = config.resolutions.get(selected) {
+                    if let Some(ticket_key) = app.detail_ticket_key.clone() {
+                        perform_ticket_move(app, ticket_key, target_status, Some(resolution.clone()));
                     }
                 }
             }
@@ -818,9 +872,14 @@ async fn handle_search_keys(
             app.clamp_selection();
         }
         KeyCode::Enter => {
-            if let Some(key) = app.selected_ticket_key() {
+            if let Some(group_id) = app.selected_header_group_id() {
+                if app.is_collapsed(app.active_tab, &group_id) {
+                    app.toggle_group_collapse(&group_id);
+                }
+            } else if let Some(key) = app.selected_ticket_key() {
+                let detail_loaded = app.is_ticket_detail_loaded(&key);
                 app.open_detail(key.clone());
-                if app.begin_detail_fetch(&key) {
+                if !detail_loaded && app.begin_detail_fetch(&key) {
                     spawn_ticket_detail_fetch(bg_tx, key);
                 }
             }
@@ -1447,6 +1506,14 @@ async fn handle_main_keys(
                 spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual, config);
             }
         }
+        KeyCode::Char('z') => {
+            if let Some(group_id) = app.selected_group_id() {
+                app.toggle_group_collapse(&group_id);
+            }
+        }
+        KeyCode::Char('Z') => {
+            app.toggle_all_groups_collapse();
+        }
         KeyCode::Char('c') => {
             app.create_ticket = Some(app::CreateTicketState {
                 focused_field: 0,
@@ -1457,9 +1524,14 @@ async fn handle_main_keys(
             });
         }
         KeyCode::Enter => {
-            if let Some(key) = app.selected_ticket_key() {
+            if let Some(group_id) = app.selected_header_group_id() {
+                if app.is_collapsed(app.active_tab, &group_id) {
+                    app.toggle_group_collapse(&group_id);
+                }
+            } else if let Some(key) = app.selected_ticket_key() {
+                let detail_loaded = app.is_ticket_detail_loaded(&key);
                 app.open_detail(key.clone());
-                if app.begin_detail_fetch(&key) {
+                if !detail_loaded && app.begin_detail_fetch(&key) {
                     spawn_ticket_detail_fetch(bg_tx, key);
                 }
             }

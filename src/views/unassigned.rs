@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::app::App;
+use crate::app::{App, Tab};
 use crate::cache::Status;
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
@@ -16,7 +16,7 @@ fn status_color(status: &Status) -> Color {
         Status::ToDo => Color::White,
         Status::InReview => Color::Cyan,
         Status::Blocked => Color::Red,
-        Status::Done => Color::Green,
+        Status::Closed => Color::Green,
         Status::Other(_) => Color::Magenta,
     }
 }
@@ -73,7 +73,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut ticket_idx: usize = 0;
+    let mut item_idx: usize = 0;
     let mut selected_visual_line: Option<usize> = None;
 
     if !grouped.is_empty() {
@@ -88,25 +88,46 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     for (epic_key, epic_summary, tickets) in grouped {
+        let collapsed = app.is_collapsed(Tab::Unassigned, &epic_key);
+        let indicator = if collapsed { ">" } else { "v" };
+
+        let is_header_selected = item_idx == app.selected_index;
+        if is_header_selected {
+            selected_visual_line = Some(lines.len());
+        }
+
         let header = if epic_key == NO_EPIC_KEY {
-            "No Epic".to_string()
+            format!("{} No Epic", indicator)
         } else {
-            format!("{}  {}", epic_key, epic_summary)
+            format!("{} {}  {}", indicator, epic_key, epic_summary)
         };
-        lines.push(Line::from(Span::styled(
-            header,
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
+        let header_style = if is_header_selected {
+            Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray)
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        };
+        lines.push(Line::from(Span::styled(header, header_style)));
+        let count_style = if is_header_selected {
+            Style::default().fg(Color::Gray).bg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(
                 format!("unassigned: {}", tickets.len()),
-                Style::default().fg(Color::DarkGray),
+                count_style,
             ),
         ]));
+        item_idx += 1;
+
+        if collapsed {
+            lines.push(Line::from(""));
+            continue;
+        }
 
         for ticket in tickets {
-            let is_selected = ticket_idx == app.selected_index;
+            let is_selected = item_idx == app.selected_index;
             if is_selected {
                 selected_visual_line = Some(lines.len());
             }
@@ -138,7 +159,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 ),
             ]));
 
-            ticket_idx += 1;
+            item_idx += 1;
         }
 
         lines.push(Line::from(""));

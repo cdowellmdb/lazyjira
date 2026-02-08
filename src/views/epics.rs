@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::app::App;
+use crate::app::{App, Tab};
 use crate::cache::Status;
 
 fn status_color(status: &Status) -> Color {
@@ -14,7 +14,7 @@ fn status_color(status: &Status) -> Color {
         Status::ToDo => Color::White,
         Status::InReview => Color::Cyan,
         Status::Blocked => Color::Red,
-        Status::Done => Color::Green,
+        Status::Closed => Color::Green,
         Status::Other(_) => Color::Magenta,
     }
 }
@@ -84,7 +84,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut ticket_idx: usize = 0;
+    let mut item_idx: usize = 0;
     let mut selected_visual_line: Option<usize> = None;
 
     if !visible_epics.is_empty() {
@@ -104,6 +104,14 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     for (epic, children) in visible_epics {
+        let collapsed = app.is_collapsed(Tab::Epics, &epic.key);
+        let indicator = if collapsed { ">" } else { "v" };
+
+        let is_header_selected = item_idx == app.selected_index;
+        if is_header_selected {
+            selected_visual_line = Some(lines.len());
+        }
+
         let total = epic.total();
         let done = epic.done_count();
         let pct = epic.progress_pct();
@@ -120,13 +128,23 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             format!("{}  ({} / {} done, {:.1}%)", progress, done, total, pct)
         };
         let inner = area.width.saturating_sub(2) as usize;
-        let prefix = 10 + 2;
+        let prefix = 2 + 10 + 2; // indicator + space + key + gap
         let epic_summary_w = inner.saturating_sub(prefix).max(12);
 
+        let header_key_style = if is_header_selected {
+            Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray)
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        };
+        let header_summary_style = if is_header_selected {
+            Style::default().bg(Color::DarkGray)
+        } else {
+            Style::default()
+        };
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{:<10}", epic.key),
-                Style::default().add_modifier(Modifier::BOLD),
+                format!("{} {:<10}", indicator, epic.key),
+                header_key_style,
             ),
             Span::raw("  "),
             Span::styled(
@@ -134,13 +152,24 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     "{:<epic_summary_w$}",
                     truncate(&epic.summary, epic_summary_w)
                 ),
-                Style::default(),
+                header_summary_style,
             ),
         ]));
+        let meta_style = if is_header_selected {
+            Style::default().fg(Color::Gray).bg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled(meta, Style::default().fg(Color::DarkGray)),
+            Span::styled(meta, meta_style),
         ]));
+        item_idx += 1;
+
+        if collapsed {
+            lines.push(Line::from(""));
+            continue;
+        }
 
         if children.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -149,7 +178,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             )));
         } else {
             for ticket in children {
-                let is_selected = ticket_idx == app.selected_index;
+                let is_selected = item_idx == app.selected_index;
                 if is_selected {
                     selected_visual_line = Some(lines.len());
                 }
@@ -181,7 +210,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     ),
                 ]));
 
-                ticket_idx += 1;
+                item_idx += 1;
             }
         }
 

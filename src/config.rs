@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub team: BTreeMap<String, String>,
     #[serde(default)]
     pub statuses: StatusConfig,
+    #[serde(default = "default_resolutions")]
+    pub resolutions: Vec<String>,
     #[serde(default)]
     pub filters: Vec<SavedFilter>,
 }
@@ -51,6 +53,22 @@ fn default_active_statuses() -> Vec<String> {
 
 fn default_done_statuses() -> Vec<String> {
     vec!["Done".to_string(), "Closed".to_string()]
+}
+
+pub fn default_resolutions() -> Vec<String> {
+    vec![
+        "Done".to_string(),
+        "Duplicate".to_string(),
+        "Won't Do".to_string(),
+        "Cannot Reproduce".to_string(),
+        "Community Answered".to_string(),
+        "Declined".to_string(),
+        "Fixed".to_string(),
+        "Gone away".to_string(),
+        "Incomplete".to_string(),
+        "Won't Fix".to_string(),
+        "Works as Designed".to_string(),
+    ]
 }
 
 impl Default for StatusConfig {
@@ -152,6 +170,7 @@ mod tests {
             },
             team,
             statuses: StatusConfig::default(),
+            resolutions: default_resolutions(),
             filters: vec![SavedFilter {
                 name: "My bugs".to_string(),
                 jql: "type = Bug AND assignee = currentUser()".to_string(),

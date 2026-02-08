@@ -10,7 +10,7 @@ pub enum Status {
     InProgress,
     InReview,
     Blocked,
-    Done,
+    Closed,
     Other(String),
 }
 
@@ -23,7 +23,7 @@ impl Status {
             Status::InProgress => "In Progress",
             Status::InReview => "In Review",
             Status::Blocked => "Blocked",
-            Status::Done => "Done",
+            Status::Closed => "Closed",
             Status::Other(s) => s,
         }
     }
@@ -36,7 +36,7 @@ impl Status {
             "in progress" | "in development" => Status::InProgress,
             "in review" | "review" => Status::InReview,
             "blocked" => Status::Blocked,
-            "done" | "closed" | "resolved" => Status::Done,
+            "done" | "closed" | "resolved" => Status::Closed,
             _ => Status::Other(s.to_string()),
         }
     }
@@ -49,7 +49,7 @@ impl Status {
             Status::ToDo => 't',
             Status::InReview => 'v',
             Status::Blocked => 'b',
-            Status::Done => 'd',
+            Status::Closed => 'c',
             Status::Other(_) => '?',
         }
     }
@@ -62,7 +62,7 @@ impl Status {
             't' => Some(Status::ToDo),
             'v' => Some(Status::InReview),
             'b' => Some(Status::Blocked),
-            'd' => Some(Status::Done),
+            'c' => Some(Status::Closed),
             _ => None,
         }
     }
@@ -76,7 +76,7 @@ impl Status {
             Status::ToDo,
             Status::InReview,
             Status::Blocked,
-            Status::Done,
+            Status::Closed,
         ]
     }
 
@@ -112,6 +112,7 @@ pub struct Ticket {
     pub status: Status,
     pub assignee: Option<String>,
     pub assignee_email: Option<String>,
+    #[serde(default)]
     pub reporter: Option<String>,
     pub description: Option<String>,
     pub labels: Vec<String>,
@@ -140,7 +141,7 @@ impl Epic {
     pub fn done_count(&self) -> usize {
         self.children
             .iter()
-            .filter(|t| t.status == Status::Done)
+            .filter(|t| t.status == Status::Closed)
             .count()
     }
 
