@@ -77,7 +77,13 @@ impl Tab {
     }
 
     pub fn all() -> &'static [Tab] {
-        &[Tab::MyWork, Tab::Team, Tab::Epics, Tab::Unassigned, Tab::Filters]
+        &[
+            Tab::MyWork,
+            Tab::Team,
+            Tab::Epics,
+            Tab::Unassigned,
+            Tab::Filters,
+        ]
     }
 }
 
@@ -121,6 +127,76 @@ pub enum DetailMode {
 pub enum TicketSyncStage {
     ActiveOnly,
     Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupSelectionState {
+    None,
+    Partial,
+    All,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BulkAction {
+    Move,
+    Assign,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BulkTarget {
+    Move {
+        status: crate::cache::Status,
+        resolution: Option<String>,
+    },
+    Assign {
+        member_email: String,
+        member_name: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BulkSummary {
+    pub action: BulkAction,
+    pub target: BulkTarget,
+    pub total: usize,
+    pub attempted: usize,
+    pub succeeded: usize,
+    pub skipped: usize,
+    pub failed: usize,
+    pub successful_keys: Vec<String>,
+    pub failed_details: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+pub enum BulkState {
+    ActionPicker {
+        targets: Vec<String>,
+        selected: usize,
+    },
+    MoveStatusPicker {
+        targets: Vec<String>,
+        selected: usize,
+    },
+    MoveResolutionPicker {
+        targets: Vec<String>,
+        status: crate::cache::Status,
+        selected: usize,
+    },
+    AssignPicker {
+        targets: Vec<String>,
+        selected: usize,
+    },
+    Confirm {
+        targets: Vec<String>,
+        target: BulkTarget,
+    },
+    Running {
+        targets: Vec<String>,
+        target: BulkTarget,
+    },
+    Result {
+        summary: BulkSummary,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,6 +252,10 @@ pub struct App {
     pub should_quit: bool,
     /// State for the create ticket modal overlay.
     pub create_ticket: Option<CreateTicketState>,
+    /// Selected ticket keys in the current visible list context.
+    pub selected_ticket_keys: HashSet<String>,
+    /// State for the bulk actions modal flow.
+    pub bulk_state: Option<BulkState>,
     /// State for the comment modal overlay.
     pub comment_state: Option<CommentState>,
     /// State for the assign/reassign modal overlay.
@@ -222,6 +302,8 @@ impl App {
             visible_keys_cache: RefCell::new(VisibleKeysCache::default()),
             should_quit: false,
             create_ticket: None,
+            selected_ticket_keys: HashSet::new(),
+            bulk_state: None,
             comment_state: None,
             assign_state: None,
             edit_state: None,
@@ -487,7 +569,10 @@ impl App {
                 .epic_name
                 .clone()
                 .unwrap_or_else(|| NO_EPIC_SUMMARY.to_string());
-            grouped.entry((epic_key, epic_summary)).or_default().push(ticket);
+            grouped
+                .entry((epic_key, epic_summary))
+                .or_default()
+                .push(ticket);
         }
 
         let mut groups: Vec<_> = grouped
@@ -700,6 +785,10 @@ impl App {
         self.create_ticket.is_some()
     }
 
+    pub fn is_bulk_open(&self) -> bool {
+        self.bulk_state.is_some()
+    }
+
     pub fn is_comment_open(&self) -> bool {
         self.comment_state.is_some()
     }
@@ -747,6 +836,110 @@ impl App {
         None
     }
 
+    fn visible_ticket_keys_in_group(&self, group_id: &str) -> Vec<String> {
+        self.ensure_visible_keys_cache();
+        let cache = self.visible_keys_cache.borrow();
+        let mut keys = Vec::new();
+        let mut in_group = false;
+        for item in &cache.items {
+            match item {
+                VisibleItem::GroupHeader(id) => {
+                    if in_group {
+                        break;
+                    }
+                    in_group = id == group_id;
+                }
+                VisibleItem::Ticket(key) if in_group => keys.push(key.clone()),
+                VisibleItem::Ticket(_) => {}
+            }
+        }
+        keys
+    }
+
+    pub fn toggle_selection_at_cursor(&mut self) {
+        match self.selected_item() {
+            Some(VisibleItem::Ticket(key)) => {
+                if !self.selected_ticket_keys.remove(&key) {
+                    self.selected_ticket_keys.insert(key);
+                }
+            }
+            Some(VisibleItem::GroupHeader(group_id)) => self.toggle_group_selection(&group_id),
+            None => {}
+        }
+    }
+
+    pub fn toggle_group_selection(&mut self, group_id: &str) {
+        let keys = self.visible_ticket_keys_in_group(group_id);
+        if keys.is_empty() {
+            return;
+        }
+        let all_selected = keys.iter().all(|k| self.selected_ticket_keys.contains(k));
+        if all_selected {
+            for key in keys {
+                self.selected_ticket_keys.remove(&key);
+            }
+        } else {
+            for key in keys {
+                self.selected_ticket_keys.insert(key);
+            }
+        }
+    }
+
+    pub fn select_all_visible_tickets(&mut self) {
+        self.ensure_visible_keys_cache();
+        let cache = self.visible_keys_cache.borrow();
+        for item in &cache.items {
+            if let VisibleItem::Ticket(key) = item {
+                self.selected_ticket_keys.insert(key.clone());
+            }
+        }
+    }
+
+    pub fn clear_selected_tickets(&mut self) {
+        self.selected_ticket_keys.clear();
+    }
+
+    pub fn selected_visible_ticket_keys_in_order(&self) -> Vec<String> {
+        self.ensure_visible_keys_cache();
+        let cache = self.visible_keys_cache.borrow();
+        cache
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                VisibleItem::Ticket(key) if self.selected_ticket_keys.contains(key) => {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn selected_ticket_count(&self) -> usize {
+        self.selected_ticket_keys.len()
+    }
+
+    pub fn is_ticket_selected(&self, key: &str) -> bool {
+        self.selected_ticket_keys.contains(key)
+    }
+
+    pub fn group_selection_state(&self, group_id: &str) -> GroupSelectionState {
+        let keys = self.visible_ticket_keys_in_group(group_id);
+        if keys.is_empty() {
+            return GroupSelectionState::None;
+        }
+        let selected = keys
+            .iter()
+            .filter(|k| self.selected_ticket_keys.contains(*k))
+            .count();
+        if selected == 0 {
+            GroupSelectionState::None
+        } else if selected == keys.len() {
+            GroupSelectionState::All
+        } else {
+            GroupSelectionState::Partial
+        }
+    }
+
     pub fn toggle_group_collapse(&mut self, group_id: &str) {
         let set = match self.active_tab {
             Tab::MyWork => &mut self.collapsed_my_work,
@@ -764,9 +957,11 @@ impl App {
             // Move selection to the group header
             self.ensure_visible_keys_cache();
             let cache = self.visible_keys_cache.borrow();
-            if let Some(pos) = cache.items.iter().position(|item| {
-                matches!(item, VisibleItem::GroupHeader(ref id) if id == group_id)
-            }) {
+            if let Some(pos) = cache
+                .items
+                .iter()
+                .position(|item| matches!(item, VisibleItem::GroupHeader(ref id) if id == group_id))
+            {
                 drop(cache);
                 self.selected_index = pos;
             }
@@ -795,8 +990,7 @@ impl App {
                 (&mut self.collapsed_team, ids)
             }
             Tab::Epics => {
-                let ids: Vec<String> =
-                    self.cache.epics.iter().map(|e| e.key.clone()).collect();
+                let ids: Vec<String> = self.cache.epics.iter().map(|e| e.key.clone()).collect();
                 (&mut self.collapsed_epics, ids)
             }
             Tab::Unassigned => {
@@ -883,6 +1077,21 @@ impl App {
         }
     }
 
+    pub fn prune_selection_to_visible(&mut self) {
+        self.ensure_visible_keys_cache();
+        let visible: HashSet<String> = self
+            .visible_keys_cache
+            .borrow()
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                VisibleItem::Ticket(key) => Some(key.clone()),
+                _ => None,
+            })
+            .collect();
+        self.selected_ticket_keys.retain(|k| visible.contains(k));
+    }
+
     /// Total number of selectable items (headers + tickets) in the current tab.
     pub fn item_count(&self) -> usize {
         self.ensure_visible_keys_cache();
@@ -890,6 +1099,7 @@ impl App {
     }
 
     pub fn clamp_selection(&mut self) {
+        self.prune_selection_to_visible();
         let count = self.item_count();
         if count == 0 {
             self.selected_index = 0;
@@ -1011,6 +1221,50 @@ impl App {
                 }
             }
         }
+        for ticket in &mut self.filter_results {
+            if ticket.key == key {
+                ticket.status = new_status.clone();
+                changed = true;
+            }
+        }
+        if changed {
+            self.mark_cache_changed();
+        }
+    }
+
+    /// Update a ticket's assignee in the cache.
+    pub fn update_ticket_assignee(&mut self, key: &str, name: &str, email: &str) {
+        let mut changed = false;
+        for ticket in &mut self.cache.my_tickets {
+            if ticket.key == key {
+                ticket.assignee = Some(name.to_string());
+                ticket.assignee_email = Some(email.to_string());
+                changed = true;
+            }
+        }
+        for ticket in &mut self.cache.team_tickets {
+            if ticket.key == key {
+                ticket.assignee = Some(name.to_string());
+                ticket.assignee_email = Some(email.to_string());
+                changed = true;
+            }
+        }
+        for epic in &mut self.cache.epics {
+            for ticket in &mut epic.children {
+                if ticket.key == key {
+                    ticket.assignee = Some(name.to_string());
+                    ticket.assignee_email = Some(email.to_string());
+                    changed = true;
+                }
+            }
+        }
+        for ticket in &mut self.filter_results {
+            if ticket.key == key {
+                ticket.assignee = Some(name.to_string());
+                ticket.assignee_email = Some(email.to_string());
+                changed = true;
+            }
+        }
         if changed {
             self.mark_cache_changed();
         }
@@ -1019,7 +1273,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, Tab};
+    use super::{App, GroupSelectionState, Tab};
     use crate::cache::{Epic, Status, Ticket};
 
     fn ticket(key: &str, summary: &str) -> Ticket {
@@ -1276,5 +1530,128 @@ mod tests {
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
         assert_eq!(app.selected_ticket_key(), Some("AMP-102".to_string()));
+    }
+
+    #[test]
+    fn toggle_selection_at_cursor_toggles_ticket_membership() {
+        let mut app = App::new();
+        app.active_tab = Tab::MyWork;
+        app.loading = false;
+        let mut t = ticket("AMP-10", "Parser migration");
+        t.status = Status::InProgress;
+        app.cache.my_tickets = vec![t];
+
+        // H(In Progress), T(AMP-10)
+        app.selected_index = 1;
+        app.toggle_selection_at_cursor();
+        assert!(app.is_ticket_selected("AMP-10"));
+        app.toggle_selection_at_cursor();
+        assert!(!app.is_ticket_selected("AMP-10"));
+    }
+
+    #[test]
+    fn header_toggle_selects_and_clears_group_tickets() {
+        let mut app = App::new();
+        app.active_tab = Tab::MyWork;
+        app.loading = false;
+
+        let mut t1 = ticket("AMP-11", "A");
+        t1.status = Status::InProgress;
+        let mut t2 = ticket("AMP-12", "B");
+        t2.status = Status::InProgress;
+        app.cache.my_tickets = vec![t1, t2];
+
+        app.selected_index = 0; // In Progress header
+        app.toggle_selection_at_cursor();
+        assert!(app.is_ticket_selected("AMP-11"));
+        assert!(app.is_ticket_selected("AMP-12"));
+        assert_eq!(
+            app.group_selection_state(Status::InProgress.as_str()),
+            GroupSelectionState::All
+        );
+
+        app.toggle_selection_at_cursor();
+        assert!(!app.is_ticket_selected("AMP-11"));
+        assert!(!app.is_ticket_selected("AMP-12"));
+        assert_eq!(
+            app.group_selection_state(Status::InProgress.as_str()),
+            GroupSelectionState::None
+        );
+    }
+
+    #[test]
+    fn group_selection_state_reports_partial_when_some_selected() {
+        let mut app = App::new();
+        app.active_tab = Tab::MyWork;
+        app.loading = false;
+        let mut t1 = ticket("AMP-13", "A");
+        t1.status = Status::InProgress;
+        let mut t2 = ticket("AMP-14", "B");
+        t2.status = Status::InProgress;
+        app.cache.my_tickets = vec![t1, t2];
+
+        app.selected_ticket_keys.insert("AMP-13".to_string());
+        assert_eq!(
+            app.group_selection_state(Status::InProgress.as_str()),
+            GroupSelectionState::Partial
+        );
+    }
+
+    #[test]
+    fn select_all_and_clear_selected_tickets() {
+        let mut app = App::new();
+        app.active_tab = Tab::MyWork;
+        app.loading = false;
+        let mut t1 = ticket("AMP-21", "A");
+        t1.status = Status::InProgress;
+        let mut t2 = ticket("AMP-22", "B");
+        t2.status = Status::ReadyForWork;
+        app.cache.my_tickets = vec![t1, t2];
+
+        app.select_all_visible_tickets();
+        assert_eq!(app.selected_visible_ticket_keys_in_order().len(), 2);
+        app.clear_selected_tickets();
+        assert!(app.selected_visible_ticket_keys_in_order().is_empty());
+    }
+
+    #[test]
+    fn selected_visible_ticket_keys_preserve_row_order() {
+        let mut app = epics_app(vec![
+            Epic {
+                key: "AMP-100".to_string(),
+                summary: "Auth".to_string(),
+                children: vec![ticket("AMP-1", "Session"), ticket("AMP-2", "Password")],
+            },
+            Epic {
+                key: "AMP-200".to_string(),
+                summary: "Perf".to_string(),
+                children: vec![ticket("AMP-3", "Cache")],
+            },
+        ]);
+
+        app.selected_ticket_keys.insert("AMP-3".to_string());
+        app.selected_ticket_keys.insert("AMP-1".to_string());
+        assert_eq!(
+            app.selected_visible_ticket_keys_in_order(),
+            vec!["AMP-1".to_string(), "AMP-3".to_string()]
+        );
+    }
+
+    #[test]
+    fn prune_selection_removes_hidden_tickets_after_visibility_change() {
+        let mut app = App::new();
+        app.active_tab = Tab::MyWork;
+        app.loading = false;
+        let mut active = ticket("AMP-31", "Active");
+        active.status = Status::InProgress;
+        let mut done = ticket("AMP-32", "Done");
+        done.status = Status::Closed;
+        app.cache.my_tickets = vec![active, done];
+
+        app.selected_ticket_keys.insert("AMP-31".to_string());
+        app.selected_ticket_keys.insert("AMP-32".to_string());
+        app.toggle_show_done(); // hides closed tickets
+        assert!(app.is_ticket_selected("AMP-31"));
+        assert!(!app.is_ticket_selected("AMP-32"));
     }
 }

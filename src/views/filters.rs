@@ -117,7 +117,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        let key_w = 10usize;
+        let key_w = 14usize;
         let status_w = 14usize;
         let inner = area.width.saturating_sub(2) as usize;
         let fixed = 2 + key_w + 3 + status_w + 3 + 3;
@@ -128,7 +128,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             .add_modifier(Modifier::BOLD);
 
         lines.push(Line::from(vec![
-            Span::styled(format!("  {:<key_w$}", "KEY"), heading_style),
+            Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
@@ -143,6 +143,11 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
         for (i, ticket) in app.filter_results.iter().enumerate() {
             let is_selected = i == app.selected_index && results_focused;
+            let marker = if app.is_ticket_selected(&ticket.key) {
+                "[x]"
+            } else {
+                "[ ]"
+            };
 
             let base = if is_selected {
                 Style::default().bg(Color::DarkGray)
@@ -159,7 +164,10 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             };
 
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:<key_w$}", ticket.key), base),
+                Span::styled(
+                    format!("  {:<key_w$}", format!("{} {}", marker, ticket.key)),
+                    base,
+                ),
                 Span::styled(" | ", base),
                 Span::styled(
                     format!("{:<status_w$}", truncate(ticket.status.as_str(), status_w)),

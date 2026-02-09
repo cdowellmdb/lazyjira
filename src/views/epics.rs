@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::app::{App, Tab};
+use crate::app::{App, GroupSelectionState, Tab};
 use crate::cache::Status;
 
 fn status_color(status: &Status) -> Color {
@@ -29,8 +29,16 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+fn group_marker(state: GroupSelectionState) -> &'static str {
+    match state {
+        GroupSelectionState::None => "[ ]",
+        GroupSelectionState::Partial => "[~]",
+        GroupSelectionState::All => "[x]",
+    }
+}
+
 fn child_column_widths(area: Rect) -> (usize, usize, usize) {
-    let key_w = 10usize;
+    let key_w = 14usize;
     let mut status_w = 12usize;
     let mut summary_w = 48usize;
     let inner = area.width.saturating_sub(2) as usize;
@@ -90,7 +98,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     if !visible_epics.is_empty() {
         let header_w = 4 + key_w + 3 + status_w + 3 + summary_w;
         lines.push(Line::from(vec![
-            Span::styled(format!("    {:<key_w$}", "KEY"), heading_style),
+            Span::styled(format!("    {:<key_w$}", "SEL KEY"), heading_style),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
@@ -106,6 +114,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     for (epic, children) in visible_epics {
         let collapsed = app.is_collapsed(Tab::Epics, &epic.key);
         let indicator = if collapsed { ">" } else { "v" };
+        let marker = group_marker(app.group_selection_state(&epic.key));
 
         let is_header_selected = item_idx == app.selected_index;
         if is_header_selected {
@@ -128,11 +137,13 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             format!("{}  ({} / {} done, {:.1}%)", progress, done, total, pct)
         };
         let inner = area.width.saturating_sub(2) as usize;
-        let prefix = 2 + 10 + 2; // indicator + space + key + gap
+        let prefix = 4 + 1 + 1 + 10 + 2; // marker + indicator + space + key + gap
         let epic_summary_w = inner.saturating_sub(prefix).max(12);
 
         let header_key_style = if is_header_selected {
-            Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray)
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .bg(Color::DarkGray)
         } else {
             Style::default().add_modifier(Modifier::BOLD)
         };
@@ -143,7 +154,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         };
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{} {:<10}", indicator, epic.key),
+                format!("{} {} {:<10}", marker, indicator, epic.key),
                 header_key_style,
             ),
             Span::raw("  "),
@@ -195,9 +206,17 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     Style::default().fg(status_color(&ticket.status))
                 };
+                let marker = if app.is_ticket_selected(&ticket.key) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
 
                 lines.push(Line::from(vec![
-                    Span::styled(format!("    {:<key_w$}", ticket.key), base),
+                    Span::styled(
+                        format!("    {:<key_w$}", format!("{} {}", marker, ticket.key)),
+                        base,
+                    ),
                     Span::styled(" | ", base),
                     Span::styled(
                         format!("{:<status_w$}", ticket.status.as_str()),

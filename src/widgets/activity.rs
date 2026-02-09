@@ -19,7 +19,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, entries: &[ActivityEntry], scr
 
     lines.push(Line::from(Span::styled(
         "Activity History",
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
@@ -51,7 +53,10 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, entries: &[ActivityEntry], scr
 
         lines.push(Line::from(vec![
             Span::styled(format!("{:<17}", ts), Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{:<20}", entry.author), Style::default().fg(Color::White)),
+            Span::styled(
+                format!("{:<20}", entry.author),
+                Style::default().fg(Color::White),
+            ),
             Span::styled(detail, Style::default().fg(Color::Gray)),
         ]));
     }

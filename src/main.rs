@@ -20,7 +20,10 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::cache::Status;
 use crate::config::AppConfig;
-use app::{App, DetailMode, FilterFocus, Tab, TicketSyncStage};
+use app::{
+    App, BulkAction, BulkState, BulkSummary, BulkTarget, DetailMode, FilterFocus, Tab,
+    TicketSyncStage,
+};
 
 #[derive(Debug, Clone, Copy)]
 enum CacheRefreshPhase {
@@ -49,6 +52,7 @@ enum BackgroundMessage {
         key: String,
         result: std::result::Result<(), String>,
     },
+    BulkCompleted(BulkSummary),
     FilterResults(std::result::Result<Vec<crate::cache::Ticket>, String>),
 }
 
@@ -63,7 +67,11 @@ fn spawn_epics_refresh(tx: &UnboundedSender<BackgroundMessage>, config: &AppConf
     });
 }
 
-fn spawn_cache_refresh(tx: &UnboundedSender<BackgroundMessage>, phase: CacheRefreshPhase, config: &AppConfig) {
+fn spawn_cache_refresh(
+    tx: &UnboundedSender<BackgroundMessage>,
+    phase: CacheRefreshPhase,
+    config: &AppConfig,
+) {
     let tx = tx.clone();
     let config = config.clone();
     tokio::spawn(async move {
@@ -133,6 +141,169 @@ fn queue_detail_prefetch(app: &mut App, bg_tx: &UnboundedSender<BackgroundMessag
         .filter(|k| app.begin_detail_fetch(k))
         .collect::<Vec<_>>();
     spawn_ticket_detail_prefetch(bg_tx, prefetch_keys);
+}
+
+fn bulk_target_already_applied(ticket: &crate::cache::Ticket, target: &BulkTarget) -> bool {
+    match target {
+        BulkTarget::Move { status, .. } => &ticket.status == status,
+        BulkTarget::Assign { member_email, .. } => {
+            ticket.assignee_email.as_deref() == Some(member_email.as_str())
+        }
+    }
+}
+
+fn partition_bulk_targets(
+    app: &App,
+    targets: &[String],
+    target: &BulkTarget,
+) -> (Vec<String>, usize) {
+    let mut attempt = Vec::new();
+    let mut skipped = 0usize;
+    for key in targets {
+        match app.find_ticket(key) {
+            Some(ticket) if bulk_target_already_applied(ticket, target) => skipped += 1,
+            Some(_) => attempt.push(key.clone()),
+            None => skipped += 1,
+        }
+    }
+    (attempt, skipped)
+}
+
+fn summarize_bulk_results(
+    action: BulkAction,
+    target: BulkTarget,
+    total: usize,
+    attempted: usize,
+    skipped: usize,
+    results: Vec<(String, std::result::Result<(), String>)>,
+) -> BulkSummary {
+    let mut succeeded = 0usize;
+    let mut failed = 0usize;
+    let mut successful_keys = Vec::new();
+    let mut failed_details = Vec::new();
+    for (key, result) in results {
+        match result {
+            Ok(()) => {
+                succeeded += 1;
+                successful_keys.push(key);
+            }
+            Err(err) => {
+                failed += 1;
+                failed_details.push((key, err));
+            }
+        }
+    }
+    BulkSummary {
+        action,
+        target,
+        total,
+        attempted,
+        succeeded,
+        skipped,
+        failed,
+        successful_keys,
+        failed_details,
+    }
+}
+
+fn apply_bulk_successes(app: &mut App, summary: &BulkSummary) {
+    match &summary.target {
+        BulkTarget::Move { status, .. } => {
+            for key in &summary.successful_keys {
+                app.update_ticket_status(key, status.clone());
+            }
+        }
+        BulkTarget::Assign {
+            member_email,
+            member_name,
+        } => {
+            for key in &summary.successful_keys {
+                app.update_ticket_assignee(key, member_name, member_email);
+            }
+        }
+    }
+    app.clamp_selection();
+}
+
+fn spawn_bulk_execution(
+    tx: &UnboundedSender<BackgroundMessage>,
+    targets: Vec<String>,
+    attempt_keys: Vec<String>,
+    target: BulkTarget,
+    skipped: usize,
+) {
+    const MAX_CONCURRENCY: usize = 6;
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let action = match target {
+            BulkTarget::Move { .. } => BulkAction::Move,
+            BulkTarget::Assign { .. } => BulkAction::Assign,
+        };
+        let total = targets.len();
+        let attempted = attempt_keys.len();
+        if attempt_keys.is_empty() {
+            let summary =
+                summarize_bulk_results(action, target, total, attempted, skipped, Vec::new());
+            let _ = tx.send(BackgroundMessage::BulkCompleted(summary));
+            return;
+        }
+
+        let mut iter = attempt_keys.into_iter();
+        let mut tasks = tokio::task::JoinSet::new();
+        let mut results = Vec::new();
+
+        let initial_workers = MAX_CONCURRENCY.min(attempted);
+        for _ in 0..initial_workers {
+            if let Some(key) = iter.next() {
+                let run_target = target.clone();
+                tasks.spawn(async move {
+                    let result = match run_target {
+                        BulkTarget::Move { status, resolution } => {
+                            jira_client::move_ticket(&key, status.as_str(), resolution.as_deref())
+                                .await
+                                .map_err(|e| e.to_string())
+                        }
+                        BulkTarget::Assign { member_email, .. } => {
+                            jira_client::assign_ticket(&key, &member_email)
+                                .await
+                                .map_err(|e| e.to_string())
+                        }
+                    };
+                    (key, result)
+                });
+            }
+        }
+
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok(outcome) => results.push(outcome),
+                Err(err) => results.push(("unknown".to_string(), Err(err.to_string()))),
+            }
+            if let Some(next_key) = iter.next() {
+                let run_target = target.clone();
+                tasks.spawn(async move {
+                    let result = match run_target {
+                        BulkTarget::Move { status, resolution } => jira_client::move_ticket(
+                            &next_key,
+                            status.as_str(),
+                            resolution.as_deref(),
+                        )
+                        .await
+                        .map_err(|e| e.to_string()),
+                        BulkTarget::Assign { member_email, .. } => {
+                            jira_client::assign_ticket(&next_key, &member_email)
+                                .await
+                                .map_err(|e| e.to_string())
+                        }
+                    };
+                    (next_key, result)
+                });
+            }
+        }
+
+        let summary = summarize_bulk_results(action, target, total, attempted, skipped, results);
+        let _ = tx.send(BackgroundMessage::BulkCompleted(summary));
+    });
 }
 
 #[tokio::main]
@@ -234,7 +405,9 @@ async fn main() -> Result<()> {
                         app.ticket_sync_stage = None;
                         app.clamp_selection();
                         queue_detail_prefetch(&mut app, &bg_tx);
-                        if let Err(e) = jira_client::save_full_cache_snapshot(&config.jira.project, &app.cache) {
+                        if let Err(e) =
+                            jira_client::save_full_cache_snapshot(&config.jira.project, &app.cache)
+                        {
                             app.flash = Some(format!("Cache snapshot write failed: {}", e));
                         } else {
                             app.flash = Some("Ticket cache is up to date".to_string());
@@ -253,7 +426,9 @@ async fn main() -> Result<()> {
                         app.ticket_sync_stage = None;
                         app.clamp_selection();
                         queue_detail_prefetch(&mut app, &bg_tx);
-                        if let Err(e) = jira_client::save_full_cache_snapshot(&config.jira.project, &app.cache) {
+                        if let Err(e) =
+                            jira_client::save_full_cache_snapshot(&config.jira.project, &app.cache)
+                        {
                             app.flash = Some(format!("Refreshed (cache save failed: {})", e));
                         } else {
                             app.flash =
@@ -300,35 +475,41 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                BackgroundMessage::CommentAdded(result) => {
-                    match result {
-                        Ok(key) => {
-                            app.flash = Some(format!("Comment added to {}", key));
-                        }
-                        Err(e) => {
-                            app.flash = Some(format!("Comment failed: {}", e));
-                        }
+                BackgroundMessage::CommentAdded(result) => match result {
+                    Ok(key) => {
+                        app.flash = Some(format!("Comment added to {}", key));
                     }
-                }
-                BackgroundMessage::TicketAssigned { key, result } => {
-                    match result {
-                        Ok(()) => {
-                            app.flash = Some(format!("Assigned {}", key));
-                        }
-                        Err(e) => {
-                            app.flash = Some(format!("Assign failed for {}: {}", key, e));
-                        }
+                    Err(e) => {
+                        app.flash = Some(format!("Comment failed: {}", e));
                     }
-                }
-                BackgroundMessage::TicketEdited { key, result } => {
-                    match result {
-                        Ok(()) => {
-                            app.flash = Some(format!("Updated {}", key));
-                        }
-                        Err(e) => {
-                            app.flash = Some(format!("Edit failed for {}: {}", key, e));
-                        }
+                },
+                BackgroundMessage::TicketAssigned { key, result } => match result {
+                    Ok(()) => {
+                        app.flash = Some(format!("Assigned {}", key));
                     }
+                    Err(e) => {
+                        app.flash = Some(format!("Assign failed for {}: {}", key, e));
+                    }
+                },
+                BackgroundMessage::TicketEdited { key, result } => match result {
+                    Ok(()) => {
+                        app.flash = Some(format!("Updated {}", key));
+                    }
+                    Err(e) => {
+                        app.flash = Some(format!("Edit failed for {}: {}", key, e));
+                    }
+                },
+                BackgroundMessage::BulkCompleted(summary) => {
+                    apply_bulk_successes(&mut app, &summary);
+                    let action_label = match summary.action {
+                        BulkAction::Move => "move",
+                        BulkAction::Assign => "assign",
+                    };
+                    app.flash = Some(format!(
+                        "Bulk {} complete: {} succeeded, {} failed, {} skipped",
+                        action_label, summary.succeeded, summary.failed, summary.skipped
+                    ));
+                    app.bulk_state = Some(BulkState::Result { summary });
                 }
                 BackgroundMessage::FilterResults(result) => {
                     app.filter_loading = false;
@@ -337,6 +518,7 @@ async fn main() -> Result<()> {
                             let count = tickets.len();
                             app.filter_results = tickets;
                             app.mark_cache_changed();
+                            app.prune_selection_to_visible();
                             app.filter_focus = FilterFocus::Results;
                             app.selected_index = 0;
                             app.flash = Some(format!("Filter returned {} tickets", count));
@@ -344,6 +526,7 @@ async fn main() -> Result<()> {
                         Err(e) => {
                             app.filter_results.clear();
                             app.mark_cache_changed();
+                            app.prune_selection_to_visible();
                             app.flash = Some(format!("Filter query failed: {}", e));
                         }
                     }
@@ -368,13 +551,22 @@ async fn main() -> Result<()> {
                     if app.is_filter_edit_open() {
                         handle_filter_edit_keys(&mut app, key.code, &mut config);
                     } else if app.is_create_ticket_open() {
-                        handle_create_ticket_keys(&mut app, key.code, key.modifiers, &bg_tx, &config).await;
+                        handle_create_ticket_keys(
+                            &mut app,
+                            key.code,
+                            key.modifiers,
+                            &bg_tx,
+                            &config,
+                        )
+                        .await;
                     } else if app.is_comment_open() {
                         handle_comment_keys(&mut app, key.code, &bg_tx);
                     } else if app.is_assign_open() {
                         handle_assign_keys(&mut app, key.code, &bg_tx);
                     } else if app.is_edit_open() {
                         handle_edit_keys(&mut app, key.code, &bg_tx);
+                    } else if app.is_bulk_open() {
+                        handle_bulk_keys(&mut app, key.code, &bg_tx, &config);
                     } else if app.show_keybindings {
                         handle_keybindings_keys(&mut app, key.code);
                     } else if app.is_detail_open() {
@@ -524,6 +716,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     } else if let Some(ref search) = app.search {
         Span::styled(format!("/{}", search), Style::default().fg(Color::Yellow))
     } else {
+        let selected_count = app.selected_ticket_count();
         if app.active_tab == Tab::Filters {
             let pane = match app.filter_focus {
                 FilterFocus::Sidebar => "sidebar",
@@ -531,8 +724,8 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
             };
             Span::styled(
                 format!(
-                    " j/k: navigate  Tab/S-Tab: switch pane({})  Enter: run/open  n: new  e: edit  x: delete  ?: keys  q: quit ",
-                    pane
+                    " j/k: navigate  Space: mark  A: all  u: clear  B: bulk  sel:{}  Tab/S-Tab: switch pane({})  Enter: run/open  n: new  e: edit  x: delete  ?: keys  q: quit ",
+                    selected_count, pane
                 ),
                 Style::default().fg(Color::DarkGray),
             )
@@ -559,8 +752,8 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
                 .unwrap_or("all");
             Span::styled(
                 format!(
-                    " Tab: switch  j/k: navigate  Enter: detail  z: fold  d: done({})  p/w/n/v: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
-                    done_state, focus_state, ticket_state, freshness_state, epic_state
+                    " Tab: switch  j/k: navigate  Space: mark  A: all  u: clear  B: bulk  sel:{}  Enter: detail  z: fold  d: done({})  p/w/n/v: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
+                    selected_count, done_state, focus_state, ticket_state, freshness_state, epic_state
                 ),
                 Style::default().fg(Color::DarkGray),
             )
@@ -589,6 +782,9 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     }
     if app.is_filter_edit_open() {
         render_filter_edit_modal(f, app);
+    }
+    if app.is_bulk_open() {
+        widgets::bulk_actions::render(f, app, &config.resolutions);
     }
     if app.show_keybindings {
         widgets::keybindings_help::render(f);
@@ -654,7 +850,12 @@ fn queue_move_confirmation(app: &mut App, ticket_key: &str, selected: usize, new
     ));
 }
 
-fn perform_ticket_move(app: &mut App, ticket_key: String, new_status: Status, resolution: Option<String>) {
+fn perform_ticket_move(
+    app: &mut App,
+    ticket_key: String,
+    new_status: Status,
+    resolution: Option<String>,
+) {
     let status_str = new_status.as_str().to_string();
     let key_clone = ticket_key.clone();
 
@@ -662,7 +863,10 @@ fn perform_ticket_move(app: &mut App, ticket_key: String, new_status: Status, re
     app.update_ticket_status(&ticket_key, new_status);
     app.detail_mode = DetailMode::View;
     let flash_msg = match &resolution {
-        Some(r) => format!("Moving {} to {} (resolution: {})...", key_clone, status_str, r),
+        Some(r) => format!(
+            "Moving {} to {} (resolution: {})...",
+            key_clone, status_str, r
+        ),
         None => format!("Moving {} to {}...", key_clone, status_str),
     };
     app.flash = Some(flash_msg);
@@ -688,6 +892,191 @@ fn perform_or_pick_resolution(app: &mut App, ticket_key: String, new_status: Sta
         app.flash = Some("Select a resolution:".to_string());
     } else {
         perform_ticket_move(app, ticket_key, new_status, None);
+    }
+}
+
+fn begin_bulk_from_selection(app: &mut App) {
+    let mut targets = app.selected_visible_ticket_keys_in_order();
+    if targets.is_empty() {
+        if let Some(key) = app.selected_ticket_key() {
+            targets.push(key);
+        }
+    }
+    if targets.is_empty() {
+        app.flash = Some("No tickets selected".to_string());
+        return;
+    }
+    app.bulk_state = Some(BulkState::ActionPicker {
+        targets,
+        selected: 0,
+    });
+}
+
+fn handle_bulk_keys(
+    app: &mut App,
+    key: KeyCode,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+    config: &AppConfig,
+) {
+    let state = match app.bulk_state.clone() {
+        Some(state) => state,
+        None => return,
+    };
+    match state {
+        BulkState::ActionPicker { targets, selected } => match key {
+            KeyCode::Esc => app.bulk_state = None,
+            KeyCode::Char('j') | KeyCode::Down => {
+                let new_sel = (selected + 1).min(1);
+                app.bulk_state = Some(BulkState::ActionPicker {
+                    targets,
+                    selected: new_sel,
+                });
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.bulk_state = Some(BulkState::ActionPicker {
+                    targets,
+                    selected: selected.saturating_sub(1),
+                });
+            }
+            KeyCode::Enter => {
+                app.bulk_state = Some(if selected == 0 {
+                    BulkState::MoveStatusPicker {
+                        targets,
+                        selected: 0,
+                    }
+                } else {
+                    BulkState::AssignPicker {
+                        targets,
+                        selected: 0,
+                    }
+                });
+            }
+            _ => {}
+        },
+        BulkState::MoveStatusPicker { targets, selected } => match key {
+            KeyCode::Esc => app.bulk_state = None,
+            KeyCode::Char('j') | KeyCode::Down => {
+                let max = Status::all().len().saturating_sub(1);
+                app.bulk_state = Some(BulkState::MoveStatusPicker {
+                    targets,
+                    selected: (selected + 1).min(max),
+                });
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.bulk_state = Some(BulkState::MoveStatusPicker {
+                    targets,
+                    selected: selected.saturating_sub(1),
+                });
+            }
+            KeyCode::Enter => {
+                let Some(status) = Status::all().get(selected).cloned() else {
+                    return;
+                };
+                if is_terminal_status(&status) {
+                    app.bulk_state = Some(BulkState::MoveResolutionPicker {
+                        targets,
+                        status,
+                        selected: 0,
+                    });
+                } else {
+                    app.bulk_state = Some(BulkState::Confirm {
+                        targets,
+                        target: BulkTarget::Move {
+                            status,
+                            resolution: None,
+                        },
+                    });
+                }
+            }
+            _ => {}
+        },
+        BulkState::MoveResolutionPicker {
+            targets,
+            status,
+            selected,
+        } => match key {
+            KeyCode::Esc => app.bulk_state = None,
+            KeyCode::Char('j') | KeyCode::Down => {
+                let max = config.resolutions.len().saturating_sub(1);
+                app.bulk_state = Some(BulkState::MoveResolutionPicker {
+                    targets,
+                    status,
+                    selected: (selected + 1).min(max),
+                });
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.bulk_state = Some(BulkState::MoveResolutionPicker {
+                    targets,
+                    status,
+                    selected: selected.saturating_sub(1),
+                });
+            }
+            KeyCode::Enter => {
+                let resolution = config.resolutions.get(selected).cloned();
+                app.bulk_state = Some(BulkState::Confirm {
+                    targets,
+                    target: BulkTarget::Move { status, resolution },
+                });
+            }
+            _ => {}
+        },
+        BulkState::AssignPicker { targets, selected } => {
+            let max = app.cache.team_members.len().saturating_sub(1);
+            match key {
+                KeyCode::Esc => app.bulk_state = None,
+                KeyCode::Char('j') | KeyCode::Down => {
+                    app.bulk_state = Some(BulkState::AssignPicker {
+                        targets,
+                        selected: (selected + 1).min(max),
+                    });
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    app.bulk_state = Some(BulkState::AssignPicker {
+                        targets,
+                        selected: selected.saturating_sub(1),
+                    });
+                }
+                KeyCode::Enter => {
+                    let Some(member) = app.cache.team_members.get(selected) else {
+                        app.flash = Some("No team members configured".to_string());
+                        return;
+                    };
+                    app.bulk_state = Some(BulkState::Confirm {
+                        targets,
+                        target: BulkTarget::Assign {
+                            member_email: member.email.clone(),
+                            member_name: member.name.clone(),
+                        },
+                    });
+                }
+                _ => {}
+            }
+        }
+        BulkState::Confirm { targets, target } => match key {
+            KeyCode::Esc => app.bulk_state = None,
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let (attempt_keys, skipped) = partition_bulk_targets(app, &targets, &target);
+                app.flash = Some(format!(
+                    "Running bulk action on {} tickets...",
+                    targets.len()
+                ));
+                app.bulk_state = Some(BulkState::Running {
+                    targets: targets.clone(),
+                    target: target.clone(),
+                });
+                spawn_bulk_execution(bg_tx, targets, attempt_keys, target, skipped);
+            }
+            _ => {}
+        },
+        BulkState::Running { .. } => {
+            if matches!(key, KeyCode::Esc) {
+                app.bulk_state = None;
+            }
+        }
+        BulkState::Result { .. } => match key {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.bulk_state = None,
+            _ => {}
+        },
     }
 }
 
@@ -731,9 +1120,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, config: &AppConfig) {
                 if let Some(ref key) = app.detail_ticket_key {
                     let ticket = app.find_ticket(key);
                     let summary = ticket.map(|t| t.summary.clone()).unwrap_or_default();
-                    let labels = ticket
-                        .map(|t| t.labels.join(", "))
-                        .unwrap_or_default();
+                    let labels = ticket.map(|t| t.labels.join(", ")).unwrap_or_default();
                     app.edit_state = Some(app::EditFieldsState {
                         ticket_key: key.clone(),
                         focused_field: 0,
@@ -841,7 +1228,12 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, config: &AppConfig) {
             KeyCode::Enter => {
                 if let Some(resolution) = config.resolutions.get(selected) {
                     if let Some(ticket_key) = app.detail_ticket_key.clone() {
-                        perform_ticket_move(app, ticket_key, target_status, Some(resolution.clone()));
+                        perform_ticket_move(
+                            app,
+                            ticket_key,
+                            target_status,
+                            Some(resolution.clone()),
+                        );
                     }
                 }
             }
@@ -853,7 +1245,9 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, config: &AppConfig) {
                 app.detail_mode = DetailMode::History { scroll: scroll + 1 };
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                app.detail_mode = DetailMode::History { scroll: scroll.saturating_sub(1) };
+                app.detail_mode = DetailMode::History {
+                    scroll: scroll.saturating_sub(1),
+                };
             }
             _ => {}
         },
@@ -935,7 +1329,11 @@ async fn handle_create_ticket_keys(
         }
         KeyCode::BackTab => {
             let state = app.create_ticket.as_mut().unwrap();
-            state.focused_field = if state.focused_field == 0 { 3 } else { state.focused_field - 1 };
+            state.focused_field = if state.focused_field == 0 {
+                3
+            } else {
+                state.focused_field - 1
+            };
         }
         KeyCode::Enter => {
             if state.summary.trim().is_empty() {
@@ -1024,11 +1422,7 @@ async fn handle_create_ticket_keys(
     }
 }
 
-fn handle_comment_keys(
-    app: &mut App,
-    key: KeyCode,
-    bg_tx: &UnboundedSender<BackgroundMessage>,
-) {
+fn handle_comment_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
     match key {
         KeyCode::Esc => {
             app.comment_state = None;
@@ -1071,11 +1465,7 @@ fn handle_comment_keys(
     }
 }
 
-fn handle_assign_keys(
-    app: &mut App,
-    key: KeyCode,
-    bg_tx: &UnboundedSender<BackgroundMessage>,
-) {
+fn handle_assign_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
     let member_count = app.cache.team_members.len();
     match key {
         KeyCode::Esc => {
@@ -1149,11 +1539,7 @@ fn handle_assign_keys(
     }
 }
 
-fn handle_edit_keys(
-    app: &mut App,
-    key: KeyCode,
-    bg_tx: &UnboundedSender<BackgroundMessage>,
-) {
+fn handle_edit_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
     match key {
         KeyCode::Esc => {
             app.edit_state = None;
@@ -1236,8 +1622,12 @@ fn handle_edit_keys(
         KeyCode::Backspace => {
             if let Some(ref mut state) = app.edit_state {
                 match state.focused_field {
-                    0 => { state.summary.pop(); }
-                    1 => { state.labels.pop(); }
+                    0 => {
+                        state.summary.pop();
+                    }
+                    1 => {
+                        state.labels.pop();
+                    }
                     _ => {}
                 }
             }
@@ -1298,8 +1688,12 @@ fn handle_filter_edit_keys(app: &mut App, key: KeyCode, config: &mut AppConfig) 
             app.filter_edit = None;
         }
         KeyCode::Backspace => match state.focused_field {
-            0 => { state.name.pop(); }
-            1 => { state.jql.pop(); }
+            0 => {
+                state.name.pop();
+            }
+            1 => {
+                state.jql.pop();
+            }
             _ => {}
         },
         KeyCode::Char(c) => match state.focused_field {
@@ -1377,11 +1771,34 @@ fn handle_filter_keys(
                 }
             }
         }
+        KeyCode::Char(' ') => {
+            if app.filter_focus == FilterFocus::Results {
+                app.toggle_selection_at_cursor();
+            }
+        }
+        KeyCode::Char('A') => {
+            if app.filter_focus == FilterFocus::Results {
+                app.select_all_visible_tickets();
+                app.flash = Some(format!(
+                    "Selected {} tickets",
+                    app.selected_visible_ticket_keys_in_order().len()
+                ));
+            }
+        }
+        KeyCode::Char('u') => {
+            if app.filter_focus == FilterFocus::Results {
+                app.clear_selected_tickets();
+                app.flash = Some("Selection cleared".to_string());
+            }
+        }
+        KeyCode::Char('B') => {
+            if app.filter_focus == FilterFocus::Results {
+                begin_bulk_from_selection(app);
+            }
+        }
         KeyCode::Char('j') | KeyCode::Down => match app.filter_focus {
             FilterFocus::Sidebar => {
-                if !config.filters.is_empty()
-                    && app.filter_sidebar_idx < config.filters.len() - 1
-                {
+                if !config.filters.is_empty() && app.filter_sidebar_idx < config.filters.len() - 1 {
                     app.filter_sidebar_idx += 1;
                 }
             }
@@ -1450,6 +1867,19 @@ async fn handle_main_keys(
         KeyCode::Tab => app.next_tab(),
         KeyCode::Char('j') | KeyCode::Down => app.move_selection_down(),
         KeyCode::Char('k') | KeyCode::Up => app.move_selection_up(),
+        KeyCode::Char(' ') => app.toggle_selection_at_cursor(),
+        KeyCode::Char('A') => {
+            app.select_all_visible_tickets();
+            app.flash = Some(format!(
+                "Selected {} tickets",
+                app.selected_visible_ticket_keys_in_order().len()
+            ));
+        }
+        KeyCode::Char('u') => {
+            app.clear_selected_tickets();
+            app.flash = Some("Selection cleared".to_string());
+        }
+        KeyCode::Char('B') => begin_bulk_from_selection(app),
         KeyCode::Char('/') => app.search = Some(String::new()),
         KeyCode::Char('?') => app.toggle_keybindings(),
         KeyCode::Char('d') => {
@@ -1537,5 +1967,151 @@ async fn handle_main_keys(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn sample_config() -> AppConfig {
+        AppConfig {
+            jira: crate::config::JiraConfig {
+                project: "AMP".to_string(),
+                team_name: "Code Generation".to_string(),
+                done_window_days: 14,
+            },
+            team: BTreeMap::new(),
+            statuses: crate::config::StatusConfig::default(),
+            resolutions: crate::config::default_resolutions(),
+            filters: vec![],
+        }
+    }
+
+    fn ticket(key: &str, summary: &str, status: Status) -> crate::cache::Ticket {
+        crate::cache::Ticket {
+            key: key.to_string(),
+            summary: summary.to_string(),
+            status,
+            assignee: None,
+            assignee_email: None,
+            reporter: None,
+            description: None,
+            labels: Vec::new(),
+            epic_key: None,
+            epic_name: None,
+            detail_loaded: false,
+            url: format!("https://jira.mongodb.org/browse/{}", key),
+            activity: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn summarize_bulk_results_all_success() {
+        let target = BulkTarget::Move {
+            status: Status::InProgress,
+            resolution: None,
+        };
+        let summary = summarize_bulk_results(
+            BulkAction::Move,
+            target.clone(),
+            2,
+            2,
+            0,
+            vec![("AMP-1".to_string(), Ok(())), ("AMP-2".to_string(), Ok(()))],
+        );
+        assert_eq!(summary.target, target);
+        assert_eq!(summary.succeeded, 2);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.skipped, 0);
+    }
+
+    #[test]
+    fn summarize_bulk_results_partial_failure_and_skips() {
+        let summary = summarize_bulk_results(
+            BulkAction::Assign,
+            BulkTarget::Assign {
+                member_email: "dev@example.com".to_string(),
+                member_name: "Dev".to_string(),
+            },
+            3,
+            2,
+            1,
+            vec![
+                ("AMP-1".to_string(), Ok(())),
+                ("AMP-2".to_string(), Err("boom".to_string())),
+            ],
+        );
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.attempted, 2);
+        assert_eq!(summary.succeeded, 1);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.failed_details.len(), 1);
+    }
+
+    #[test]
+    fn summarize_bulk_results_empty_attempts() {
+        let summary = summarize_bulk_results(
+            BulkAction::Move,
+            BulkTarget::Move {
+                status: Status::Closed,
+                resolution: Some("Done".to_string()),
+            },
+            2,
+            0,
+            2,
+            vec![],
+        );
+        assert_eq!(summary.total, 2);
+        assert_eq!(summary.attempted, 0);
+        assert_eq!(summary.succeeded, 0);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.skipped, 2);
+    }
+
+    #[tokio::test]
+    async fn keybindings_regression_main_navigation_still_works() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::MyWork;
+        app.cache.my_tickets = vec![ticket("AMP-1", "A", Status::InProgress)];
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        handle_main_keys(
+            &mut app,
+            KeyCode::Char('j'),
+            KeyModifiers::NONE,
+            &tx,
+            &sample_config(),
+        )
+        .await;
+        assert_eq!(app.selected_index, 1);
+    }
+
+    #[tokio::test]
+    async fn bulk_menu_falls_back_to_current_ticket_when_nothing_selected() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::MyWork;
+        app.cache.my_tickets = vec![ticket("AMP-1", "A", Status::InProgress)];
+        app.selected_index = 1; // current ticket row
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        handle_main_keys(
+            &mut app,
+            KeyCode::Char('B'),
+            KeyModifiers::NONE,
+            &tx,
+            &sample_config(),
+        )
+        .await;
+
+        match app.bulk_state {
+            Some(BulkState::ActionPicker { targets, .. }) => {
+                assert_eq!(targets, vec!["AMP-1".to_string()]);
+            }
+            _ => panic!("expected bulk action picker"),
+        }
     }
 }

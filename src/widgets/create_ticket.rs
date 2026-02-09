@@ -2,8 +2,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, ISSUE_TYPES};
 use super::form;
+use crate::app::{App, ISSUE_TYPES};
 
 pub fn render(f: &mut ratatui::Frame, app: &App) {
     let state = match &app.create_ticket {

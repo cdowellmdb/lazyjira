@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::app::{App, Tab};
+use crate::app::{App, GroupSelectionState, Tab};
 use crate::cache::Status;
 
 fn status_color(status: &Status) -> Color {
@@ -28,8 +28,16 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+fn group_marker(state: GroupSelectionState) -> &'static str {
+    match state {
+        GroupSelectionState::None => "[ ]",
+        GroupSelectionState::Partial => "[~]",
+        GroupSelectionState::All => "[x]",
+    }
+}
+
 fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
-    let key_w = 10usize;
+    let key_w = 14usize;
     let mut summary_w = 34usize;
     let mut epic_w = 24usize;
     let mut labels_w = 22usize;
@@ -84,7 +92,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         if !has_rows {
             let header_w = 2 + key_w + 3 + summary_w + 3 + epic_w + 3 + labels_w;
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:<key_w$}", "KEY"), heading_style),
+                Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
@@ -104,13 +112,20 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
         let collapsed = app.is_collapsed(Tab::MyWork, status.as_str());
         let indicator = if collapsed { ">" } else { "v" };
+        let marker = group_marker(app.group_selection_state(status.as_str()));
 
         // Status header
         let is_header_selected = item_idx == app.selected_index;
         if is_header_selected {
             selected_visual_line = Some(lines.len());
         }
-        let header = format!("{} {} ({})", indicator, status.as_str().to_uppercase(), total_count);
+        let header = format!(
+            "{} {} {} ({})",
+            marker,
+            indicator,
+            status.as_str().to_uppercase(),
+            total_count
+        );
         let header_style = if is_header_selected {
             Style::default()
                 .fg(status_color(status))
@@ -141,6 +156,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 Style::default()
             };
+            let marker = if app.is_ticket_selected(&ticket.key) {
+                "[x]"
+            } else {
+                "[ ]"
+            };
 
             let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
             let labels_str = if ticket.labels.is_empty() {
@@ -150,7 +170,10 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             };
 
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:<key_w$}", ticket.key), base),
+                Span::styled(
+                    format!("  {:<key_w$}", format!("{} {}", marker, ticket.key)),
+                    base,
+                ),
                 Span::styled(" | ", base),
                 Span::styled(
                     format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),

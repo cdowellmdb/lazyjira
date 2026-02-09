@@ -2,8 +2,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::App;
 use super::form;
+use crate::app::App;
 
 pub fn render(f: &mut ratatui::Frame, app: &App) {
     let state = match &app.comment_state {
@@ -17,12 +17,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
 
-    form::render_text_input(
-        &mut lines,
-        "Comment",
-        &state.body,
-        true,
-    );
+    form::render_text_input(&mut lines, "Comment", &state.body, true);
 
     lines.push(Line::from(""));
     lines.push(Line::from(""));

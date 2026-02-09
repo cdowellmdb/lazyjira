@@ -9,6 +9,7 @@ A terminal UI for Jira focused on fast triage and team visibility.
 - Epic relationship mapping + progress bars
 - Rich ticket detail with description, labels, assignee, epic, activity history
 - In-TUI actions: create tickets, comment, assign, edit fields, move status
+- Multi-select + bulk move/assign from list views
 - Saved JQL filters with persistent config
 - Local caching for fast startup and detail open
 
@@ -48,6 +49,10 @@ lazyjira --dev-release    # release build + run
 |-----|--------|
 | `Tab` | Next tab |
 | `j/k` | Navigate |
+| `Space` | Toggle ticket/group selection |
+| `A` | Select all visible tickets |
+| `u` | Clear selected tickets |
+| `B` | Open bulk action menu |
 | `Enter` | Open detail |
 | `/` | Search |
 | `c` | Create ticket |
@@ -77,6 +82,10 @@ Move picker: `p/w/n/t/v/b/d` to select + confirm, uppercase to move immediately.
 | Key | Action |
 |-----|--------|
 | `j/k` | Navigate within focused pane |
+| `Space` | Toggle selection (results pane) |
+| `A` | Select all results (results pane) |
+| `u` | Clear selection (results pane) |
+| `B` | Open bulk actions (results pane) |
 | `Tab` | Switch to results / next tab |
 | `Shift+Tab` | Back to sidebar |
 | `Enter` | Run filter (sidebar) / open ticket (results) |

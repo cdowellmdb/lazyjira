@@ -103,12 +103,22 @@ impl AppConfig {
     }
 
     pub fn active_status_clause(&self) -> String {
-        let quoted: Vec<String> = self.statuses.active.iter().map(|s| format!("\"{}\"", s)).collect();
+        let quoted: Vec<String> = self
+            .statuses
+            .active
+            .iter()
+            .map(|s| format!("\"{}\"", s))
+            .collect();
         format!("({})", quoted.join(", "))
     }
 
     pub fn done_status_clause(&self) -> String {
-        let quoted: Vec<String> = self.statuses.done.iter().map(|s| format!("\"{}\"", s)).collect();
+        let quoted: Vec<String> = self
+            .statuses
+            .done
+            .iter()
+            .map(|s| format!("\"{}\"", s))
+            .collect();
         format!("({})", quoted.join(", "))
     }
 
@@ -136,8 +146,7 @@ pub fn load_config() -> Result<Option<AppConfig>> {
     }
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-    let config: AppConfig =
-        toml::from_str(&content).context("Failed to parse config.toml")?;
+    let config: AppConfig = toml::from_str(&content).context("Failed to parse config.toml")?;
     Ok(Some(config))
 }
 
@@ -188,7 +197,10 @@ mod tests {
         assert_eq!(parsed.jira.team_name, config.jira.team_name);
         assert_eq!(parsed.jira.done_window_days, config.jira.done_window_days);
         assert_eq!(parsed.team.len(), config.team.len());
-        assert_eq!(parsed.team.get("alice"), Some(&"alice@example.com".to_string()));
+        assert_eq!(
+            parsed.team.get("alice"),
+            Some(&"alice@example.com".to_string())
+        );
         assert_eq!(parsed.statuses.active, config.statuses.active);
         assert_eq!(parsed.statuses.done, config.statuses.done);
         assert_eq!(parsed.filters.len(), 1);

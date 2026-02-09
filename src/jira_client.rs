@@ -181,7 +181,11 @@ async fn fetch_tickets_for_query(config: &AppConfig, query: &str) -> Result<Vec<
 }
 
 /// Fetch epic children using both company-managed (Epic Link) and team-managed (parent) style links.
-async fn fetch_children_for_epic(config: &AppConfig, epic_key: &str, epic_summary: &str) -> Result<Vec<Ticket>> {
+async fn fetch_children_for_epic(
+    config: &AppConfig,
+    epic_key: &str,
+    epic_summary: &str,
+) -> Result<Vec<Ticket>> {
     let epic_link_query = format!("\"Epic Link\" = {}", epic_key);
     let parent_query = format!("parent = {}", epic_key);
 
@@ -273,14 +277,20 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
     let mut activity = Vec::new();
 
     // Parse changelog
-    if let Some(histories) = json.get("changelog")
+    if let Some(histories) = json
+        .get("changelog")
         .and_then(|c| c.get("histories"))
         .and_then(|h| h.as_array())
     {
         for history in histories {
             let timestamp = history["created"].as_str().unwrap_or("").to_string();
-            let author = history["author"]["displayName"].as_str().unwrap_or("Unknown").to_string();
-            let author_email = history["author"]["emailAddress"].as_str().map(|s| s.to_string());
+            let author = history["author"]["displayName"]
+                .as_str()
+                .unwrap_or("Unknown")
+                .to_string();
+            let author_email = history["author"]["emailAddress"]
+                .as_str()
+                .map(|s| s.to_string());
 
             if let Some(items) = history["items"].as_array() {
                 for item in items {
@@ -289,12 +299,19 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
                     let to_str = item["toString"].as_str().unwrap_or("").to_string();
 
                     let kind = match field {
-                        "status" => ActivityKind::StatusChange { from: from_str, to: to_str },
+                        "status" => ActivityKind::StatusChange {
+                            from: from_str,
+                            to: to_str,
+                        },
                         "assignee" => ActivityKind::AssigneeChange {
                             from: Some(from_str).filter(|s| !s.is_empty()),
                             to: Some(to_str).filter(|s| !s.is_empty()),
                         },
-                        _ => ActivityKind::FieldChange { field: field.to_string(), from: from_str, to: to_str },
+                        _ => ActivityKind::FieldChange {
+                            field: field.to_string(),
+                            from: from_str,
+                            to: to_str,
+                        },
                     };
 
                     activity.push(ActivityEntry {
@@ -309,15 +326,21 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
     }
 
     // Parse comments
-    if let Some(comments) = json.get("fields")
+    if let Some(comments) = json
+        .get("fields")
         .and_then(|f| f.get("comment"))
         .and_then(|c| c.get("comments"))
         .and_then(|c| c.as_array())
     {
         for comment in comments {
             let timestamp = comment["created"].as_str().unwrap_or("").to_string();
-            let author = comment["author"]["displayName"].as_str().unwrap_or("Unknown").to_string();
-            let author_email = comment["author"]["emailAddress"].as_str().map(|s| s.to_string());
+            let author = comment["author"]["displayName"]
+                .as_str()
+                .unwrap_or("Unknown")
+                .to_string();
+            let author_email = comment["author"]["emailAddress"]
+                .as_str()
+                .map(|s| s.to_string());
             let body = comment["body"].as_str().unwrap_or("").to_string();
 
             activity.push(ActivityEntry {
@@ -353,10 +376,15 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
 }
 
 /// Fetch tickets assigned to a specific user, setting assignee_email on results.
-async fn fetch_tickets_for_user(config: &AppConfig, email: &str, scope: TicketFetchScope) -> Result<Vec<Ticket>> {
+async fn fetch_tickets_for_user(
+    config: &AppConfig,
+    email: &str,
+    scope: TicketFetchScope,
+) -> Result<Vec<Ticket>> {
     let active_query = format!(
         "assignee = \"{}\" AND status in {}",
-        email, config.active_status_clause()
+        email,
+        config.active_status_clause()
     );
 
     let mut tickets_by_key: HashMap<String, Ticket> = HashMap::new();
@@ -371,7 +399,9 @@ async fn fetch_tickets_for_user(config: &AppConfig, email: &str, scope: TicketFe
         TicketFetchScope::ActiveAndRecentDone => {
             let recent_done_query = format!(
                 "assignee = \"{}\" AND status in {} AND updated >= {}",
-                email, config.done_status_clause(), config.done_window()
+                email,
+                config.done_status_clause(),
+                config.done_window()
             );
             let (active_result, done_result) = tokio::join!(
                 fetch_tickets_for_query(config, &active_query),
@@ -396,12 +426,14 @@ async fn fetch_tickets_for_user(config: &AppConfig, email: &str, scope: TicketFe
 fn unassigned_team_active_query(config: &AppConfig) -> String {
     format!(
         "assignee is EMPTY AND \"Assigned Teams\" = \"{}\" AND status in {}",
-        config.jira.team_name, config.active_status_clause()
+        config.jira.team_name,
+        config.active_status_clause()
     )
 }
 
 async fn fetch_unassigned_team_tickets(config: &AppConfig) -> Result<Vec<Ticket>> {
-    let mut tickets = fetch_tickets_for_query(config, &unassigned_team_active_query(config)).await?;
+    let mut tickets =
+        fetch_tickets_for_query(config, &unassigned_team_active_query(config)).await?;
     for ticket in &mut tickets {
         ticket.assignee = Some(UNASSIGNED_TEAM_NAME.to_string());
         ticket.assignee_email = Some(UNASSIGNED_TEAM_EMAIL.to_string());
@@ -858,7 +890,11 @@ pub async fn move_ticket(key: &str, status: &str, resolution: Option<&str>) -> R
 
 /// Add a comment to a ticket via `jira issue comment add`.
 pub async fn add_comment(key: &str, body: &str) -> Result<()> {
-    run_cmd("jira", &["issue", "comment", "add", key, body, "--no-input"]).await?;
+    run_cmd(
+        "jira",
+        &["issue", "comment", "add", key, body, "--no-input"],
+    )
+    .await?;
     Ok(())
 }
 
@@ -869,7 +905,11 @@ pub async fn assign_ticket(key: &str, email: &str) -> Result<()> {
 }
 
 /// Edit ticket fields via `jira issue edit`.
-pub async fn edit_ticket(key: &str, summary: Option<&str>, labels: Option<&[String]>) -> Result<()> {
+pub async fn edit_ticket(
+    key: &str,
+    summary: Option<&str>,
+    labels: Option<&[String]>,
+) -> Result<()> {
     let mut args = vec!["issue", "edit", key, "--no-input"];
 
     if let Some(s) = summary {
@@ -902,11 +942,15 @@ pub async fn create_ticket(
     epic_key: Option<&str>,
 ) -> Result<String> {
     let mut args = vec![
-        "issue", "create",
-        "-t", issue_type,
-        "-s", summary,
+        "issue",
+        "create",
+        "-t",
+        issue_type,
+        "-s",
+        summary,
         "--no-input",
-        "-p", project,
+        "-p",
+        project,
     ];
 
     let assignee_str;
@@ -938,8 +982,8 @@ pub async fn create_ticket(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::config::{JiraConfig, StatusConfig};
+    use std::collections::BTreeMap;
 
     #[test]
     fn parse_ticket_line_handles_empty_assignee() {
@@ -968,7 +1012,11 @@ mod tests {
     #[test]
     fn unassigned_query_filters_for_team_name_from_config() {
         let config = AppConfig {
-            jira: JiraConfig { project: "AMP".into(), team_name: "Code Generation".into(), done_window_days: 14 },
+            jira: JiraConfig {
+                project: "AMP".into(),
+                team_name: "Code Generation".into(),
+                done_window_days: 14,
+            },
             team: BTreeMap::new(),
             statuses: StatusConfig::default(),
             resolutions: crate::config::default_resolutions(),

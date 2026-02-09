@@ -2,8 +2,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::App;
 use super::form;
+use crate::app::App;
 
 pub fn render(f: &mut ratatui::Frame, app: &App) {
     let state = match &app.edit_state {

@@ -98,10 +98,22 @@ pub struct ActivityEntry {
 /// The type of activity: status change, comment, assignee change, or generic field change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActivityKind {
-    StatusChange { from: String, to: String },
-    Comment { body: String },
-    AssigneeChange { from: Option<String>, to: Option<String> },
-    FieldChange { field: String, from: String, to: String },
+    StatusChange {
+        from: String,
+        to: String,
+    },
+    Comment {
+        body: String,
+    },
+    AssigneeChange {
+        from: Option<String>,
+        to: Option<String>,
+    },
+    FieldChange {
+        field: String,
+        from: String,
+        to: String,
+    },
 }
 
 /// A single Jira ticket.

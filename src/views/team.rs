@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::app::{App, Tab};
+use crate::app::{App, GroupSelectionState, Tab};
 use crate::cache::Status;
 
 fn status_color(status: &Status) -> Color {
@@ -28,8 +28,16 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+fn group_marker(state: GroupSelectionState) -> &'static str {
+    match state {
+        GroupSelectionState::None => "[ ]",
+        GroupSelectionState::Partial => "[~]",
+        GroupSelectionState::All => "[x]",
+    }
+}
+
 fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
-    let key_w = 10usize;
+    let key_w = 14usize;
     let status_w = 15usize;
     let mut summary_w = 28usize;
     let mut epic_w = 20usize;
@@ -78,6 +86,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     for (member, active, done) in members {
         let collapsed = app.is_collapsed(Tab::Team, &member.email);
         let indicator = if collapsed { ">" } else { "v" };
+        let marker = group_marker(app.group_selection_state(&member.email));
 
         // Member header
         let is_header_selected = item_idx == app.selected_index;
@@ -85,7 +94,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             selected_visual_line = Some(lines.len());
         }
         let header_style = if is_header_selected {
-            Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray)
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .bg(Color::DarkGray)
         } else {
             Style::default().add_modifier(Modifier::BOLD)
         };
@@ -98,7 +109,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             };
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("{} {}", indicator, member.name),
+                    format!("{} {} {}", marker, indicator, member.name),
                     header_style,
                 ),
                 Span::styled(
@@ -112,7 +123,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         }
 
         lines.push(Line::from(Span::styled(
-            format!("{} {}", indicator, member.name),
+            format!("{} {} {}", marker, indicator, member.name),
             header_style,
         )));
         item_idx += 1;
@@ -124,7 +135,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             )));
         } else {
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:<key_w$}", "KEY"), heading_style),
+                Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
@@ -159,9 +170,17 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     ticket.labels.join(", ")
                 };
+                let marker = if app.is_ticket_selected(&ticket.key) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
 
                 lines.push(Line::from(vec![
-                    Span::styled(format!("  {:<key_w$}", ticket.key), base),
+                    Span::styled(
+                        format!("  {:<key_w$}", format!("{} {}", marker, ticket.key)),
+                        base,
+                    ),
                     Span::styled(" | ", base),
                     Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
                     Span::styled(" | ", base),
@@ -225,9 +244,17 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     ticket.labels.join(", ")
                 };
+                let marker = if app.is_ticket_selected(&ticket.key) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
 
                 lines.push(Line::from(vec![
-                    Span::styled(format!("    {:<key_w$}", ticket.key), base),
+                    Span::styled(
+                        format!("    {:<key_w$}", format!("{} {}", marker, ticket.key)),
+                        base,
+                    ),
                     Span::styled(" | ", base),
                     Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
                     Span::styled(" | ", base),

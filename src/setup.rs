@@ -24,9 +24,7 @@ struct SetupState {
     user_email: String,
 }
 
-pub async fn run_setup(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-) -> Result<AppConfig> {
+pub async fn run_setup(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<AppConfig> {
     let user_email = crate::jira_client::fetch_my_email()
         .await
         .unwrap_or_else(|_| "unknown@mongodb.com".to_string());
