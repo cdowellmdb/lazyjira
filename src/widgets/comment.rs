@@ -1,6 +1,7 @@
+use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use super::form;
 use crate::app::App;
@@ -14,20 +15,31 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let title = format!("Comment on {}", state.ticket_key);
     let inner = form::render_modal_frame(f, &title, 50, 30);
 
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(""));
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .split(inner);
 
-    form::render_text_input(&mut lines, "Comment", &state.body, true);
+    let label = Paragraph::new(Line::from(Span::styled(
+        "Comment:",
+        Style::default().fg(Color::Cyan),
+    )));
+    f.render_widget(label, sections[0]);
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(""));
+    let mut body_text = state.body.clone();
+    body_text.push('_');
+    let body = Paragraph::new(body_text)
+        .block(Block::default().borders(Borders::ALL))
+        .wrap(Wrap { trim: false });
+    f.render_widget(body, sections[1]);
 
-    // Footer hints
-    lines.push(Line::from(Span::styled(
-        "[Enter] submit  [Esc] cancel",
+    let footer = Paragraph::new(Line::from(Span::styled(
+        "[Shift+Enter] newline  [Enter] submit  [Esc] cancel",
         Style::default().fg(Color::DarkGray),
     )));
-
-    let body = Paragraph::new(lines);
-    f.render_widget(body, inner);
+    f.render_widget(footer, sections[2]);
 }

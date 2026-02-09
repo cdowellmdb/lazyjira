@@ -696,7 +696,7 @@ async fn main() -> Result<()> {
                         )
                         .await;
                     } else if app.is_comment_open() {
-                        handle_comment_keys(&mut app, key.code, &bg_tx);
+                        handle_comment_keys(&mut app, key.code, key.modifiers, &bg_tx);
                     } else if app.is_assign_open() {
                         handle_assign_keys(&mut app, key.code, &bg_tx);
                     } else if app.is_edit_open() {
@@ -1695,12 +1695,24 @@ async fn handle_create_ticket_keys(
     }
 }
 
-fn handle_comment_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
+fn handle_comment_keys(
+    app: &mut App,
+    key: KeyCode,
+    modifiers: KeyModifiers,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+) {
     match key {
         KeyCode::Esc => {
             app.comment_state = None;
         }
         KeyCode::Enter => {
+            if modifiers.contains(KeyModifiers::SHIFT) {
+                if let Some(ref mut state) = app.comment_state {
+                    state.body.push('\n');
+                }
+                return;
+            }
+
             let state = match &app.comment_state {
                 Some(s) => s,
                 None => return,
@@ -1723,6 +1735,13 @@ fn handle_comment_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Back
                     .map_err(|e| e.to_string());
                 let _ = tx.send(BackgroundMessage::CommentAdded(result));
             });
+        }
+        // Some terminals encode Shift+Enter (or modified Enter) as Ctrl+J.
+        // Treat it as newline in the comment editor.
+        KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(ref mut state) = app.comment_state {
+                state.body.push('\n');
+            }
         }
         KeyCode::Backspace => {
             if let Some(ref mut state) = app.comment_state {
@@ -2374,6 +2393,51 @@ mod tests {
         )
         .await;
         assert_eq!(app.selected_index, 1);
+    }
+
+    #[test]
+    fn comment_shift_enter_inserts_newline() {
+        let mut app = App::new();
+        app.comment_state = Some(crate::app::CommentState {
+            ticket_key: "AMP-1".to_string(),
+            body: "hello".to_string(),
+        });
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        handle_comment_keys(&mut app, KeyCode::Enter, KeyModifiers::SHIFT, &tx);
+
+        let state = app.comment_state.expect("comment modal should remain open");
+        assert_eq!(state.body, "hello\n");
+    }
+
+    #[test]
+    fn comment_enter_requires_non_empty_body() {
+        let mut app = App::new();
+        app.comment_state = Some(crate::app::CommentState {
+            ticket_key: "AMP-1".to_string(),
+            body: "   ".to_string(),
+        });
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        handle_comment_keys(&mut app, KeyCode::Enter, KeyModifiers::NONE, &tx);
+
+        assert!(app.comment_state.is_some());
+        assert_eq!(app.flash.as_deref(), Some("Comment body is required"));
+    }
+
+    #[test]
+    fn comment_ctrl_j_inserts_newline() {
+        let mut app = App::new();
+        app.comment_state = Some(crate::app::CommentState {
+            ticket_key: "AMP-1".to_string(),
+            body: "hello".to_string(),
+        });
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        handle_comment_keys(&mut app, KeyCode::Char('j'), KeyModifiers::CONTROL, &tx);
+
+        let state = app.comment_state.expect("comment modal should remain open");
+        assert_eq!(state.body, "hello\n");
     }
 
     #[tokio::test]
