@@ -105,6 +105,7 @@ fn build_config(state: &SetupState) -> AppConfig {
             project: state.project_key.clone(),
             team_name: state.team_name.clone(),
             done_window_days: 14,
+            epics_i_care_about: vec![],
         },
         team,
         statuses: StatusConfig::default(),

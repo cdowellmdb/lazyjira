@@ -339,6 +339,8 @@ pub struct App {
     pub collapsed_team: HashSet<String>,
     pub collapsed_epics: HashSet<String>,
     pub collapsed_unassigned: HashSet<String>,
+    /// Optional epic focus order used by the Epics tab; empty means show all epics.
+    epics_i_care_about_rank: HashMap<String, usize>,
 }
 
 impl App {
@@ -380,6 +382,25 @@ impl App {
             collapsed_team: HashSet::new(),
             collapsed_epics: HashSet::new(),
             collapsed_unassigned: HashSet::new(),
+            epics_i_care_about_rank: HashMap::new(),
+        }
+    }
+
+    pub fn set_epics_i_care_about(&mut self, epics: Vec<String>) {
+        let mut rank = HashMap::new();
+        for key in epics {
+            let normalized = key.trim().to_ascii_uppercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            let idx = rank.len();
+            rank.entry(normalized).or_insert(idx);
+        }
+
+        if self.epics_i_care_about_rank != rank {
+            self.epics_i_care_about_rank = rank;
+            self.mark_cache_changed();
+            self.clamp_selection();
         }
     }
 
@@ -568,14 +589,43 @@ impl App {
         });
     }
 
+    fn epic_is_in_focus(&self, epic_key: &str) -> bool {
+        if self.epics_i_care_about_rank.is_empty() {
+            return true;
+        }
+        self.epics_i_care_about_rank
+            .contains_key(&epic_key.trim().to_ascii_uppercase())
+    }
+
+    fn epic_focus_rank(&self, epic_key: &str) -> usize {
+        self.epics_i_care_about_rank
+            .get(&epic_key.trim().to_ascii_uppercase())
+            .copied()
+            .unwrap_or(usize::MAX)
+    }
+
     /// Epics and visible child rows in the exact order used by the Epics tab.
     pub(crate) fn epics_visible_epics<'a>(
         &'a self,
     ) -> Vec<(&'a crate::cache::Epic, Vec<&'a crate::cache::Ticket>)> {
         let search = self.normalized_search();
         let mut visible = Vec::new();
+        let mut epics: Vec<_> = self
+            .cache
+            .epics
+            .iter()
+            .filter(|epic| self.epic_is_in_focus(&epic.key))
+            .collect();
 
-        for epic in &self.cache.epics {
+        if !self.epics_i_care_about_rank.is_empty() {
+            epics.sort_by(|a, b| {
+                self.epic_focus_rank(&a.key)
+                    .cmp(&self.epic_focus_rank(&b.key))
+                    .then_with(|| a.key.cmp(&b.key))
+            });
+        }
+
+        for epic in epics {
             match &search {
                 Some(s) => {
                     let epic_matches = Self::contains_case_insensitive(&epic.key, s)
@@ -1533,6 +1583,63 @@ mod tests {
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
         assert_eq!(app.selected_ticket_key(), Some("AMP-55".to_string()));
+    }
+
+    #[test]
+    fn epics_focus_filter_limits_epics_view() {
+        let mut app = epics_app(vec![
+            Epic {
+                key: "AMP-100".to_string(),
+                summary: "Auth".to_string(),
+                children: vec![ticket("AMP-1", "Session")],
+            },
+            Epic {
+                key: "AMP-200".to_string(),
+                summary: "Perf".to_string(),
+                children: vec![ticket("AMP-2", "Cache")],
+            },
+        ]);
+
+        app.set_epics_i_care_about(vec!["amp-200".to_string()]);
+        assert_eq!(app.item_count(), 2);
+        app.selected_index = 1;
+        assert_eq!(app.selected_ticket_key(), Some("AMP-2".to_string()));
+    }
+
+    #[test]
+    fn epics_focus_filter_honors_config_order() {
+        let app = {
+            let mut app = epics_app(vec![
+                Epic {
+                    key: "AMP-100".to_string(),
+                    summary: "Auth".to_string(),
+                    children: vec![ticket("AMP-1", "Session")],
+                },
+                Epic {
+                    key: "AMP-300".to_string(),
+                    summary: "Perf".to_string(),
+                    children: vec![ticket("AMP-3", "Cache")],
+                },
+                Epic {
+                    key: "AMP-200".to_string(),
+                    summary: "Runner".to_string(),
+                    children: vec![ticket("AMP-2", "Task")],
+                },
+            ]);
+            app.set_epics_i_care_about(vec![
+                "AMP-300".to_string(),
+                "AMP-100".to_string(),
+                "AMP-200".to_string(),
+            ]);
+            app
+        };
+
+        let ordered_keys: Vec<_> = app
+            .epics_visible_epics()
+            .into_iter()
+            .map(|(epic, _)| epic.key.as_str())
+            .collect();
+        assert_eq!(ordered_keys, vec!["AMP-300", "AMP-100", "AMP-200"]);
     }
 
     #[test]

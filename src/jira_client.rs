@@ -1050,6 +1050,7 @@ mod tests {
                 project: "AMP".into(),
                 team_name: "Code Generation".into(),
                 done_window_days: 14,
+                epics_i_care_about: vec![],
             },
             team: BTreeMap::new(),
             statuses: StatusConfig::default(),

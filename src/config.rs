@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -25,6 +25,8 @@ pub struct JiraConfig {
     pub team_name: String,
     #[serde(default = "default_done_window_days")]
     pub done_window_days: u32,
+    #[serde(default, alias = "epics I care about")]
+    pub epics_i_care_about: Vec<String>,
 }
 
 fn default_done_window_days() -> u32 {
@@ -88,6 +90,28 @@ pub struct SavedFilter {
 }
 
 impl AppConfig {
+    fn normalize_epic_key(key: &str) -> Option<String> {
+        let trimmed = key.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_ascii_uppercase())
+        }
+    }
+
+    pub fn epics_i_care_about_ordered(&self) -> Vec<String> {
+        let mut seen = HashSet::new();
+        let mut ordered = Vec::new();
+        for key in &self.jira.epics_i_care_about {
+            if let Some(normalized) = Self::normalize_epic_key(key) {
+                if seen.insert(normalized.clone()) {
+                    ordered.push(normalized);
+                }
+            }
+        }
+        ordered
+    }
+
     pub fn team_members(&self) -> Vec<crate::cache::TeamMember> {
         let mut seen = std::collections::HashSet::new();
         let mut members = Vec::new();
@@ -176,6 +200,7 @@ mod tests {
                 project: "AMP".to_string(),
                 team_name: "Code Generation".to_string(),
                 done_window_days: 14,
+                epics_i_care_about: vec!["AMP-100".to_string(), "AMP-200".to_string()],
             },
             team,
             statuses: StatusConfig::default(),
@@ -196,6 +221,10 @@ mod tests {
         assert_eq!(parsed.jira.project, config.jira.project);
         assert_eq!(parsed.jira.team_name, config.jira.team_name);
         assert_eq!(parsed.jira.done_window_days, config.jira.done_window_days);
+        assert_eq!(
+            parsed.jira.epics_i_care_about,
+            config.jira.epics_i_care_about
+        );
         assert_eq!(parsed.team.len(), config.team.len());
         assert_eq!(
             parsed.team.get("alice"),
@@ -220,6 +249,7 @@ team_name = "My Team"
         assert_eq!(config.jira.project, "TEST");
         assert_eq!(config.jira.team_name, "My Team");
         assert_eq!(config.jira.done_window_days, 14);
+        assert!(config.jira.epics_i_care_about.is_empty());
         assert_eq!(config.statuses.active, default_active_statuses());
         assert_eq!(config.statuses.done, default_done_statuses());
         assert!(config.team.is_empty());
@@ -245,5 +275,55 @@ team_name = "My Team"
     #[test]
     fn done_window_days_default_is_14() {
         assert_eq!(default_done_window_days(), 14);
+    }
+
+    #[test]
+    fn epics_i_care_about_ordered_normalizes_keys() {
+        let config = AppConfig {
+            jira: JiraConfig {
+                project: "AMP".to_string(),
+                team_name: "Code Generation".to_string(),
+                done_window_days: 14,
+                epics_i_care_about: vec![
+                    "amp-100".to_string(),
+                    " AMP-200 ".to_string(),
+                    "".to_string(),
+                ],
+            },
+            team: BTreeMap::new(),
+            statuses: StatusConfig::default(),
+            resolutions: default_resolutions(),
+            filters: vec![],
+        };
+
+        assert_eq!(
+            config.epics_i_care_about_ordered(),
+            vec!["AMP-100".to_string(), "AMP-200".to_string()]
+        );
+    }
+
+    #[test]
+    fn epics_i_care_about_ordered_preserves_input_order() {
+        let config = AppConfig {
+            jira: JiraConfig {
+                project: "AMP".to_string(),
+                team_name: "Code Generation".to_string(),
+                done_window_days: 14,
+                epics_i_care_about: vec![
+                    "amp-200".to_string(),
+                    "AMP-100".to_string(),
+                    " amp-200 ".to_string(),
+                ],
+            },
+            team: BTreeMap::new(),
+            statuses: StatusConfig::default(),
+            resolutions: default_resolutions(),
+            filters: vec![],
+        };
+
+        assert_eq!(
+            config.epics_i_care_about_ordered(),
+            vec!["AMP-200".to_string(), "AMP-100".to_string()]
+        );
     }
 }

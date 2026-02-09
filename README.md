@@ -7,6 +7,7 @@ A terminal UI for Jira focused on fast triage and team visibility.
 - Five tabs: `My Work`, `Team`, `Epics`, `Unassigned`, `Filters`
 - Status-grouped ticket views with focus filters
 - Epic relationship mapping + progress bars
+- Optional epic focus list for the Epics tab (`epics_i_care_about`)
 - Rich ticket detail with description, labels, assignee, epic, activity history
 - In-TUI actions: create tickets, comment, assign, edit fields, move status
 - Multi-select + bulk move/assign from list views
@@ -16,7 +17,7 @@ A terminal UI for Jira focused on fast triage and team visibility.
 
 ## Setup
 
-On first run, lazyjira prompts for your Jira project key and team name, then writes `~/.config/lazyjira/config.toml`. Edit the file directly to add team members, custom statuses, or saved filters.
+On first run, lazyjira prompts for your Jira project key and team name, then writes `~/.config/lazyjira/config.toml`. Edit the file directly to add team members, custom statuses, saved filters, or an epic focus list for the Epics tab.
 
 ### Requirements
 
@@ -128,6 +129,9 @@ Config lives at `~/.config/lazyjira/config.toml`:
 project = "AMP"
 team_name = "Code Generation"
 done_window_days = 14
+# Keep this in the [jira] section.
+
+epics_i_care_about = ["AMP-100", "AMP-200"] # optional; empty/missing = show all epics; list order controls Epics tab order
 
 [team]
 "Alice Smith" = "alice.smith@example.com"

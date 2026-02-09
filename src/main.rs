@@ -419,6 +419,7 @@ async fn main() -> Result<()> {
     };
 
     let mut app = App::new();
+    app.set_epics_i_care_about(config.epics_i_care_about_ordered());
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
     let detail_cache_tx = jira_client::spawn_detail_cache_writer(&config.jira.project);
 
@@ -2287,6 +2288,7 @@ mod tests {
                 project: "AMP".to_string(),
                 team_name: "Code Generation".to_string(),
                 done_window_days: 14,
+                epics_i_care_about: vec![],
             },
             team: BTreeMap::new(),
             statuses: crate::config::StatusConfig::default(),
