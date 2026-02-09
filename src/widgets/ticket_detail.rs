@@ -110,6 +110,42 @@ fn normalize_inline(s: &str) -> String {
     s.replace("{{", "`").replace("}}", "`")
 }
 
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        let mut result: String = s.chars().take(max.saturating_sub(3)).collect();
+        result.push_str("...");
+        result
+    } else {
+        s.to_string()
+    }
+}
+
+fn epic_status_rank(status: &Status) -> usize {
+    match status {
+        Status::InProgress => 0,
+        Status::ReadyForWork => 1,
+        Status::NeedsTriage => 2,
+        Status::ToDo => 3,
+        Status::InReview => 4,
+        Status::Other(_) => 5,
+        Status::Blocked => 6,
+        Status::Closed => 7,
+    }
+}
+
+fn progress_bar(done: usize, total: usize, width: usize) -> String {
+    if total == 0 || width == 0 {
+        return format!("[{}]", "-".repeat(width));
+    }
+
+    let filled = ((done * width) + (total / 2)) / total;
+    format!(
+        "[{}{}]",
+        "#".repeat(filled.min(width)),
+        "-".repeat(width.saturating_sub(filled.min(width)))
+    )
+}
+
 fn push_description_lines(lines: &mut Vec<Line>, desc: &str) {
     let mut in_code = false;
 
@@ -168,42 +204,55 @@ fn push_description_lines(lines: &mut Vec<Line>, desc: &str) {
 }
 
 pub fn render(f: &mut ratatui::Frame, app: &App, resolutions: &[String]) {
-    let ticket_key = match app.detail_ticket_key.as_ref() {
+    if let Some(ticket_key) = app.detail_ticket_key.as_ref() {
+        if let Some(ticket) = app.find_ticket(ticket_key) {
+            let area = centered_rect(60, 60, f.area());
+            f.render_widget(Clear, area);
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {} ", ticket_key));
+
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+
+            match &app.detail_mode {
+                DetailMode::View => render_view(f, inner, ticket, app.detail_scroll),
+                DetailMode::MovePicker {
+                    selected,
+                    confirm_target,
+                } => render_move_picker(f, inner, ticket, *selected, confirm_target.as_ref()),
+                DetailMode::ResolutionPicker {
+                    target_status,
+                    selected,
+                } => render_resolution_picker(f, inner, target_status, *selected, resolutions),
+                DetailMode::History { scroll } => {
+                    crate::widgets::activity::render(f, inner, &ticket.activity, *scroll);
+                }
+            }
+            return;
+        }
+    }
+
+    let epic_key = match app.detail_epic_key.as_ref() {
         Some(k) => k,
         None => return,
     };
-
-    let ticket = match app.find_ticket(ticket_key) {
-        Some(t) => t,
+    let epic = match app.cache.epics.iter().find(|e| &e.key == epic_key) {
+        Some(e) => e,
         None => return,
     };
 
-    let area = centered_rect(60, 60, f.area());
-
-    // Clear the area behind the popup
+    let area = centered_rect(70, 70, f.area());
     f.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {} ", ticket_key));
+        .title(format!(" {} ", epic.key));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
-
-    match &app.detail_mode {
-        DetailMode::View => render_view(f, inner, ticket, app.detail_scroll),
-        DetailMode::MovePicker {
-            selected,
-            confirm_target,
-        } => render_move_picker(f, inner, ticket, *selected, confirm_target.as_ref()),
-        DetailMode::ResolutionPicker {
-            target_status,
-            selected,
-        } => render_resolution_picker(f, inner, target_status, *selected, resolutions),
-        DetailMode::History { scroll } => {
-            crate::widgets::activity::render(f, inner, &ticket.activity, *scroll);
-        }
-    }
+    render_epic_view(f, inner, epic, app.detail_scroll);
 }
 
 fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket, scroll: u16) {
@@ -290,6 +339,109 @@ fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket
     // Footer
     let footer = Paragraph::new(Line::from(Span::styled(
         "[↑/↓] scroll  [Esc] close  [o] browser  [m] move  [C] comment  [a] assign  [e] edit  [h] history",
+        Style::default().fg(Color::DarkGray),
+    )));
+    f.render_widget(footer, footer_area);
+}
+
+fn render_epic_view(f: &mut ratatui::Frame, area: Rect, epic: &crate::cache::Epic, scroll: u16) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(area);
+
+    let body_area = chunks[0];
+    let footer_area = chunks[1];
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(Line::from(Span::styled(
+        epic.summary.clone(),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    let total = epic.total();
+    let done = epic.done_count();
+    let pct = epic.progress_pct();
+    lines.push(Line::from(vec![
+        Span::raw("Progress: "),
+        Span::styled(
+            format!(
+                "{}  {} / {} ({:.1}%)",
+                progress_bar(done, total, 24),
+                done,
+                total,
+                pct
+            ),
+            Style::default().fg(Color::Green),
+        ),
+    ]));
+
+    let counts = epic.count_by_status();
+    let mut parts = Vec::new();
+    for status in Status::all() {
+        let count = counts.get(status).copied().unwrap_or(0);
+        if count > 0 {
+            parts.push(format!("{}: {}", status.as_str(), count));
+        }
+    }
+    if parts.is_empty() {
+        parts.push("No related tickets".to_string());
+    }
+    lines.push(Line::from(vec![
+        Span::raw("Status: "),
+        Span::styled(parts.join("  "), Style::default().fg(Color::Gray)),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Related Tickets",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    let mut children: Vec<_> = epic.children.iter().collect();
+    children.sort_by(|a, b| {
+        epic_status_rank(&a.status)
+            .cmp(&epic_status_rank(&b.status))
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    if children.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "(no related tickets)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for ticket in children {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{:<12}", ticket.key),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!("{:<15}", ticket.status.as_str()),
+                    Style::default().fg(status_color(&ticket.status)),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    truncate(&ticket.summary, 78),
+                    Style::default().fg(Color::Gray),
+                ),
+            ]));
+        }
+    }
+
+    let body = Paragraph::new(lines)
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false });
+    f.render_widget(body, body_area);
+
+    let footer = Paragraph::new(Line::from(Span::styled(
+        "[↑/↓] scroll  [Esc] close  [o] browser",
         Style::default().fg(Color::DarkGray),
     )));
     f.render_widget(footer, footer_area);

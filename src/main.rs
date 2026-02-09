@@ -1221,58 +1221,85 @@ fn handle_bulk_keys(
 
 fn handle_detail_keys(app: &mut App, key: KeyCode, config: &AppConfig) {
     match app.detail_mode.clone() {
-        DetailMode::View => match key {
-            KeyCode::Esc => app.close_detail(),
-            KeyCode::Up => app.scroll_detail_up(),
-            KeyCode::Down => app.scroll_detail_down(),
-            KeyCode::Char('o') => {
-                if let Some(ref key) = app.detail_ticket_key {
-                    if let Some(ticket) = app.find_ticket(key) {
-                        let url = ticket.url.clone();
+        DetailMode::View => {
+            let ticket_detail_key = app
+                .detail_ticket_key
+                .as_ref()
+                .and_then(|k| app.find_ticket(k).map(|_| k.clone()));
+
+            match key {
+                KeyCode::Esc => app.close_detail(),
+                KeyCode::Up => app.scroll_detail_up(),
+                KeyCode::Down => app.scroll_detail_down(),
+                KeyCode::Char('o') => {
+                    if let Some(key) = ticket_detail_key.as_ref() {
+                        if let Some(ticket) = app.find_ticket(key) {
+                            let url = ticket.url.clone();
+                            let _ = std::process::Command::new("open").arg(&url).spawn();
+                        }
+                    } else if let Some(epic_key) = app.detail_epic_key.as_ref() {
+                        let url = format!("https://jira.mongodb.org/browse/{}", epic_key);
                         let _ = std::process::Command::new("open").arg(&url).spawn();
                     }
                 }
-            }
-            KeyCode::Char('m') => {
-                app.detail_mode = DetailMode::MovePicker {
-                    selected: 0,
-                    confirm_target: None,
-                };
-            }
-            KeyCode::Char('C') => {
-                if let Some(ref key) = app.detail_ticket_key {
-                    app.comment_state = Some(app::CommentState {
-                        ticket_key: key.clone(),
-                        body: String::new(),
-                    });
+                KeyCode::Char('m') => {
+                    if ticket_detail_key.is_some() {
+                        app.detail_mode = DetailMode::MovePicker {
+                            selected: 0,
+                            confirm_target: None,
+                        };
+                    }
                 }
-            }
-            KeyCode::Char('a') => {
-                if let Some(ref key) = app.detail_ticket_key {
-                    app.assign_state = Some(app::AssignState {
-                        ticket_key: key.clone(),
-                        selected: 0,
-                    });
+                KeyCode::Char('C') => {
+                    if let Some(key) = ticket_detail_key {
+                        app.comment_state = Some(app::CommentState {
+                            ticket_key: key,
+                            body: String::new(),
+                        });
+                    }
                 }
-            }
-            KeyCode::Char('e') => {
-                if let Some(ref key) = app.detail_ticket_key {
-                    let ticket = app.find_ticket(key);
-                    let summary = ticket.map(|t| t.summary.clone()).unwrap_or_default();
-                    let labels = ticket.map(|t| t.labels.join(", ")).unwrap_or_default();
-                    app.edit_state = Some(app::EditFieldsState {
-                        ticket_key: key.clone(),
-                        focused_field: 0,
-                        summary,
-                        labels,
-                    });
+                KeyCode::Char('a') => {
+                    if let Some(key) = app
+                        .detail_ticket_key
+                        .as_ref()
+                        .and_then(|k| app.find_ticket(k).map(|_| k.clone()))
+                    {
+                        app.assign_state = Some(app::AssignState {
+                            ticket_key: key,
+                            selected: 0,
+                        });
+                    }
                 }
+                KeyCode::Char('e') => {
+                    if let Some(key) = app
+                        .detail_ticket_key
+                        .as_ref()
+                        .and_then(|k| app.find_ticket(k).map(|_| k.clone()))
+                    {
+                        let ticket = app.find_ticket(&key);
+                        let summary = ticket.map(|t| t.summary.clone()).unwrap_or_default();
+                        let labels = ticket.map(|t| t.labels.join(", ")).unwrap_or_default();
+                        app.edit_state = Some(app::EditFieldsState {
+                            ticket_key: key,
+                            focused_field: 0,
+                            summary,
+                            labels,
+                        });
+                    }
+                }
+                KeyCode::Char('h') => {
+                    if app
+                        .detail_ticket_key
+                        .as_ref()
+                        .and_then(|k| app.find_ticket(k))
+                        .is_some()
+                    {
+                        app.detail_mode = DetailMode::History { scroll: 0 };
+                    }
+                }
+                _ => {}
             }
-            KeyCode::Char('h') => {
-                app.detail_mode = DetailMode::History { scroll: 0 };
-            }
-            _ => {}
-        },
+        }
         DetailMode::MovePicker {
             selected,
             confirm_target,
@@ -1406,7 +1433,9 @@ async fn handle_search_keys(
         }
         KeyCode::Enter => {
             if let Some(group_id) = app.selected_header_group_id() {
-                if app.is_collapsed(app.active_tab, &group_id) {
+                if app.active_tab == Tab::Epics {
+                    app.open_epic_detail(group_id);
+                } else if app.is_collapsed(app.active_tab, &group_id) {
                     app.toggle_group_collapse(&group_id);
                 }
             } else if let Some(key) = app.selected_ticket_key() {
@@ -2211,7 +2240,9 @@ async fn handle_main_keys(
         }
         KeyCode::Enter => {
             if let Some(group_id) = app.selected_header_group_id() {
-                if app.is_collapsed(app.active_tab, &group_id) {
+                if app.active_tab == Tab::Epics {
+                    app.open_epic_detail(group_id);
+                } else if app.is_collapsed(app.active_tab, &group_id) {
                     app.toggle_group_collapse(&group_id);
                 }
             } else if let Some(key) = app.selected_ticket_key() {
@@ -2390,6 +2421,52 @@ mod tests {
             app.bulk_upload_state,
             Some(BulkUploadState::PathInput { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn enter_on_epic_header_opens_epic_detail_in_main_mode() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Epics;
+        app.cache.epics = vec![crate::cache::Epic {
+            key: "AMP-500".to_string(),
+            summary: "Epic Header".to_string(),
+            children: vec![],
+        }];
+        app.selected_index = 0;
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        handle_main_keys(
+            &mut app,
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            &tx,
+            &sample_config(),
+        )
+        .await;
+
+        assert_eq!(app.detail_epic_key.as_deref(), Some("AMP-500"));
+        assert!(app.detail_ticket_key.is_none());
+    }
+
+    #[tokio::test]
+    async fn enter_on_epic_header_opens_epic_detail_in_search_mode() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Epics;
+        app.search = Some(String::new());
+        app.cache.epics = vec![crate::cache::Epic {
+            key: "AMP-501".to_string(),
+            summary: "Epic Header Search".to_string(),
+            children: vec![],
+        }];
+        app.selected_index = 0;
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        handle_search_keys(&mut app, KeyCode::Enter, KeyModifiers::NONE, &tx).await;
+
+        assert_eq!(app.detail_epic_key.as_deref(), Some("AMP-501"));
+        assert!(app.detail_ticket_key.is_none());
     }
 
     #[test]

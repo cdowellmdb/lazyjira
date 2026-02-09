@@ -47,7 +47,7 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  u: clear selected tickets"),
         Line::from("  B: open bulk actions (move/assign)"),
         Line::from("  U: open bulk CSV upload"),
-        Line::from("  Enter: open ticket detail"),
+        Line::from("  Enter: open detail (ticket or epic)"),
         Line::from("  z: fold/unfold group"),
         Line::from("  Z: fold/unfold all groups"),
         Line::from(""),

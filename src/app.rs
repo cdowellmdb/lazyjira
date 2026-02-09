@@ -280,6 +280,8 @@ pub struct App {
     pub selected_index: usize,
     /// If Some, the detail overlay is open for this ticket key.
     pub detail_ticket_key: Option<String>,
+    /// If Some, the detail overlay is open for this epic key.
+    pub detail_epic_key: Option<String>,
     pub detail_mode: DetailMode,
     /// Vertical scroll offset for the ticket detail body.
     pub detail_scroll: u16,
@@ -346,6 +348,7 @@ impl App {
             active_tab: Tab::MyWork,
             selected_index: 0,
             detail_ticket_key: None,
+            detail_epic_key: None,
             detail_mode: DetailMode::View,
             detail_scroll: 0,
             loading: true,
@@ -400,18 +403,27 @@ impl App {
 
     pub fn open_detail(&mut self, key: String) {
         self.detail_ticket_key = Some(key);
+        self.detail_epic_key = None;
+        self.detail_mode = DetailMode::View;
+        self.detail_scroll = 0;
+    }
+
+    pub fn open_epic_detail(&mut self, key: String) {
+        self.detail_epic_key = Some(key);
+        self.detail_ticket_key = None;
         self.detail_mode = DetailMode::View;
         self.detail_scroll = 0;
     }
 
     pub fn close_detail(&mut self) {
         self.detail_ticket_key = None;
+        self.detail_epic_key = None;
         self.detail_mode = DetailMode::View;
         self.detail_scroll = 0;
     }
 
     pub fn is_detail_open(&self) -> bool {
-        self.detail_ticket_key.is_some()
+        self.detail_ticket_key.is_some() || self.detail_epic_key.is_some()
     }
 
     pub fn is_ticket_detail_loaded(&self, key: &str) -> bool {
