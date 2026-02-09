@@ -60,3 +60,6 @@ The team view sorts members by active ticket count (most active first). Any code
 ## Notes
 
 Use `README.md` as the current onboarding doc for run instructions and keybindings.
+
+## Commit Messages
+Follow @COMMIT_STYLING.md
