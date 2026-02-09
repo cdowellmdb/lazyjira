@@ -46,6 +46,7 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  A: select all visible tickets"),
         Line::from("  u: clear selected tickets"),
         Line::from("  B: open bulk actions (move/assign)"),
+        Line::from("  U: open bulk CSV upload"),
         Line::from("  Enter: open ticket detail"),
         Line::from("  z: fold/unfold group"),
         Line::from("  Z: fold/unfold all groups"),
@@ -72,6 +73,7 @@ pub fn render(f: &mut ratatui::Frame) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("  c: create ticket"),
+        Line::from("  U: bulk upload tickets from CSV"),
         Line::from("  r: refresh tickets"),
         Line::from(""),
         Line::from(Span::styled(
@@ -104,6 +106,7 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  Shift+Tab: switch back to sidebar"),
         Line::from("  Enter: run filter (sidebar) / open ticket (results)"),
         Line::from("  Space/A/u/B: select + bulk actions (results pane)"),
+        Line::from("  U: open bulk CSV upload"),
         Line::from("  n: new filter"),
         Line::from("  e: edit selected filter"),
         Line::from("  x: delete selected filter"),

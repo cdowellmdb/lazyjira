@@ -1,6 +1,7 @@
 pub mod activity;
 pub mod assign;
 pub mod bulk_actions;
+pub mod bulk_upload;
 pub mod comment;
 pub mod create_ticket;
 pub mod edit_fields;

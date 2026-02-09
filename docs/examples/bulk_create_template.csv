@@ -1,0 +1,4 @@
+summary,type,assignee_email,epic_key,labels,description
+"Improve onboarding docs",Task,dev1@example.com,AMP-1234,"docs|onboarding","Refresh setup docs and add troubleshooting notes"
+"Fix flaky login test",Bug,qa@example.com,AMP-5678,"test|stability","Intermittent failure in CI after retry logic changes"
+"Audit retry backoff",Story,,,"platform|reliability","Review current retry strategy and propose standardized backoff settings"

@@ -1,4 +1,5 @@
 mod app;
+mod bulk_upload;
 mod cache;
 mod config;
 mod jira_client;
@@ -13,6 +14,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use std::collections::HashSet;
 use std::io;
 use std::process::Command;
 use std::time::Duration;
@@ -21,8 +23,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::cache::Status;
 use crate::config::AppConfig;
 use app::{
-    App, BulkAction, BulkState, BulkSummary, BulkTarget, DetailMode, FilterFocus, Tab,
-    TicketSyncStage,
+    App, BulkAction, BulkState, BulkSummary, BulkTarget, BulkUploadPreview, BulkUploadState,
+    BulkUploadSummary, DetailMode, FilterFocus, Tab, TicketSyncStage,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -53,6 +55,8 @@ enum BackgroundMessage {
         result: std::result::Result<(), String>,
     },
     BulkCompleted(BulkSummary),
+    BulkUploadPreviewReady(std::result::Result<BulkUploadPreview, String>),
+    BulkUploadCompleted(BulkUploadSummary),
     FilterResults(std::result::Result<Vec<crate::cache::Ticket>, String>),
 }
 
@@ -306,6 +310,98 @@ fn spawn_bulk_execution(
     });
 }
 
+fn build_bulk_upload_context(app: &App) -> bulk_upload::BulkUploadContext {
+    let known_epic_keys: HashSet<String> = app
+        .cache
+        .epics
+        .iter()
+        .map(|e| e.key.to_ascii_uppercase())
+        .collect();
+
+    let mut existing_summaries = HashSet::new();
+    for ticket in app
+        .cache
+        .my_tickets
+        .iter()
+        .chain(app.cache.team_tickets.iter())
+        .chain(app.filter_results.iter())
+    {
+        let normalized = bulk_upload::normalize_summary(&ticket.summary);
+        if !normalized.is_empty() {
+            existing_summaries.insert(normalized);
+        }
+    }
+
+    bulk_upload::BulkUploadContext::new(known_epic_keys, existing_summaries)
+}
+
+fn spawn_bulk_upload_preview(
+    tx: &UnboundedSender<BackgroundMessage>,
+    path: String,
+    context: bulk_upload::BulkUploadContext,
+) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let result = bulk_upload::parse_csv_preview(&path, &context).map_err(|e| e.to_string());
+        let _ = tx.send(BackgroundMessage::BulkUploadPreviewReady(result));
+    });
+}
+
+fn spawn_bulk_upload_execution(
+    tx: &UnboundedSender<BackgroundMessage>,
+    preview: BulkUploadPreview,
+    project: String,
+) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let mut created_keys = Vec::new();
+        let mut failed_details = Vec::new();
+        let attempt_rows = preview
+            .rows
+            .iter()
+            .filter(|row| row.errors.is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        let attempted = attempt_rows.len();
+
+        for row in attempt_rows {
+            let labels = if row.labels.is_empty() {
+                None
+            } else {
+                Some(row.labels.as_slice())
+            };
+
+            let result = jira_client::create_ticket_with_fields(
+                &project,
+                row.issue_type.as_str(),
+                row.summary.as_str(),
+                row.assignee_email.as_deref(),
+                row.epic_key.as_deref(),
+                row.description.as_deref(),
+                labels,
+            )
+            .await
+            .map_err(|e| e.to_string());
+
+            match result {
+                Ok(key) => created_keys.push(key),
+                Err(err) => failed_details.push((row.row_number, row.summary, err)),
+            }
+        }
+
+        let summary = BulkUploadSummary {
+            source_path: preview.source_path,
+            total_rows: preview.total_rows,
+            attempted,
+            succeeded: created_keys.len(),
+            failed: failed_details.len(),
+            created_keys,
+            failed_details,
+        };
+        let _ = tx.send(BackgroundMessage::BulkUploadCompleted(summary));
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     maybe_run_dev_mode()?;
@@ -511,6 +607,44 @@ async fn main() -> Result<()> {
                     ));
                     app.bulk_state = Some(BulkState::Result { summary });
                 }
+                BackgroundMessage::BulkUploadPreviewReady(result) => match result {
+                    Ok(preview) => {
+                        let total_rows = preview.total_rows;
+                        let invalid_rows = preview.invalid_rows;
+                        app.bulk_upload_state = Some(BulkUploadState::Preview {
+                            preview,
+                            selected: 0,
+                        });
+                        app.flash = Some(format!(
+                            "Preview ready: {} rows ({} invalid)",
+                            total_rows, invalid_rows
+                        ));
+                    }
+                    Err(e) => {
+                        if let Some(BulkUploadState::PathInput { loading, .. }) =
+                            app.bulk_upload_state.as_mut()
+                        {
+                            *loading = false;
+                        }
+                        app.flash = Some(format!("CSV preview failed: {}", e));
+                    }
+                },
+                BackgroundMessage::BulkUploadCompleted(summary) => {
+                    let succeeded = summary.succeeded;
+                    let failed = summary.failed;
+                    if matches!(app.bulk_upload_state, Some(BulkUploadState::Running { .. })) {
+                        app.bulk_upload_state = Some(BulkUploadState::Result { summary });
+                    }
+                    app.flash = Some(format!(
+                        "Bulk upload complete: {} succeeded, {} failed",
+                        succeeded, failed
+                    ));
+                    if !app.loading {
+                        app.loading = true;
+                        app.ticket_sync_stage = None;
+                        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Manual, &config);
+                    }
+                }
                 BackgroundMessage::FilterResults(result) => {
                     app.filter_loading = false;
                     match result {
@@ -550,6 +684,8 @@ async fn main() -> Result<()> {
 
                     if app.is_filter_edit_open() {
                         handle_filter_edit_keys(&mut app, key.code, &mut config);
+                    } else if app.is_bulk_upload_open() {
+                        handle_bulk_upload_keys(&mut app, key.code, &bg_tx, &config);
                     } else if app.is_create_ticket_open() {
                         handle_create_ticket_keys(
                             &mut app,
@@ -724,7 +860,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
             };
             Span::styled(
                 format!(
-                    " j/k: navigate  Space: mark  A: all  u: clear  B: bulk  sel:{}  Tab/S-Tab: switch pane({})  Enter: run/open  n: new  e: edit  x: delete  ?: keys  q: quit ",
+                    " j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  sel:{}  Tab/S-Tab: switch pane({})  Enter: run/open  n: new  e: edit  x: delete  ?: keys  q: quit ",
                     selected_count, pane
                 ),
                 Style::default().fg(Color::DarkGray),
@@ -752,7 +888,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
                 .unwrap_or("all");
             Span::styled(
                 format!(
-                    " Tab: switch  j/k: navigate  Space: mark  A: all  u: clear  B: bulk  sel:{}  Enter: detail  z: fold  d: done({})  p/w/n/v: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
+                    " Tab: switch  j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  sel:{}  Enter: detail  z: fold  d: done({})  p/w/n/v: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
                     selected_count, done_state, focus_state, ticket_state, freshness_state, epic_state
                 ),
                 Style::default().fg(Color::DarkGray),
@@ -785,6 +921,9 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     }
     if app.is_bulk_open() {
         widgets::bulk_actions::render(f, app, &config.resolutions);
+    }
+    if app.is_bulk_upload_open() {
+        widgets::bulk_upload::render(f, app);
     }
     if app.show_keybindings {
         widgets::keybindings_help::render(f);
@@ -1278,6 +1417,13 @@ async fn handle_search_keys(
                 }
             }
         }
+        KeyCode::Char('U') => {
+            app.search = None;
+            app.bulk_upload_state = Some(BulkUploadState::PathInput {
+                path: String::new(),
+                loading: false,
+            });
+        }
         KeyCode::Backspace => {
             if let Some(ref mut s) = app.search {
                 s.pop();
@@ -1304,6 +1450,104 @@ async fn handle_search_keys(
             app.clamp_selection();
         }
         _ => {}
+    }
+}
+
+fn handle_bulk_upload_keys(
+    app: &mut App,
+    key: KeyCode,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+    config: &AppConfig,
+) {
+    let state = match app.bulk_upload_state.clone() {
+        Some(s) => s,
+        None => return,
+    };
+
+    match state {
+        BulkUploadState::PathInput { mut path, loading } => match key {
+            KeyCode::Esc => app.bulk_upload_state = None,
+            KeyCode::Enter => {
+                if loading {
+                    return;
+                }
+                let trimmed = path.trim().to_string();
+                if trimmed.is_empty() {
+                    app.flash = Some("CSV path is required".to_string());
+                    return;
+                }
+                app.bulk_upload_state = Some(BulkUploadState::PathInput {
+                    path: trimmed.clone(),
+                    loading: true,
+                });
+                let context = build_bulk_upload_context(app);
+                spawn_bulk_upload_preview(bg_tx, trimmed, context);
+            }
+            KeyCode::Backspace => {
+                path.pop();
+                app.bulk_upload_state = Some(BulkUploadState::PathInput { path, loading });
+            }
+            KeyCode::Char(c) => {
+                path.push(c);
+                app.bulk_upload_state = Some(BulkUploadState::PathInput { path, loading });
+            }
+            _ => {}
+        },
+        BulkUploadState::Preview {
+            preview,
+            mut selected,
+        } => match key {
+            KeyCode::Esc => app.bulk_upload_state = None,
+            KeyCode::Char('j') | KeyCode::Down => {
+                if selected + 1 < preview.rows.len() {
+                    selected += 1;
+                }
+                app.bulk_upload_state = Some(BulkUploadState::Preview { preview, selected });
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                selected = selected.saturating_sub(1);
+                app.bulk_upload_state = Some(BulkUploadState::Preview { preview, selected });
+            }
+            KeyCode::Char('r') => {
+                app.bulk_upload_state = Some(BulkUploadState::PathInput {
+                    path: preview.source_path.clone(),
+                    loading: true,
+                });
+                let context = build_bulk_upload_context(app);
+                spawn_bulk_upload_preview(bg_tx, preview.source_path, context);
+            }
+            KeyCode::Enter | KeyCode::Char('y') => {
+                if !preview.can_submit() {
+                    app.flash = Some(
+                        "Upload blocked: fix invalid rows in the CSV and reload preview"
+                            .to_string(),
+                    );
+                    return;
+                }
+                app.bulk_upload_state = Some(BulkUploadState::Running {
+                    preview: preview.clone(),
+                });
+                spawn_bulk_upload_execution(bg_tx, preview, config.jira.project.clone());
+            }
+            _ => {}
+        },
+        BulkUploadState::Running { .. } => {
+            if key == KeyCode::Esc {
+                app.bulk_upload_state = None;
+            }
+        }
+        BulkUploadState::Result { summary } => match key {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.bulk_upload_state = None,
+            KeyCode::Char('r') => {
+                app.bulk_upload_state = Some(BulkUploadState::PathInput {
+                    path: summary.source_path.clone(),
+                    loading: true,
+                });
+                let context = build_bulk_upload_context(app);
+                spawn_bulk_upload_preview(bg_tx, summary.source_path, context);
+            }
+            _ => {}
+        },
     }
 }
 
@@ -1771,6 +2015,12 @@ fn handle_filter_keys(
                 }
             }
         }
+        KeyCode::Char('U') => {
+            app.bulk_upload_state = Some(BulkUploadState::PathInput {
+                path: String::new(),
+                loading: false,
+            });
+        }
         KeyCode::Char(' ') => {
             if app.filter_focus == FilterFocus::Results {
                 app.toggle_selection_at_cursor();
@@ -1953,6 +2203,12 @@ async fn handle_main_keys(
                 epic_idx: 0,
             });
         }
+        KeyCode::Char('U') => {
+            app.bulk_upload_state = Some(BulkUploadState::PathInput {
+                path: String::new(),
+                loading: false,
+            });
+        }
         KeyCode::Enter => {
             if let Some(group_id) = app.selected_header_group_id() {
                 if app.is_collapsed(app.active_tab, &group_id) {
@@ -2113,5 +2369,79 @@ mod tests {
             }
             _ => panic!("expected bulk action picker"),
         }
+    }
+
+    #[tokio::test]
+    async fn uppercase_u_opens_bulk_upload_from_main_tabs() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::MyWork;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        handle_main_keys(
+            &mut app,
+            KeyCode::Char('U'),
+            KeyModifiers::NONE,
+            &tx,
+            &sample_config(),
+        )
+        .await;
+
+        assert!(matches!(
+            app.bulk_upload_state,
+            Some(BulkUploadState::PathInput { .. })
+        ));
+    }
+
+    #[test]
+    fn uppercase_u_opens_bulk_upload_from_filters() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Filters;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut config = sample_config();
+        handle_filter_keys(&mut app, KeyCode::Char('U'), &tx, &mut config);
+        assert!(matches!(
+            app.bulk_upload_state,
+            Some(BulkUploadState::PathInput { .. })
+        ));
+    }
+
+    #[test]
+    fn bulk_upload_submit_is_blocked_when_preview_has_invalid_rows() {
+        let mut app = App::new();
+        app.bulk_upload_state = Some(BulkUploadState::Preview {
+            preview: BulkUploadPreview {
+                source_path: "/tmp/bulk.csv".to_string(),
+                rows: vec![crate::app::BulkUploadRow {
+                    row_number: 2,
+                    issue_type: "Task".to_string(),
+                    summary: "".to_string(),
+                    assignee_email: None,
+                    epic_key: None,
+                    labels: vec![],
+                    description: None,
+                    errors: vec!["summary is required".to_string()],
+                    warnings: vec![],
+                }],
+                total_rows: 1,
+                valid_rows: 0,
+                invalid_rows: 1,
+                warning_count: 0,
+            },
+            selected: 0,
+        });
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        handle_bulk_upload_keys(&mut app, KeyCode::Enter, &tx, &sample_config());
+
+        assert!(matches!(
+            app.bulk_upload_state,
+            Some(BulkUploadState::Preview { .. })
+        ));
+        assert!(app
+            .flash
+            .as_deref()
+            .unwrap_or("")
+            .contains("Upload blocked"));
     }
 }

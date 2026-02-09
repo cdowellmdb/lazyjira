@@ -45,6 +45,64 @@ pub struct CreateTicketState {
     pub epic_idx: usize,     // 0 = "None", then 1..N = cached epics
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BulkUploadRow {
+    pub row_number: usize,
+    pub issue_type: String,
+    pub summary: String,
+    pub assignee_email: Option<String>,
+    pub epic_key: Option<String>,
+    pub labels: Vec<String>,
+    pub description: Option<String>,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BulkUploadPreview {
+    pub source_path: String,
+    pub rows: Vec<BulkUploadRow>,
+    pub total_rows: usize,
+    pub valid_rows: usize,
+    pub invalid_rows: usize,
+    pub warning_count: usize,
+}
+
+impl BulkUploadPreview {
+    pub fn can_submit(&self) -> bool {
+        self.invalid_rows == 0 && self.valid_rows > 0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BulkUploadSummary {
+    pub source_path: String,
+    pub total_rows: usize,
+    pub attempted: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub created_keys: Vec<String>,
+    pub failed_details: Vec<(usize, String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BulkUploadState {
+    PathInput {
+        path: String,
+        loading: bool,
+    },
+    Preview {
+        preview: BulkUploadPreview,
+        selected: usize,
+    },
+    Running {
+        preview: BulkUploadPreview,
+    },
+    Result {
+        summary: BulkUploadSummary,
+    },
+}
+
 /// Which tab is currently active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -256,6 +314,8 @@ pub struct App {
     pub selected_ticket_keys: HashSet<String>,
     /// State for the bulk actions modal flow.
     pub bulk_state: Option<BulkState>,
+    /// State for bulk CSV upload and ticket creation flow.
+    pub bulk_upload_state: Option<BulkUploadState>,
     /// State for the comment modal overlay.
     pub comment_state: Option<CommentState>,
     /// State for the assign/reassign modal overlay.
@@ -304,6 +364,7 @@ impl App {
             create_ticket: None,
             selected_ticket_keys: HashSet::new(),
             bulk_state: None,
+            bulk_upload_state: None,
             comment_state: None,
             assign_state: None,
             edit_state: None,
@@ -787,6 +848,10 @@ impl App {
 
     pub fn is_bulk_open(&self) -> bool {
         self.bulk_state.is_some()
+    }
+
+    pub fn is_bulk_upload_open(&self) -> bool {
+        self.bulk_upload_state.is_some()
     }
 
     pub fn is_comment_open(&self) -> bool {

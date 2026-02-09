@@ -933,42 +933,56 @@ pub async fn fetch_jql_query(config: &AppConfig, jql: &str) -> Result<Vec<Ticket
     fetch_tickets_for_query(config, jql).await
 }
 
-/// Create a new ticket via `jira issue create`.
-pub async fn create_ticket(
+/// Create a new ticket via `jira issue create`, with optional body and labels.
+pub async fn create_ticket_with_fields(
     project: &str,
     issue_type: &str,
     summary: &str,
     assignee_email: Option<&str>,
     epic_key: Option<&str>,
+    description: Option<&str>,
+    labels: Option<&[String]>,
 ) -> Result<String> {
-    let mut args = vec![
-        "issue",
-        "create",
-        "-t",
-        issue_type,
-        "-s",
-        summary,
-        "--no-input",
-        "-p",
-        project,
+    let mut args: Vec<String> = vec![
+        "issue".to_string(),
+        "create".to_string(),
+        "-t".to_string(),
+        issue_type.to_string(),
+        "-s".to_string(),
+        summary.to_string(),
+        "--no-input".to_string(),
+        "-p".to_string(),
+        project.to_string(),
     ];
 
-    let assignee_str;
     if let Some(email) = assignee_email {
-        assignee_str = email.to_string();
-        args.push("-a");
-        args.push(&assignee_str);
+        args.push("-a".to_string());
+        args.push(email.to_string());
     }
 
-    // Epic link via parent field
-    let parent_str;
     if let Some(ek) = epic_key {
-        parent_str = ek.to_string();
-        args.push("--parent");
-        args.push(&parent_str);
+        args.push("-P".to_string());
+        args.push(ek.to_string());
     }
 
-    let output = run_cmd("jira", &args).await?;
+    if let Some(body) = description {
+        if !body.trim().is_empty() {
+            args.push("-b".to_string());
+            args.push(body.to_string());
+        }
+    }
+
+    if let Some(values) = labels {
+        for label in values {
+            if !label.trim().is_empty() {
+                args.push("-l".to_string());
+                args.push(label.to_string());
+            }
+        }
+    }
+
+    let args_ref = args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    let output = run_cmd("jira", &args_ref).await?;
     // jira-cli typically outputs something like "Issue AMP-1234 created"
     // Extract the key
     let key = output
@@ -977,6 +991,26 @@ pub async fn create_ticket(
         .map(|w| w.to_string())
         .unwrap_or(output.trim().to_string());
     Ok(key)
+}
+
+/// Create a new ticket via `jira issue create`.
+pub async fn create_ticket(
+    project: &str,
+    issue_type: &str,
+    summary: &str,
+    assignee_email: Option<&str>,
+    epic_key: Option<&str>,
+) -> Result<String> {
+    create_ticket_with_fields(
+        project,
+        issue_type,
+        summary,
+        assignee_email,
+        epic_key,
+        None,
+        None,
+    )
+    .await
 }
 
 #[cfg(test)]

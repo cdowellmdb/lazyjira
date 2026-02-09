@@ -10,6 +10,7 @@ A terminal UI for Jira focused on fast triage and team visibility.
 - Rich ticket detail with description, labels, assignee, epic, activity history
 - In-TUI actions: create tickets, comment, assign, edit fields, move status
 - Multi-select + bulk move/assign from list views
+- Bulk CSV upload for mass ticket creation with mandatory preview
 - Saved JQL filters with persistent config
 - Local caching for fast startup and detail open
 
@@ -53,6 +54,7 @@ lazyjira --dev-release    # release build + run
 | `A` | Select all visible tickets |
 | `u` | Clear selected tickets |
 | `B` | Open bulk action menu |
+| `U` | Open bulk CSV upload |
 | `Enter` | Open detail |
 | `/` | Search |
 | `c` | Create ticket |
@@ -86,12 +88,36 @@ Move picker: `p/w/n/t/v/b/d` to select + confirm, uppercase to move immediately.
 | `A` | Select all results (results pane) |
 | `u` | Clear selection (results pane) |
 | `B` | Open bulk actions (results pane) |
+| `U` | Open bulk CSV upload |
 | `Tab` | Switch to results / next tab |
 | `Shift+Tab` | Back to sidebar |
 | `Enter` | Run filter (sidebar) / open ticket (results) |
 | `n` | New filter |
 | `e` | Edit filter |
 | `x` | Delete filter |
+
+## Bulk CSV Upload
+
+Use `U` to open the bulk CSV upload modal from any main view.
+
+Flow:
+1. Enter a CSV file path.
+2. Preview parsed rows, warnings, and validation errors.
+3. Submit only when preview has zero invalid rows.
+
+CSV rules (V1):
+- Required header: `summary`
+- Optional headers: `type,assignee_email,epic_key,labels,description`
+- `type` defaults to `Task` and must be one of `Task`, `Bug`, `Story`
+- `labels` uses `|` separators in one cell (example: `frontend|urgent`)
+- `epic_key` must match a known cached epic
+- Row limit: 500 rows per upload
+
+Warnings:
+- Duplicate summary against existing visible tickets
+- Duplicate summary within the CSV
+
+Warnings do not block submission. Validation errors do.
 
 ## Configuration
 
