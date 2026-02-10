@@ -745,6 +745,29 @@ fn hydrate_tickets_from_details_cache(
     }
 }
 
+fn reconcile_epic_child_statuses(
+    epics: &mut [Epic],
+    my_tickets: &[Ticket],
+    team_tickets: &[Ticket],
+) {
+    let mut status_by_key: HashMap<&str, &Status> = HashMap::new();
+
+    for ticket in team_tickets {
+        status_by_key.insert(ticket.key.as_str(), &ticket.status);
+    }
+    for ticket in my_tickets {
+        status_by_key.insert(ticket.key.as_str(), &ticket.status);
+    }
+
+    for epic in epics {
+        for child in &mut epic.children {
+            if let Some(status) = status_by_key.get(child.key.as_str()) {
+                child.status = (*status).clone();
+            }
+        }
+    }
+}
+
 pub fn attach_epics_to_tickets(
     my_tickets: &mut [Ticket],
     team_tickets: &mut [Ticket],
@@ -860,6 +883,7 @@ async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result
     for epic in &mut epics {
         hydrate_tickets_from_details_cache(&mut epic.children, &details_by_key);
     }
+    reconcile_epic_child_statuses(&mut epics, &my_tickets, &team_tickets);
 
     Ok(Cache {
         my_tickets,
@@ -1019,6 +1043,24 @@ mod tests {
     use crate::config::{JiraConfig, StatusConfig};
     use std::collections::BTreeMap;
 
+    fn test_ticket(key: &str, status: Status) -> Ticket {
+        Ticket {
+            key: key.to_string(),
+            summary: format!("Summary for {}", key),
+            status,
+            assignee: None,
+            assignee_email: None,
+            reporter: None,
+            description: None,
+            labels: Vec::new(),
+            epic_key: None,
+            epic_name: None,
+            detail_loaded: false,
+            url: format!("https://example.atlassian.net/browse/{}", key),
+            activity: Vec::new(),
+        }
+    }
+
     #[test]
     fn parse_ticket_line_handles_empty_assignee() {
         let line = "AMP-2842\tNeeds Triage\t\t\t\tevals cli export doesn't support packages";
@@ -1060,5 +1102,33 @@ mod tests {
         let query = unassigned_team_active_query(&config);
         assert!(query.contains("assignee is EMPTY"));
         assert!(query.contains("\"Assigned Teams\" = \"Code Generation\""));
+    }
+
+    #[test]
+    fn reconcile_epic_child_statuses_uses_latest_ticket_status() {
+        let mut epics = vec![Epic {
+            key: "AMP-100".to_string(),
+            summary: "Epic".to_string(),
+            children: vec![test_ticket("AMP-1", Status::ToDo)],
+        }];
+        let my_tickets = vec![test_ticket("AMP-1", Status::InProgress)];
+        let team_tickets = vec![test_ticket("AMP-2", Status::NeedsTriage)];
+
+        reconcile_epic_child_statuses(&mut epics, &my_tickets, &team_tickets);
+
+        assert_eq!(epics[0].children[0].status, Status::InProgress);
+    }
+
+    #[test]
+    fn reconcile_epic_child_statuses_leaves_unknown_children_unchanged() {
+        let mut epics = vec![Epic {
+            key: "AMP-100".to_string(),
+            summary: "Epic".to_string(),
+            children: vec![test_ticket("AMP-1", Status::ToDo)],
+        }];
+
+        reconcile_epic_child_statuses(&mut epics, &[], &[]);
+
+        assert_eq!(epics[0].children[0].status, Status::ToDo);
     }
 }
