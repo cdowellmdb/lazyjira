@@ -270,6 +270,7 @@ struct VisibleKeysState {
 struct VisibleKeysCache {
     state: Option<VisibleKeysState>,
     items: Vec<VisibleItem>,
+    group_ticket_keys: HashMap<String, Vec<String>>,
 }
 
 /// Full application state.
@@ -414,6 +415,7 @@ impl App {
         let cache = self.visible_keys_cache.get_mut();
         cache.state = None;
         cache.items.clear();
+        cache.group_ticket_keys.clear();
     }
 
     pub fn next_tab(&mut self) {
@@ -515,9 +517,34 @@ impl App {
         }
 
         let items = self.compute_visible_items_for_tab(state.active_tab);
+        let group_ticket_keys = Self::build_group_ticket_keys(&items);
         let mut cache = self.visible_keys_cache.borrow_mut();
         cache.state = Some(state);
         cache.items = items;
+        cache.group_ticket_keys = group_ticket_keys;
+    }
+
+    fn build_group_ticket_keys(items: &[VisibleItem]) -> HashMap<String, Vec<String>> {
+        let mut group_ticket_keys: HashMap<String, Vec<String>> = HashMap::new();
+        let mut current_group: Option<String> = None;
+
+        for item in items {
+            match item {
+                VisibleItem::GroupHeader(group_id) => {
+                    current_group = Some(group_id.clone());
+                    group_ticket_keys.entry(group_id.clone()).or_default();
+                }
+                VisibleItem::Ticket(key) => {
+                    if let Some(group_id) = current_group.as_ref() {
+                        if let Some(keys) = group_ticket_keys.get_mut(group_id) {
+                            keys.push(key.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        group_ticket_keys
     }
 
     fn normalized_search(&self) -> Option<String> {
@@ -966,21 +993,11 @@ impl App {
     fn visible_ticket_keys_in_group(&self, group_id: &str) -> Vec<String> {
         self.ensure_visible_keys_cache();
         let cache = self.visible_keys_cache.borrow();
-        let mut keys = Vec::new();
-        let mut in_group = false;
-        for item in &cache.items {
-            match item {
-                VisibleItem::GroupHeader(id) => {
-                    if in_group {
-                        break;
-                    }
-                    in_group = id == group_id;
-                }
-                VisibleItem::Ticket(key) if in_group => keys.push(key.clone()),
-                VisibleItem::Ticket(_) => {}
-            }
-        }
-        keys
+        cache
+            .group_ticket_keys
+            .get(group_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn toggle_selection_at_cursor(&mut self) {
@@ -1050,10 +1067,11 @@ impl App {
     }
 
     pub fn group_selection_state(&self, group_id: &str) -> GroupSelectionState {
-        let keys = self.visible_ticket_keys_in_group(group_id);
-        if keys.is_empty() {
+        self.ensure_visible_keys_cache();
+        let cache = self.visible_keys_cache.borrow();
+        let Some(keys) = cache.group_ticket_keys.get(group_id) else {
             return GroupSelectionState::None;
-        }
+        };
         let selected = keys
             .iter()
             .filter(|k| self.selected_ticket_keys.contains(*k))
