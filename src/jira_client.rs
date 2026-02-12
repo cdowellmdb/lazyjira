@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 
 use crate::cache::{ActivityEntry, ActivityKind, Cache, Epic, Status, TeamMember, Ticket};
 use crate::config::AppConfig;
@@ -810,16 +811,38 @@ pub fn spawn_detail_cache_writer(project: &str) -> mpsc::UnboundedSender<Ticket>
 
     tokio::spawn(async move {
         let mut details_by_key = load_details_cache(&project);
+        let flush_after_idle = Duration::from_millis(750);
+        let mut dirty = false;
 
-        while let Some(mut detail) = rx.recv().await {
+        loop {
+            let next = if dirty {
+                match timeout(flush_after_idle, rx.recv()).await {
+                    Ok(value) => value,
+                    Err(_) => {
+                        if let Err(e) = save_details_cache(&project, &details_by_key) {
+                            eprintln!("Warning: failed to persist details cache: {}", e);
+                        }
+                        dirty = false;
+                        continue;
+                    }
+                }
+            } else {
+                rx.recv().await
+            };
+
+            let Some(mut detail) = next else { break };
             detail.detail_loaded = true;
             details_by_key.insert(detail.key.clone(), detail);
+            dirty = true;
 
             while let Ok(mut queued) = rx.try_recv() {
                 queued.detail_loaded = true;
                 details_by_key.insert(queued.key.clone(), queued);
+                dirty = true;
             }
+        }
 
+        if dirty {
             if let Err(e) = save_details_cache(&project, &details_by_key) {
                 eprintln!("Warning: failed to persist details cache: {}", e);
             }
