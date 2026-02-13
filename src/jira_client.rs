@@ -595,24 +595,24 @@ async fn fetch_epics(config: &AppConfig) -> Result<Vec<Epic>> {
     Ok(epics)
 }
 
-fn epics_cache_file_name(project: &str) -> String {
-    format!("lazyjira_epics_cache_{}.json", project)
+const EPICS_CACHE_PREFIX: &str = "lazyjira_epics_cache";
+const DETAILS_CACHE_PREFIX: &str = "lazyjira_ticket_details_cache";
+const FULL_CACHE_PREFIX: &str = "lazyjira_full_cache";
+
+fn cache_file_name(prefix: &str, project: &str) -> String {
+    format!("{prefix}_{project}.json")
 }
 
-fn details_cache_file_name(project: &str) -> String {
-    format!("lazyjira_ticket_details_cache_{}.json", project)
-}
-
-fn full_cache_file_name(project: &str) -> String {
-    format!("lazyjira_full_cache_{}.json", project)
+fn temp_cache_path(prefix: &str, project: &str) -> PathBuf {
+    std::env::temp_dir().join(cache_file_name(prefix, project))
 }
 
 fn epics_cache_path(project: &str) -> PathBuf {
-    std::env::temp_dir().join(epics_cache_file_name(project))
+    temp_cache_path(EPICS_CACHE_PREFIX, project)
 }
 
 fn details_cache_path(project: &str) -> PathBuf {
-    std::env::temp_dir().join(details_cache_file_name(project))
+    temp_cache_path(DETAILS_CACHE_PREFIX, project)
 }
 
 fn full_cache_dir() -> PathBuf {
@@ -623,7 +623,7 @@ fn full_cache_dir() -> PathBuf {
 }
 
 fn full_cache_path(project: &str) -> PathBuf {
-    full_cache_dir().join(full_cache_file_name(project))
+    full_cache_dir().join(cache_file_name(FULL_CACHE_PREFIX, project))
 }
 
 fn now_unix_secs() -> u64 {
