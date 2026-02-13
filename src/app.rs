@@ -859,30 +859,21 @@ impl App {
                 .get(member.email.as_str())
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            let filtered: Vec<_> = match &search {
-                Some(s) => {
-                    let member_match = Self::contains_case_insensitive(&member.name, s)
-                        || Self::contains_case_insensitive(&member.email, s);
-                    if member_match {
-                        member_tickets.to_vec()
-                    } else {
-                        member_tickets
-                            .into_iter()
-                            .copied()
-                            .filter(|t| Self::ticket_matches_search(t, s))
-                            .collect()
-                    }
-                }
-                None => member_tickets.to_vec(),
-            };
 
-            if search.is_some() && filtered.is_empty() {
-                continue;
-            }
-
+            let member_match = search.as_ref().map_or(false, |s| {
+                Self::contains_case_insensitive(&member.name, s)
+                    || Self::contains_case_insensitive(&member.email, s)
+            });
+            let mut any_match = search.is_none();
             let mut active = Vec::new();
             let mut done = Vec::new();
-            for ticket in filtered {
+            for ticket in member_tickets.iter().copied() {
+                if let Some(s) = &search {
+                    if !member_match && !Self::ticket_matches_search(ticket, s) {
+                        continue;
+                    }
+                }
+                any_match = true;
                 if ticket.status == crate::cache::Status::Closed {
                     if self.show_done {
                         done.push(ticket);
@@ -894,6 +885,10 @@ impl App {
                 } else {
                     active.push(ticket);
                 }
+            }
+
+            if search.is_some() && !any_match {
+                continue;
             }
 
             visible.push((member, active, done));
