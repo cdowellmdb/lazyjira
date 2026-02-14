@@ -843,6 +843,8 @@ impl App {
         Vec<&'a crate::cache::Ticket>,
     )> {
         let search = self.normalized_search();
+        let search = search.as_deref();
+        let has_search = search.is_some();
         let mut visible = Vec::new();
         let mut tickets_by_email: HashMap<&str, Vec<&crate::cache::Ticket>> = HashMap::new();
         for ticket in &self.cache.team_tickets {
@@ -860,18 +862,20 @@ impl App {
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
 
-            let member_match = search.as_ref().map_or(false, |s| {
+            let member_match = search.map_or(false, |s| {
                 Self::contains_case_insensitive(&member.name, s)
                     || Self::contains_case_insensitive(&member.email, s)
             });
-            let mut any_match = search.is_none();
+            let mut any_match = !has_search;
             let mut active = Vec::new();
             let mut done = Vec::new();
             for ticket in member_tickets.iter().copied() {
-                if let Some(s) = &search {
-                    if !member_match && !Self::ticket_matches_search(ticket, s) {
-                        continue;
-                    }
+                let matches_search = match search {
+                    Some(s) => member_match || Self::ticket_matches_search(ticket, s),
+                    None => true,
+                };
+                if !matches_search {
+                    continue;
                 }
                 any_match = true;
                 if ticket.status == crate::cache::Status::Closed {
@@ -887,7 +891,7 @@ impl App {
                 }
             }
 
-            if search.is_some() && !any_match {
+            if has_search && !any_match {
                 continue;
             }
 
