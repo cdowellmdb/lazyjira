@@ -3,38 +3,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::app::{App, GroupSelectionState, Tab};
-use crate::cache::Status;
-
-fn status_color(status: &Status) -> Color {
-    match status {
-        Status::NeedsTriage => Color::White,
-        Status::ReadyForWork => Color::Blue,
-        Status::InProgress => Color::Yellow,
-        Status::ToDo => Color::White,
-        Status::InReview => Color::Cyan,
-        Status::Blocked => Color::Red,
-        Status::Closed => Color::Green,
-        Status::Other(_) => Color::Magenta,
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() > max {
-        let t: String = s.chars().take(max.saturating_sub(3)).collect();
-        format!("{}...", t)
-    } else {
-        s.to_string()
-    }
-}
-
-fn group_marker(state: GroupSelectionState) -> &'static str {
-    match state {
-        GroupSelectionState::None => "[ ]",
-        GroupSelectionState::Partial => "[~]",
-        GroupSelectionState::All => "[x]",
-    }
-}
+use crate::app::{App, Tab};
+use crate::views::common::{group_marker, status_color, truncate};
 
 fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
     let key_w = 14usize;
