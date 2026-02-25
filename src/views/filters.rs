@@ -4,29 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::{App, FilterFocus};
-use crate::cache::Status;
-
-fn status_color(status: &Status) -> Color {
-    match status {
-        Status::NeedsTriage => Color::White,
-        Status::ReadyForWork => Color::Blue,
-        Status::InProgress => Color::Yellow,
-        Status::ToDo => Color::White,
-        Status::InReview => Color::Cyan,
-        Status::Blocked => Color::Red,
-        Status::Closed => Color::Green,
-        Status::Other(_) => Color::Magenta,
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() > max {
-        let t: String = s.chars().take(max.saturating_sub(3)).collect();
-        format!("{}...", t)
-    } else {
-        s.to_string()
-    }
-}
+use crate::views::common::{status_color, truncate};
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
     let chunks = Layout::default()
