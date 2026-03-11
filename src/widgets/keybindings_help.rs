@@ -106,6 +106,7 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  Shift+Tab: switch back to sidebar"),
         Line::from("  Enter: run filter (sidebar) / open ticket (results)"),
         Line::from("  Space/A/u/B: select + bulk actions (results pane)"),
+        Line::from("  z / Z: fold current status / fold all statuses"),
         Line::from("  U: open bulk CSV upload"),
         Line::from("  n: new filter"),
         Line::from("  e: edit selected filter"),

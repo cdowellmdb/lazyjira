@@ -652,6 +652,7 @@ async fn main() -> Result<()> {
                         Ok(tickets) => {
                             let count = tickets.len();
                             app.filter_results = tickets;
+                            app.collapsed_filters.clear();
                             app.mark_cache_changed();
                             app.prune_selection_to_visible();
                             app.filter_focus = FilterFocus::Results;
@@ -660,6 +661,7 @@ async fn main() -> Result<()> {
                         }
                         Err(e) => {
                             app.filter_results.clear();
+                            app.collapsed_filters.clear();
                             app.mark_cache_changed();
                             app.prune_selection_to_visible();
                             app.flash = Some(format!("Filter query failed: {}", e));
@@ -861,7 +863,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
             };
             Span::styled(
                 format!(
-                    " j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  sel:{}  Tab/S-Tab: switch pane({})  Enter: run/open  n: new  e: edit  x: delete  ?: keys  q: quit ",
+                    " j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  z/Z: fold  sel:{}  Tab/S-Tab: switch pane({})  Enter: run/open  n: new  e: edit  x: delete  ?: keys  q: quit ",
                     selected_count, pane
                 ),
                 Style::default().fg(Color::DarkGray),
@@ -2095,6 +2097,18 @@ fn handle_filter_keys(
                 begin_bulk_from_selection(app);
             }
         }
+        KeyCode::Char('z') => {
+            if app.filter_focus == FilterFocus::Results {
+                if let Some(group_id) = app.selected_group_id() {
+                    app.toggle_group_collapse(&group_id);
+                }
+            }
+        }
+        KeyCode::Char('Z') => {
+            if app.filter_focus == FilterFocus::Results {
+                app.toggle_all_groups_collapse();
+            }
+        }
         KeyCode::Char('j') | KeyCode::Down => match app.filter_focus {
             FilterFocus::Sidebar => {
                 if !config.filters.is_empty() && app.filter_sidebar_idx < config.filters.len() - 1 {
@@ -2115,6 +2129,7 @@ fn handle_filter_keys(
                 if let Some(filter) = config.filters.get(app.filter_sidebar_idx) {
                     app.filter_loading = true;
                     app.filter_results.clear();
+                    app.collapsed_filters.clear();
                     app.mark_cache_changed();
                     app.flash = Some(format!("Running filter '{}'...", filter.name));
 
@@ -2130,7 +2145,11 @@ fn handle_filter_keys(
                 }
             }
             FilterFocus::Results => {
-                if let Some(key) = app.selected_ticket_key() {
+                if let Some(group_id) = app.selected_header_group_id() {
+                    if app.is_collapsed(Tab::Filters, &group_id) {
+                        app.toggle_group_collapse(&group_id);
+                    }
+                } else if let Some(key) = app.selected_ticket_key() {
                     let detail_loaded = app.is_ticket_detail_loaded(&key);
                     app.open_detail(key.clone());
                     if !detail_loaded && app.begin_detail_fetch(&key) {
@@ -2547,6 +2566,91 @@ mod tests {
             app.bulk_upload_state,
             Some(BulkUploadState::PathInput { .. })
         ));
+    }
+
+    #[test]
+    fn z_toggles_current_filter_group_from_results() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Filters;
+        app.filter_focus = FilterFocus::Results;
+        app.filter_results = vec![
+            ticket("AMP-70", "Grouped", Status::InProgress),
+            ticket("AMP-71", "Grouped too", Status::InProgress),
+        ];
+        app.mark_cache_changed();
+        app.selected_index = 1;
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut config = sample_config();
+        handle_filter_keys(&mut app, KeyCode::Char('z'), &tx, &mut config);
+
+        assert!(app.collapsed_filters.contains(Status::InProgress.as_str()));
+        assert_eq!(app.selected_index, 0);
+    }
+
+    #[test]
+    fn uppercase_z_toggles_all_filter_groups() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Filters;
+        app.filter_focus = FilterFocus::Results;
+        app.filter_results = vec![
+            ticket("AMP-72", "In progress", Status::InProgress),
+            ticket("AMP-73", "Ready", Status::ReadyForWork),
+        ];
+        app.mark_cache_changed();
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut config = sample_config();
+        handle_filter_keys(&mut app, KeyCode::Char('Z'), &tx, &mut config);
+
+        assert!(app
+            .collapsed_filters
+            .contains(Status::ReadyForWork.as_str()));
+        assert!(!app.collapsed_filters.contains(Status::InProgress.as_str()));
+
+        handle_filter_keys(&mut app, KeyCode::Char('Z'), &tx, &mut config);
+        assert!(app.collapsed_filters.is_empty());
+    }
+
+    #[test]
+    fn enter_on_collapsed_filter_header_expands_group() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Filters;
+        app.filter_focus = FilterFocus::Results;
+        app.filter_results = vec![ticket("AMP-74", "Grouped", Status::InProgress)];
+        app.collapsed_filters
+            .insert(Status::InProgress.as_str().to_string());
+        app.mark_cache_changed();
+        app.selected_index = 0;
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut config = sample_config();
+        handle_filter_keys(&mut app, KeyCode::Enter, &tx, &mut config);
+
+        assert!(!app.collapsed_filters.contains(Status::InProgress.as_str()));
+        assert!(app.detail_ticket_key.is_none());
+    }
+
+    #[test]
+    fn enter_on_filter_ticket_opens_detail() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Filters;
+        app.filter_focus = FilterFocus::Results;
+        let mut ticket = ticket("AMP-75", "Ticket detail", Status::InProgress);
+        ticket.detail_loaded = true;
+        app.filter_results = vec![ticket];
+        app.mark_cache_changed();
+        app.selected_index = 1;
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut config = sample_config();
+        handle_filter_keys(&mut app, KeyCode::Enter, &tx, &mut config);
+
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("AMP-75"));
     }
 
     #[test]
