@@ -34,15 +34,34 @@ cargo run
 
 Recommended: install the prebuilt binary from the latest [GitHub Release](https://github.com/cdowellmdb/lazyjira/releases).
 
-1. Download the archive for your platform.
-2. Extract it.
-3. Move `lazyjira` onto your `PATH`, for example:
+Apple Silicon macOS:
 
 ```bash
+curl -L -o lazyjira.tar.gz https://github.com/cdowellmdb/lazyjira/releases/latest/download/lazyjira-aarch64-apple-darwin.tar.gz
+tar -xzf lazyjira.tar.gz
+chmod +x lazyjira
 mv lazyjira ~/.cargo/bin/lazyjira
 ```
 
-Build locally from the current checkout:
+Intel macOS:
+
+```bash
+curl -L -o lazyjira.tar.gz https://github.com/cdowellmdb/lazyjira/releases/latest/download/lazyjira-x86_64-apple-darwin.tar.gz
+tar -xzf lazyjira.tar.gz
+chmod +x lazyjira
+mv lazyjira ~/.cargo/bin/lazyjira
+```
+
+Linux x86_64:
+
+```bash
+curl -L -o lazyjira.tar.gz https://github.com/cdowellmdb/lazyjira/releases/latest/download/lazyjira-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf lazyjira.tar.gz
+chmod +x lazyjira
+mv lazyjira ~/.cargo/bin/lazyjira
+```
+
+Build locally from the current checkout instead:
 
 ```bash
 cargo install --path . --force
