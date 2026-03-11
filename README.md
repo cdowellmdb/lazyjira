@@ -21,8 +21,8 @@ On first run, lazyjira prompts for your Jira project key and team name, then wri
 
 ### Requirements
 
-- Rust toolchain (`cargo`)
 - [`jira`](https://github.com/ankitpokhrel/jira-cli) CLI authenticated and in your `$PATH`
+- Rust toolchain (`cargo`) if installing from source
 
 ## Run
 
@@ -32,11 +32,23 @@ cargo run
 
 ## Install / Update
 
+Recommended: install the prebuilt binary from the latest [GitHub Release](https://github.com/cdowellmdb/lazyjira/releases).
+
+1. Download the archive for your platform.
+2. Extract it.
+3. Move `lazyjira` onto your `PATH`, for example:
+
+```bash
+mv lazyjira ~/.cargo/bin/lazyjira
+```
+
+Build locally from the current checkout:
+
 ```bash
 cargo install --path . --force
 ```
 
-Install a tagged release from GitHub source:
+Build locally from a tagged GitHub release:
 
 ```bash
 cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.1.0
