@@ -93,6 +93,7 @@ Move picker: `p/w/n/t/v/b/d` to select + confirm, uppercase to move immediately.
 | `Tab` | Switch to results / next tab |
 | `Shift+Tab` | Back to sidebar |
 | `Enter` | Run filter (sidebar) / open ticket (results) |
+| `z/Z` | Fold current status group / fold all status groups |
 | `n` | New filter |
 | `e` | Edit filter |
 | `x` | Delete filter |

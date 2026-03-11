@@ -3,8 +3,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::app::{App, FilterFocus};
-use crate::views::common::{status_color, truncate};
+use crate::app::{App, FilterFocus, Tab};
+use crate::views::common::{group_marker, status_color, truncate};
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
     let chunks = Layout::default()
@@ -83,6 +83,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     };
 
     let mut lines = Vec::new();
+    let mut selected_visual_line: Option<usize> = None;
 
     if app.filter_loading {
         lines.push(Line::from(Span::styled(
@@ -118,54 +119,100 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             "-".repeat(header_w),
             Style::default().fg(Color::DarkGray),
         )));
+        lines.push(Line::from(""));
 
-        for (i, ticket) in app.filter_results.iter().enumerate() {
-            let is_selected = i == app.selected_index && results_focused;
-            let marker = if app.is_ticket_selected(&ticket.key) {
-                "[x]"
-            } else {
-                "[ ]"
-            };
+        let mut item_idx = 0usize;
+        for (status, tickets) in app.filters_visible_by_status() {
+            let is_header_selected = results_focused && item_idx == app.selected_index;
+            if is_header_selected {
+                selected_visual_line = Some(lines.len());
+            }
 
-            let base = if is_selected {
-                Style::default().bg(Color::DarkGray)
-            } else {
+            let collapsed = app.is_collapsed(Tab::Filters, status.as_str());
+            let indicator = if collapsed { ">" } else { "v" };
+            let marker = group_marker(app.group_selection_state(status.as_str()));
+            let header_style = if is_header_selected {
                 Style::default()
-            };
-
-            let status_style = if is_selected {
-                Style::default()
-                    .fg(status_color(&ticket.status))
+                    .fg(status_color(&status))
+                    .add_modifier(Modifier::BOLD)
                     .bg(Color::DarkGray)
             } else {
-                Style::default().fg(status_color(&ticket.status))
+                Style::default()
+                    .fg(status_color(&status))
+                    .add_modifier(Modifier::BOLD)
             };
 
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {:<key_w$}", format!("{} {}", marker, ticket.key)),
-                    base,
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{} {} {} ({})",
+                    marker,
+                    indicator,
+                    status.as_str().to_uppercase(),
+                    tickets.len()
                 ),
-                Span::styled(" | ", base),
-                Span::styled(
-                    format!("{:<status_w$}", truncate(ticket.status.as_str(), status_w)),
-                    status_style,
-                ),
-                Span::styled(" | ", base),
-                Span::styled(
-                    format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
-                    base,
-                ),
-            ]));
+                header_style,
+            )));
+            item_idx += 1;
+
+            if collapsed {
+                lines.push(Line::from(""));
+                continue;
+            }
+
+            for ticket in tickets {
+                let is_selected = results_focused && item_idx == app.selected_index;
+                if is_selected {
+                    selected_visual_line = Some(lines.len());
+                }
+
+                let marker = if app.is_ticket_selected(&ticket.key) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
+
+                let base = if is_selected {
+                    Style::default().bg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
+
+                let status_style = if is_selected {
+                    Style::default()
+                        .fg(status_color(&ticket.status))
+                        .bg(Color::DarkGray)
+                } else {
+                    Style::default().fg(status_color(&ticket.status))
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {:<key_w$}", format!("{} {}", marker, ticket.key)),
+                        base,
+                    ),
+                    Span::styled(" | ", base),
+                    Span::styled(
+                        format!("{:<status_w$}", truncate(ticket.status.as_str(), status_w)),
+                        status_style,
+                    ),
+                    Span::styled(" | ", base),
+                    Span::styled(
+                        format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
+                        base,
+                    ),
+                ]));
+                item_idx += 1;
+            }
+
+            lines.push(Line::from(""));
         }
     }
 
     // Scroll to keep selected row visible
     let visible = area.height.saturating_sub(2) as usize;
-    let scroll_y = if results_focused && app.selected_index + 2 >= visible {
-        ((app.selected_index + 2) - visible + 1) as u16
-    } else {
-        0
+    let scroll_y = match selected_visual_line {
+        Some(line) if line >= visible => (line - visible + 1) as u16,
+        _ => 0,
     };
 
     let title = if app.filter_results.is_empty() {

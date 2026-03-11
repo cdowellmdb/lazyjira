@@ -340,6 +340,7 @@ pub struct App {
     pub collapsed_team: HashSet<String>,
     pub collapsed_epics: HashSet<String>,
     pub collapsed_unassigned: HashSet<String>,
+    pub collapsed_filters: HashSet<String>,
     /// Optional epic focus order used by the Epics tab; empty means show all epics.
     epics_i_care_about_rank: HashMap<String, usize>,
 }
@@ -383,6 +384,7 @@ impl App {
             collapsed_team: HashSet::new(),
             collapsed_epics: HashSet::new(),
             collapsed_unassigned: HashSet::new(),
+            collapsed_filters: HashSet::new(),
             epics_i_care_about_rank: HashMap::new(),
         }
     }
@@ -499,11 +501,7 @@ impl App {
             Tab::Team => self.team_visible_items(),
             Tab::Epics => self.epics_visible_items(),
             Tab::Unassigned => self.unassigned_visible_items(),
-            Tab::Filters => self
-                .filter_results
-                .iter()
-                .map(|t| VisibleItem::Ticket(t.key.clone()))
-                .collect(),
+            Tab::Filters => self.filters_visible_items(),
         }
     }
 
@@ -779,6 +777,62 @@ impl App {
         items
     }
 
+    fn filter_tickets_with_status<'a>(
+        &'a self,
+        status: &crate::cache::Status,
+    ) -> Vec<&'a crate::cache::Ticket> {
+        self.filter_results
+            .iter()
+            .filter(|ticket| &ticket.status == status)
+            .collect()
+    }
+
+    pub(crate) fn filters_visible_by_status<'a>(
+        &'a self,
+    ) -> Vec<(crate::cache::Status, Vec<&'a crate::cache::Ticket>)> {
+        let mut visible = Vec::new();
+        let canonical_statuses = crate::cache::Status::all();
+
+        for status in canonical_statuses {
+            let tickets = self.filter_tickets_with_status(status);
+            if !tickets.is_empty() {
+                visible.push((status.clone(), tickets));
+            }
+        }
+
+        let mut extra_statuses = Vec::new();
+        for ticket in &self.filter_results {
+            if canonical_statuses.contains(&ticket.status) {
+                continue;
+            }
+            if !extra_statuses.iter().any(|status| status == &ticket.status) {
+                extra_statuses.push(ticket.status.clone());
+            }
+        }
+
+        for status in extra_statuses {
+            let tickets = self.filter_tickets_with_status(&status);
+            if !tickets.is_empty() {
+                visible.push((status, tickets));
+            }
+        }
+
+        visible
+    }
+
+    fn filters_visible_items(&self) -> Vec<VisibleItem> {
+        let mut items = Vec::new();
+        for (status, tickets) in self.filters_visible_by_status() {
+            items.push(VisibleItem::GroupHeader(status.as_str().to_string()));
+            if !self.collapsed_filters.contains(status.as_str()) {
+                for ticket in tickets {
+                    items.push(VisibleItem::Ticket(ticket.key.clone()));
+                }
+            }
+        }
+        items
+    }
+
     /// Status groups and visible tickets in the exact order used by the My Work tab.
     pub(crate) fn my_work_visible_by_status<'a>(
         &'a self,
@@ -964,7 +1018,7 @@ impl App {
             Tab::Team => self.collapsed_team.contains(group_id),
             Tab::Epics => self.collapsed_epics.contains(group_id),
             Tab::Unassigned => self.collapsed_unassigned.contains(group_id),
-            Tab::Filters => false,
+            Tab::Filters => self.collapsed_filters.contains(group_id),
         }
     }
 
@@ -1090,7 +1144,7 @@ impl App {
             Tab::Team => &mut self.collapsed_team,
             Tab::Epics => &mut self.collapsed_epics,
             Tab::Unassigned => &mut self.collapsed_unassigned,
-            Tab::Filters => return,
+            Tab::Filters => &mut self.collapsed_filters,
         };
         let collapsing = !set.remove(group_id);
         if collapsing {
@@ -1145,7 +1199,14 @@ impl App {
                     .collect();
                 (&mut self.collapsed_unassigned, ids)
             }
-            Tab::Filters => return,
+            Tab::Filters => {
+                let ids: Vec<String> = self
+                    .filters_visible_by_status()
+                    .iter()
+                    .map(|(status, _)| status.as_str().to_string())
+                    .collect();
+                (&mut self.collapsed_filters, ids)
+            }
         };
         if set.is_empty() {
             // Collapse all except the current group
@@ -1443,6 +1504,15 @@ mod tests {
         app.active_tab = Tab::Epics;
         app.loading = false;
         app.cache.epics = epics;
+        app
+    }
+
+    fn filters_app(tickets: Vec<Ticket>) -> App {
+        let mut app = App::new();
+        app.active_tab = Tab::Filters;
+        app.loading = false;
+        app.filter_results = tickets;
+        app.mark_cache_changed();
         app
     }
 
@@ -1795,6 +1865,61 @@ mod tests {
         assert_eq!(
             app.group_selection_state(Status::InProgress.as_str()),
             GroupSelectionState::Partial
+        );
+    }
+
+    #[test]
+    fn filters_item_count_includes_status_headers() {
+        let mut in_progress = ticket("AMP-40", "Grouped");
+        in_progress.status = Status::InProgress;
+        let mut ready = ticket("AMP-41", "Queued");
+        ready.status = Status::ReadyForWork;
+
+        let app = filters_app(vec![in_progress, ready]);
+
+        assert_eq!(app.item_count(), 4);
+    }
+
+    #[test]
+    fn filters_selected_ticket_key_skips_status_headers() {
+        let mut in_progress = ticket("AMP-42", "Grouped");
+        in_progress.status = Status::InProgress;
+        let mut ready = ticket("AMP-43", "Queued");
+        ready.status = Status::ReadyForWork;
+
+        let mut app = filters_app(vec![in_progress, ready]);
+
+        app.selected_index = 0;
+        assert_eq!(app.selected_ticket_key(), None);
+
+        app.selected_index = 1;
+        assert_eq!(app.selected_ticket_key(), Some("AMP-42".to_string()));
+    }
+
+    #[test]
+    fn filters_header_toggle_selects_and_clears_group_tickets() {
+        let mut first = ticket("AMP-44", "First");
+        first.status = Status::InProgress;
+        let mut second = ticket("AMP-45", "Second");
+        second.status = Status::InProgress;
+
+        let mut app = filters_app(vec![first, second]);
+
+        app.selected_index = 0;
+        app.toggle_selection_at_cursor();
+        assert!(app.is_ticket_selected("AMP-44"));
+        assert!(app.is_ticket_selected("AMP-45"));
+        assert_eq!(
+            app.group_selection_state(Status::InProgress.as_str()),
+            GroupSelectionState::All
+        );
+
+        app.toggle_selection_at_cursor();
+        assert!(!app.is_ticket_selected("AMP-44"));
+        assert!(!app.is_ticket_selected("AMP-45"));
+        assert_eq!(
+            app.group_selection_state(Status::InProgress.as_str()),
+            GroupSelectionState::None
         );
     }
 
