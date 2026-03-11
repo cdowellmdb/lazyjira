@@ -36,12 +36,24 @@ cargo run
 cargo install --path . --force
 ```
 
+Install a tagged release from GitHub source:
+
+```bash
+cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.1.0
+```
+
 Dev rebuild:
 
 ```bash
 lazyjira --dev            # debug build + run
 lazyjira --dev-release    # release build + run
 ```
+
+## Releases
+
+- GitHub Releases are created by pushing a version tag like `v0.1.0`.
+- Release assets include prebuilt binaries for Linux x86_64, macOS Intel, and macOS Apple Silicon.
+- The release process is documented in [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Keybindings
 
