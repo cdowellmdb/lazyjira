@@ -124,15 +124,26 @@ fn migrate_legacy_team_roster() -> Result<Vec<(String, String)>> {
         .and_then(|v| v.as_mapping())
         .ok_or_else(|| anyhow::anyhow!("no team mapping"))?;
 
-    let mut members = Vec::new();
-    for (name_val, email_val) in team_map {
-        let name = name_val.as_str().unwrap_or_default().to_string();
-        let email = email_val.as_str().unwrap_or_default().to_string();
-        if !email.is_empty() {
-            members.push((name, email));
-        }
-    }
-    Ok(members)
+    Ok(team_map
+        .iter()
+        .filter_map(|(name_val, email_val)| {
+            let email = email_val.as_str().unwrap_or_default();
+            if email.is_empty() {
+                return None;
+            }
+
+            Some((
+                name_val.as_str().unwrap_or_default().to_string(),
+                email.to_string(),
+            ))
+        })
+        .collect())
+}
+
+fn config_path_display() -> String {
+    crate::config::config_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "~/.config/lazyjira/config.toml".to_string())
 }
 
 fn render_setup(f: &mut ratatui::Frame, state: &SetupState) {
@@ -223,15 +234,9 @@ fn render_setup(f: &mut ratatui::Frame, state: &SetupState) {
                 Span::raw(&state.user_email),
             ]));
             lines.push(Line::from(""));
-
-            let config_path = crate::config::config_path();
-            let path_str = match config_path {
-                Ok(p) => p.display().to_string(),
-                Err(_) => "~/.config/lazyjira/config.toml".to_string(),
-            };
             lines.push(Line::from(vec![
                 Span::styled("  Config:     ", Style::default().fg(Color::DarkGray)),
-                Span::raw(path_str),
+                Span::raw(config_path_display()),
             ]));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
