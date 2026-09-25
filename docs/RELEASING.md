@@ -5,10 +5,11 @@
 ## Normal Release Flow
 
 1. Make sure the changes you want are merged to `main`.
-2. Update `version` in `Cargo.toml` if you want the crate metadata to match the release tag.
-3. Commit that version bump on `main`.
-4. Create an annotated tag like `v0.1.1`.
-5. Push the tag to GitHub.
+2. Bump `version` in `Cargo.toml` to match the new tag.
+3. Run `cargo check` so `Cargo.lock` picks up the new version. The release workflow builds with `--locked` and fails if the lockfile is stale.
+4. Commit the version bump on `main`.
+5. Create an annotated tag like `v0.1.2`.
+6. Push the tag to GitHub.
 
 Example:
 
@@ -16,10 +17,11 @@ Example:
 git switch main
 git pull --ff-only
 $EDITOR Cargo.toml
-git commit -am "chore(release): bump version to 0.1.1"
-git tag -a v0.1.1 -m "v0.1.1"
+cargo check
+git commit -am "chore(release): bump version to 0.1.2"
+git tag -a v0.1.2 -m "v0.1.2"
 git push origin main
-git push origin v0.1.1
+git push origin v0.1.2
 ```
 
 ## What Happens After Tag Push
@@ -47,7 +49,3 @@ From source at a release tag:
 ```bash
 cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.1.1
 ```
-
-## First Release Recommendation
-
-Start with a `v0.1.0` or `v0.1.1` tag on `main`, depending on whether you want to treat the current repo state as the initial release or the first patch after that.
