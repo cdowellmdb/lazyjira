@@ -86,6 +86,31 @@ impl Status {
     }
 }
 
+/// Groups tickets by status in display order: canonical statuses in `Status::all()`
+/// order, then workflow-specific `Status::Other` statuses in first-seen order.
+pub fn group_by_status<'a>(
+    tickets: impl IntoIterator<Item = &'a Ticket>,
+) -> Vec<(Status, Vec<&'a Ticket>)> {
+    let mut groups: Vec<(Status, Vec<&Ticket>)> = Vec::new();
+    for ticket in tickets {
+        match groups
+            .iter_mut()
+            .find(|(status, _)| *status == ticket.status)
+        {
+            Some((_, group)) => group.push(ticket),
+            None => groups.push((ticket.status.clone(), vec![ticket])),
+        }
+    }
+    // The sort is stable, so `Other` statuses keep their first-seen order.
+    groups.sort_by_key(|(status, _)| {
+        Status::all()
+            .iter()
+            .position(|canonical| canonical == status)
+            .unwrap_or(usize::MAX)
+    });
+    groups
+}
+
 /// A single entry in a ticket's activity history (changelog or comment).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityEntry {
