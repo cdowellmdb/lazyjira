@@ -1328,8 +1328,18 @@ impl App {
         }
     }
 
-    /// Enrich a cached ticket with full detail from JSON (description, accurate status/assignee).
-    pub fn enrich_ticket(&mut self, key: &str, detail: &crate::cache::Ticket) {
+    /// Enrich a cached ticket with a detail read (description, accurate status/assignee)
+    /// requested at `requested_at`. Returns false, changing nothing, if the read predates the
+    /// ticket's latest confirmed move.
+    pub fn enrich_ticket(
+        &mut self,
+        key: &str,
+        requested_at: u64,
+        detail: &crate::cache::Ticket,
+    ) -> bool {
+        if self.moves.is_stale(key, requested_at) {
+            return false;
+        }
         self.update_ticket(key, |ticket| {
             ticket.status = detail.status.clone();
             if detail.assignee.is_some() {
@@ -1354,6 +1364,7 @@ impl App {
             }
             ticket.detail_loaded = true;
         });
+        true
     }
 
     /// Set a ticket's status in the cache.

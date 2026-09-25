@@ -7,10 +7,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::app::App;
-use crate::cache::{Status, Ticket};
+use crate::cache::Status;
 
 /// A move Jira rejected. It stays on screen until the user dismisses it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MoveFailure {
     pub key: String,
     pub target: Status,
@@ -50,7 +50,8 @@ impl MoveTracker {
         self.confirmed.insert(key.to_string(), (self.clock, status));
     }
 
-    fn is_stale(&self, key: &str, requested_at: u64) -> bool {
+    /// Whether a read of `key` requested at `requested_at` predates its latest confirmed move.
+    pub fn is_stale(&self, key: &str, requested_at: u64) -> bool {
         self.confirmed
             .get(key)
             .is_some_and(|(confirmed_at, _)| *confirmed_at > requested_at)
@@ -107,16 +108,6 @@ impl App {
         self.update_ticket_status(key, status);
     }
 
-    /// Applies a detail read unless it was requested before the ticket's latest confirmed move.
-    /// Returns whether it was applied.
-    pub fn apply_detail(&mut self, key: &str, requested_at: u64, detail: &Ticket) -> bool {
-        if self.moves.is_stale(key, requested_at) {
-            return false;
-        }
-        self.enrich_ticket(key, detail);
-        true
-    }
-
     /// Re-applies moves Jira confirmed after a list read was requested, so the read can't undo them.
     pub fn reapply_moves_since(&mut self, requested_at: u64) {
         let newer: Vec<(String, Status)> = self
@@ -135,7 +126,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::{Cache, Epic};
+    use crate::cache::{Cache, Epic, Ticket};
 
     const KEY: &str = "DSCI-2478";
 
@@ -221,13 +212,13 @@ mod tests {
         assert_eq!(statuses_everywhere(&app), vec![Status::InProgress; 4]);
 
         for requested_at in [requested_before_move, requested_during_move] {
-            assert!(!app.apply_detail(KEY, requested_at, &ticket(KEY, backlog())));
+            assert!(!app.enrich_ticket(KEY, requested_at, &ticket(KEY, backlog())));
             assert_eq!(statuses_everywhere(&app), vec![Status::InProgress; 4]);
         }
 
         // A read requested after Jira confirmed the move is trusted.
         let requested_after_move = app.moves.now();
-        assert!(app.apply_detail(KEY, requested_after_move, &ticket(KEY, Status::InReview)));
+        assert!(app.enrich_ticket(KEY, requested_after_move, &ticket(KEY, Status::InReview)));
         assert_eq!(statuses_everywhere(&app), vec![Status::InReview; 4]);
     }
 
@@ -263,7 +254,7 @@ mod tests {
 
         let mut detail = ticket(KEY, Status::InReview);
         detail.description = Some("From Jira".to_string());
-        assert!(app.apply_detail(KEY, app.moves.now(), &detail));
+        assert!(app.enrich_ticket(KEY, app.moves.now(), &detail));
         assert_eq!(app.filter_results[0].status, Status::InReview);
         assert_eq!(
             app.filter_results[0].description.as_deref(),

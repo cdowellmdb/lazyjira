@@ -5,8 +5,11 @@ use ratatui::widgets::{Paragraph, Wrap};
 use super::form;
 use crate::moves::MoveFailure;
 
-/// Shows a move Jira rejected, with jira-cli's full error. `more` counts failures queued behind it.
-pub fn render(f: &mut ratatui::Frame, failure: &MoveFailure, more: usize) {
+/// Shows the oldest move Jira rejected, with jira-cli's full error.
+pub fn render(f: &mut ratatui::Frame, failures: &[MoveFailure]) {
+    let Some(failure) = failures.first() else {
+        return;
+    };
     let inner = form::render_modal_frame(f, "Move failed", 70, 50);
 
     let mut lines = vec![
@@ -22,9 +25,9 @@ pub fn render(f: &mut ratatui::Frame, failure: &MoveFailure, more: usize) {
     ];
     lines.extend(Text::raw(failure.error.as_str()).lines);
     lines.push(Line::from(""));
-    let footer = match more {
+    let footer = match failures.len() - 1 {
         0 => "[Enter/Esc] dismiss".to_string(),
-        n => format!("[Enter/Esc] dismiss ({} more)", n),
+        more => format!("[Enter/Esc] dismiss ({} more)", more),
     };
     lines.push(Line::from(Span::styled(
         footer,

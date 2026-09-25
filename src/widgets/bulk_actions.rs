@@ -112,6 +112,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App, resolutions: &[String]) {
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
+    let mut scroll = 0;
 
     match state {
         BulkState::ActionPicker { targets, selected } => {
@@ -217,15 +218,15 @@ pub fn render(f: &mut ratatui::Frame, app: &App, resolutions: &[String]) {
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        BulkState::Result { summary, .. } => {
+        BulkState::Result {
+            summary,
+            scroll: offset,
+        } => {
             render_result(&mut lines, summary);
+            scroll = *offset;
         }
     }
 
-    let scroll = match state {
-        BulkState::Result { scroll, .. } => *scroll,
-        _ => 0,
-    };
     let body = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));

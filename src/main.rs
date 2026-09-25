@@ -633,7 +633,7 @@ async fn main() -> Result<()> {
                 } => {
                     app.end_detail_fetch(&key);
                     if let Ok(detail) = result {
-                        if app.apply_detail(&key, requested_at, &detail)
+                        if app.enrich_ticket(&key, requested_at, &detail)
                             && detail_cache_tx.send(detail).is_err()
                         {
                             app.flash =
@@ -1044,9 +1044,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     if app.show_keybindings {
         widgets::keybindings_help::render(f);
     }
-    if let Some(failure) = app.moves.failures().first() {
-        widgets::move_failure::render(f, failure, app.moves.failures().len() - 1);
-    }
+    widgets::move_failure::render(f, app.moves.failures());
 }
 
 fn render_filter_edit_modal(f: &mut ratatui::Frame, app: &App) {
