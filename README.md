@@ -148,6 +148,8 @@ When you create, edit, or delete a saved filter in the app, lazyjira rewrites th
 
 In the move picker, press `p/w/n/t/v/b/c` (In Progress, Ready for Work, Needs Triage, To Do, In Review, Blocked, Closed) to pick a status, then `Enter` or `y` to confirm. Press the uppercase letter to move right away. Moving to Closed asks for a resolution.
 
+The ticket keeps its status until Jira confirms the move; the status bar shows the move as pending in the meantime. If Jira rejects the move, its error stays on screen until you press `Enter` or `Esc`. A ticket can have only one move running at a time.
+
 ### Filters tab
 
 | Key | Action |

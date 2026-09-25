@@ -24,9 +24,10 @@ Use `lazyjira --dev-release` for an optimized rebuild. Both rebuild from the che
 - **src/config.rs** — `config.toml` schema, defaults, load/save
 - **src/setup.rs** — First-run setup screen (project key, team name); imports the legacy `team.yml` roster
 - **src/jira_client.rs** — Shells out to `jira` CLI, parses output, reads/writes local caches
+- **src/moves.rs** — Single-ticket move tracking: pending moves, Jira-confirmed moves (to ignore stale reads), and rejected moves awaiting dismissal
 - **src/bulk_upload.rs** — CSV parsing and validation for bulk ticket creation
 - **src/views/** — Tab renderers (`my_work.rs`, `team.rs`, `epics.rs`, `unassigned.rs`, `filters.rs`, shared helpers in `common.rs`)
-- **src/widgets/** — Overlays (`ticket_detail.rs`, `keybindings_help.rs`, `activity.rs`, `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `form.rs`)
+- **src/widgets/** — Overlays (`ticket_detail.rs`, `keybindings_help.rs`, `activity.rs`, `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `form.rs`, `move_failure.rs`)
 
 ## Key Design Decisions
 
@@ -38,6 +39,9 @@ List queries use `--plain --no-headers --columns key,status,assignee,summary` fo
 
 ### Statuses
 `Status::from_str` maps workflow status names onto the canonical `Status` variants (`Done`/`Closed`/`Resolved` all become `Status::Closed`). Unknown names become `Status::Other` and are grouped after the canonical statuses (`cache::group_by_status`). The `[statuses]` config only controls which statuses the JQL queries load; the move picker always offers the fixed canonical list.
+
+### Moves wait for Jira
+A single-ticket move changes the ticket only after jira-cli reports success (`BackgroundMessage::TicketMoved`); a failure keeps the status and shows the error until dismissed. Every Jira read (detail fetch, cache/epics refresh, filter query) carries `requested_at = app.moves.now()`. Reads requested before a ticket's latest confirmed move must not overwrite its status: use `App::apply_detail`, `App::replace_cache(cache, requested_at)` or `App::reapply_moves_since` rather than writing statuses directly.
 
 ### View/state ordering must match
 The team view sorts members by active ticket count (most active first). Any code that maps `selected_index` to a ticket key (in `app.rs`) MUST use the same sort order as the view renderer. Use `app.sorted_team_members()` for this.

@@ -7,4 +7,5 @@ pub mod create_ticket;
 pub mod edit_fields;
 pub mod form;
 pub mod keybindings_help;
+pub mod move_failure;
 pub mod ticket_detail;

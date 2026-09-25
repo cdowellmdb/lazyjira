@@ -1,6 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::{App, BulkAction, BulkState, BulkSummary, BulkTarget};
 use crate::cache::Status;
@@ -81,26 +81,18 @@ fn render_result(lines: &mut Vec<Line>, summary: &BulkSummary) {
             "Failures:",
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )));
-        for (key, err) in summary.failed_details.iter().take(4) {
-            lines.push(Line::from(Span::styled(
+        for (key, err) in &summary.failed_details {
+            let error = Text::styled(
                 format!("  {}: {}", key, err),
                 Style::default().fg(Color::Red),
-            )));
-        }
-        if summary.failed_details.len() > 4 {
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "  ... and {} more",
-                    summary.failed_details.len().saturating_sub(4)
-                ),
-                Style::default().fg(Color::Red),
-            )));
+            );
+            lines.extend(error.lines);
         }
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "[Enter/Esc] close",
+        "[j/k] scroll  [Enter/Esc] close",
         Style::default().fg(Color::DarkGray),
     )));
 }
@@ -225,11 +217,17 @@ pub fn render(f: &mut ratatui::Frame, app: &App, resolutions: &[String]) {
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        BulkState::Result { summary } => {
+        BulkState::Result { summary, .. } => {
             render_result(&mut lines, summary);
         }
     }
 
-    let body = Paragraph::new(lines);
+    let scroll = match state {
+        BulkState::Result { scroll, .. } => *scroll,
+        _ => 0,
+    };
+    let body = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
     f.render_widget(body, inner);
 }
