@@ -3,13 +3,16 @@ mod bulk_upload;
 mod cache;
 mod config;
 mod jira_client;
+mod moves;
 mod setup;
 mod views;
 mod widgets;
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -34,15 +37,26 @@ enum CacheRefreshPhase {
     Manual,
 }
 
+/// Results of background work. `requested_at` is `app.moves.now()` when a Jira read was
+/// requested, so a read that predates a confirmed move can't undo it.
 enum BackgroundMessage {
-    EpicsRefreshed(std::result::Result<Vec<crate::cache::Epic>, String>),
+    EpicsRefreshed {
+        requested_at: u64,
+        result: std::result::Result<Vec<crate::cache::Epic>, String>,
+    },
     CacheRefreshed {
         phase: CacheRefreshPhase,
+        requested_at: u64,
         result: std::result::Result<crate::cache::Cache, String>,
     },
     TicketDetailFetched {
         key: String,
+        requested_at: u64,
         result: std::result::Result<crate::cache::Ticket, String>,
+    },
+    TicketMoved {
+        key: String,
+        result: std::result::Result<(), String>,
     },
     TicketCreated(std::result::Result<String, String>),
     CommentAdded(std::result::Result<String, String>),
@@ -57,17 +71,27 @@ enum BackgroundMessage {
     BulkCompleted(BulkSummary),
     BulkUploadPreviewReady(std::result::Result<BulkUploadPreview, String>),
     BulkUploadCompleted(BulkUploadSummary),
-    FilterResults(std::result::Result<Vec<crate::cache::Ticket>, String>),
+    FilterResults {
+        requested_at: u64,
+        result: std::result::Result<Vec<crate::cache::Ticket>, String>,
+    },
 }
 
-fn spawn_epics_refresh(tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
+fn spawn_epics_refresh(
+    tx: &UnboundedSender<BackgroundMessage>,
+    config: &AppConfig,
+    requested_at: u64,
+) {
     let tx = tx.clone();
     let config = config.clone();
     tokio::spawn(async move {
         let result = jira_client::refresh_epics_cache(&config)
             .await
             .map_err(|e| e.to_string());
-        let _ = tx.send(BackgroundMessage::EpicsRefreshed(result));
+        let _ = tx.send(BackgroundMessage::EpicsRefreshed {
+            requested_at,
+            result,
+        });
     });
 }
 
@@ -75,6 +99,7 @@ fn spawn_cache_refresh(
     tx: &UnboundedSender<BackgroundMessage>,
     phase: CacheRefreshPhase,
     config: &AppConfig,
+    requested_at: u64,
 ) {
     let tx = tx.clone();
     let config = config.clone();
@@ -85,21 +110,37 @@ fn spawn_cache_refresh(
             CacheRefreshPhase::Manual => jira_client::fetch_all(&config).await,
         }
         .map_err(|e| e.to_string());
-        let _ = tx.send(BackgroundMessage::CacheRefreshed { phase, result });
+        let _ = tx.send(BackgroundMessage::CacheRefreshed {
+            phase,
+            requested_at,
+            result,
+        });
     });
 }
 
-fn spawn_ticket_detail_fetch(tx: &UnboundedSender<BackgroundMessage>, key: String) {
+fn spawn_ticket_detail_fetch(
+    tx: &UnboundedSender<BackgroundMessage>,
+    key: String,
+    requested_at: u64,
+) {
     let tx = tx.clone();
     tokio::spawn(async move {
         let result = jira_client::fetch_ticket_detail(&key)
             .await
             .map_err(|e| e.to_string());
-        let _ = tx.send(BackgroundMessage::TicketDetailFetched { key, result });
+        let _ = tx.send(BackgroundMessage::TicketDetailFetched {
+            key,
+            requested_at,
+            result,
+        });
     });
 }
 
-fn spawn_ticket_detail_prefetch(tx: &UnboundedSender<BackgroundMessage>, keys: Vec<String>) {
+fn spawn_ticket_detail_prefetch(
+    tx: &UnboundedSender<BackgroundMessage>,
+    keys: Vec<String>,
+    requested_at: u64,
+) {
     const MAX_CONCURRENCY: usize = 6;
     if keys.is_empty() {
         return;
@@ -123,7 +164,11 @@ fn spawn_ticket_detail_prefetch(tx: &UnboundedSender<BackgroundMessage>, keys: V
 
         while let Some(joined) = tasks.join_next().await {
             if let Ok((key, result)) = joined {
-                let _ = tx.send(BackgroundMessage::TicketDetailFetched { key, result });
+                let _ = tx.send(BackgroundMessage::TicketDetailFetched {
+                    key,
+                    requested_at,
+                    result,
+                });
             }
 
             if let Some(next_key) = iter.next() {
@@ -144,7 +189,23 @@ fn queue_detail_prefetch(app: &mut App, bg_tx: &UnboundedSender<BackgroundMessag
         .into_iter()
         .filter(|k| app.begin_detail_fetch(k))
         .collect::<Vec<_>>();
-    spawn_ticket_detail_prefetch(bg_tx, prefetch_keys);
+    spawn_ticket_detail_prefetch(bg_tx, prefetch_keys, app.moves.now());
+}
+
+fn spawn_ticket_move(
+    tx: &UnboundedSender<BackgroundMessage>,
+    key: String,
+    status: Status,
+    resolution: Option<String>,
+) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        // `{:#}` keeps the whole error chain, e.g. why jira could not be run.
+        let result = jira_client::move_ticket(&key, status.as_str(), resolution.as_deref())
+            .await
+            .map_err(|e| format!("{:#}", e));
+        let _ = tx.send(BackgroundMessage::TicketMoved { key, result });
+    });
 }
 
 fn bulk_target_already_applied(ticket: &crate::cache::Ticket, target: &BulkTarget) -> bool {
@@ -214,7 +275,7 @@ fn apply_bulk_successes(app: &mut App, summary: &BulkSummary) {
     match &summary.target {
         BulkTarget::Move { status, .. } => {
             for key in &summary.successful_keys {
-                app.update_ticket_status(key, status.clone());
+                app.record_move(key, status.clone());
             }
         }
         BulkTarget::Assign {
@@ -425,22 +486,27 @@ async fn main() -> Result<()> {
 
     // Fast startup: load persisted snapshot immediately, then revalidate in stages.
     if let Some(snapshot) = jira_client::load_startup_cache_snapshot(&config.jira.project) {
-        app.replace_cache(snapshot.cache);
+        app.replace_cache(snapshot.cache, app.moves.now());
         app.loading = false;
         app.cache_stale_age_secs = Some(snapshot.age_secs);
         app.ticket_sync_stage = Some(TicketSyncStage::ActiveOnly);
         app.flash = Some("Loaded cached data. Refreshing active tickets...".to_string());
-        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::ActiveOnly, &config);
+        spawn_cache_refresh(
+            &bg_tx,
+            CacheRefreshPhase::ActiveOnly,
+            &config,
+            app.moves.now(),
+        );
     } else {
         let cache = jira_client::fetch_active_only(&config).await?;
-        app.replace_cache(cache);
+        app.replace_cache(cache, app.moves.now());
         app.loading = false;
         app.ticket_sync_stage = Some(TicketSyncStage::Full);
         app.flash = Some("Loaded active tickets. Syncing recently done...".to_string());
-        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full, &config);
+        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full, &config, app.moves.now());
     }
 
-    spawn_epics_refresh(&bg_tx, &config);
+    spawn_epics_refresh(&bg_tx, &config, app.moves.now());
     app.epics_refreshing = true;
     queue_detail_prefetch(&mut app, &bg_tx);
 
@@ -452,7 +518,10 @@ async fn main() -> Result<()> {
         while let Ok(message) = bg_rx.try_recv() {
             state_changed = true;
             match message {
-                BackgroundMessage::EpicsRefreshed(result) => {
+                BackgroundMessage::EpicsRefreshed {
+                    requested_at,
+                    result,
+                } => {
                     app.epics_refreshing = false;
                     match result {
                         Ok(epics) => {
@@ -462,6 +531,7 @@ async fn main() -> Result<()> {
                                 &epics,
                             );
                             app.cache.epics = epics;
+                            app.reapply_moves_since(requested_at);
                             app.mark_cache_changed();
                             app.clamp_selection();
                             app.flash = Some("Epic relationships refreshed".to_string());
@@ -471,18 +541,27 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                BackgroundMessage::CacheRefreshed { phase, result } => match (phase, result) {
+                BackgroundMessage::CacheRefreshed {
+                    phase,
+                    requested_at,
+                    result,
+                } => match (phase, result) {
                     (CacheRefreshPhase::ActiveOnly, Ok(cache))
                         if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
                     {
-                        app.replace_cache(cache);
+                        app.replace_cache(cache, requested_at);
                         app.cache_stale_age_secs = None;
                         app.ticket_sync_stage = Some(TicketSyncStage::Full);
                         app.clamp_selection();
                         queue_detail_prefetch(&mut app, &bg_tx);
                         app.flash =
                             Some("Active tickets refreshed. Syncing recently done...".to_string());
-                        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full, &config);
+                        spawn_cache_refresh(
+                            &bg_tx,
+                            CacheRefreshPhase::Full,
+                            &config,
+                            app.moves.now(),
+                        );
                     }
                     (CacheRefreshPhase::ActiveOnly, Err(e))
                         if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
@@ -492,12 +571,17 @@ async fn main() -> Result<()> {
                             "Active refresh failed ({}). Trying full refresh...",
                             e
                         ));
-                        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full, &config);
+                        spawn_cache_refresh(
+                            &bg_tx,
+                            CacheRefreshPhase::Full,
+                            &config,
+                            app.moves.now(),
+                        );
                     }
                     (CacheRefreshPhase::Full, Ok(cache))
                         if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
                     {
-                        app.replace_cache(cache);
+                        app.replace_cache(cache, requested_at);
                         app.cache_stale_age_secs = None;
                         app.ticket_sync_stage = None;
                         app.clamp_selection();
@@ -518,7 +602,7 @@ async fn main() -> Result<()> {
                     }
                     (CacheRefreshPhase::Manual, Ok(cache)) => {
                         app.loading = false;
-                        app.replace_cache(cache);
+                        app.replace_cache(cache, requested_at);
                         app.cache_stale_age_secs = None;
                         app.ticket_sync_stage = None;
                         app.clamp_selection();
@@ -533,7 +617,7 @@ async fn main() -> Result<()> {
                         }
                         if !app.epics_refreshing {
                             app.epics_refreshing = true;
-                            spawn_epics_refresh(&bg_tx, &config);
+                            spawn_epics_refresh(&bg_tx, &config, app.moves.now());
                         }
                     }
                     (CacheRefreshPhase::Manual, Err(e)) => {
@@ -542,18 +626,27 @@ async fn main() -> Result<()> {
                     }
                     _ => {}
                 },
-                BackgroundMessage::TicketDetailFetched { key, result } => {
+                BackgroundMessage::TicketDetailFetched {
+                    key,
+                    requested_at,
+                    result,
+                } => {
                     app.end_detail_fetch(&key);
-                    match result {
-                        Ok(detail) => {
-                            app.enrich_ticket(&key, &detail);
-                            if detail_cache_tx.send(detail).is_err() {
-                                app.flash = Some(
-                                    "Detail cache writer unavailable; skipping write".to_string(),
-                                );
-                            }
+                    if let Ok(detail) = result {
+                        if app.enrich_ticket(&key, requested_at, &detail)
+                            && detail_cache_tx.send(detail).is_err()
+                        {
+                            app.flash =
+                                Some("Detail cache writer unavailable; skipping write".to_string());
                         }
-                        Err(_) => {}
+                    }
+                }
+                BackgroundMessage::TicketMoved { key, result } => {
+                    let succeeded = result.is_ok();
+                    app.finish_move(&key, result);
+                    if succeeded {
+                        app.begin_detail_fetch(&key);
+                        spawn_ticket_detail_fetch(&bg_tx, key, app.moves.now());
                     }
                 }
                 BackgroundMessage::TicketCreated(result) => {
@@ -564,7 +657,12 @@ async fn main() -> Result<()> {
                             if !app.loading {
                                 app.loading = true;
                                 app.ticket_sync_stage = None;
-                                spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Manual, &config);
+                                spawn_cache_refresh(
+                                    &bg_tx,
+                                    CacheRefreshPhase::Manual,
+                                    &config,
+                                    app.moves.now(),
+                                );
                             }
                         }
                         Err(e) => {
@@ -606,7 +704,7 @@ async fn main() -> Result<()> {
                         "Bulk {} complete: {} succeeded, {} failed, {} skipped",
                         action_label, summary.succeeded, summary.failed, summary.skipped
                     ));
-                    app.bulk_state = Some(BulkState::Result { summary });
+                    app.bulk_state = Some(BulkState::Result { summary, scroll: 0 });
                 }
                 BackgroundMessage::BulkUploadPreviewReady(result) => match result {
                     Ok(preview) => {
@@ -643,15 +741,24 @@ async fn main() -> Result<()> {
                     if !app.loading {
                         app.loading = true;
                         app.ticket_sync_stage = None;
-                        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Manual, &config);
+                        spawn_cache_refresh(
+                            &bg_tx,
+                            CacheRefreshPhase::Manual,
+                            &config,
+                            app.moves.now(),
+                        );
                     }
                 }
-                BackgroundMessage::FilterResults(result) => {
+                BackgroundMessage::FilterResults {
+                    requested_at,
+                    result,
+                } => {
                     app.filter_loading = false;
                     match result {
                         Ok(tickets) => {
                             let count = tickets.len();
                             app.filter_results = tickets;
+                            app.reapply_moves_since(requested_at);
                             app.collapsed_filters.clear();
                             app.mark_cache_changed();
                             app.prune_selection_to_visible();
@@ -682,41 +789,7 @@ async fn main() -> Result<()> {
         if event::poll(Duration::from_millis(120))? {
             match event::read()? {
                 Event::Key(key) => {
-                    // Clear flash on any keypress
-                    app.flash = None;
-
-                    if app.is_filter_edit_open() {
-                        handle_filter_edit_keys(&mut app, key.code, &mut config);
-                    } else if app.is_bulk_upload_open() {
-                        handle_bulk_upload_keys(&mut app, key.code, &bg_tx, &config);
-                    } else if app.is_create_ticket_open() {
-                        handle_create_ticket_keys(
-                            &mut app,
-                            key.code,
-                            key.modifiers,
-                            &bg_tx,
-                            &config,
-                        )
-                        .await;
-                    } else if app.is_comment_open() {
-                        handle_comment_keys(&mut app, key.code, key.modifiers, &bg_tx);
-                    } else if app.is_assign_open() {
-                        handle_assign_keys(&mut app, key.code, &bg_tx);
-                    } else if app.is_edit_open() {
-                        handle_edit_keys(&mut app, key.code, &bg_tx);
-                    } else if app.is_bulk_open() {
-                        handle_bulk_keys(&mut app, key.code, &bg_tx, &config);
-                    } else if app.show_keybindings {
-                        handle_keybindings_keys(&mut app, key.code);
-                    } else if app.is_detail_open() {
-                        handle_detail_keys(&mut app, key.code, &config);
-                    } else if app.search.is_some() {
-                        handle_search_keys(&mut app, key.code, key.modifiers, &bg_tx).await;
-                    } else if app.active_tab == Tab::Filters {
-                        handle_filter_keys(&mut app, key.code, &bg_tx, &mut config);
-                    } else {
-                        handle_main_keys(&mut app, key.code, key.modifiers, &bg_tx, &config).await;
-                    }
+                    handle_key(&mut app, key, &bg_tx, &mut config).await;
                     draw_needed = true;
                 }
                 Event::Resize(_, _) => draw_needed = true,
@@ -739,6 +812,44 @@ async fn main() -> Result<()> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+async fn handle_key(
+    app: &mut App,
+    key: KeyEvent,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+    config: &mut AppConfig,
+) {
+    // Flash messages clear on any keypress. Move failures stay until dismissed.
+    app.flash = None;
+
+    if !app.moves.failures().is_empty() {
+        handle_move_failure_keys(app, key.code);
+    } else if app.is_filter_edit_open() {
+        handle_filter_edit_keys(app, key.code, config);
+    } else if app.is_bulk_upload_open() {
+        handle_bulk_upload_keys(app, key.code, bg_tx, config);
+    } else if app.is_create_ticket_open() {
+        handle_create_ticket_keys(app, key.code, key.modifiers, bg_tx, config).await;
+    } else if app.is_comment_open() {
+        handle_comment_keys(app, key.code, key.modifiers, bg_tx);
+    } else if app.is_assign_open() {
+        handle_assign_keys(app, key.code, bg_tx);
+    } else if app.is_edit_open() {
+        handle_edit_keys(app, key.code, bg_tx);
+    } else if app.is_bulk_open() {
+        handle_bulk_keys(app, key.code, bg_tx, config);
+    } else if app.show_keybindings {
+        handle_keybindings_keys(app, key.code);
+    } else if app.is_detail_open() {
+        handle_detail_keys(app, key.code, bg_tx, config);
+    } else if app.search.is_some() {
+        handle_search_keys(app, key.code, key.modifiers, bg_tx).await;
+    } else if app.active_tab == Tab::Filters {
+        handle_filter_keys(app, key.code, bg_tx, config);
+    } else {
+        handle_main_keys(app, key.code, key.modifiers, bg_tx, config).await;
+    }
 }
 
 fn maybe_run_dev_mode() -> Result<()> {
@@ -854,6 +965,8 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         Span::styled(flash.as_str(), Style::default().fg(Color::Red))
     } else if let Some(ref search) = app.search {
         Span::styled(format!("/{}", search), Style::default().fg(Color::Yellow))
+    } else if let Some(pending) = app.moves.pending_message() {
+        Span::styled(pending, Style::default().fg(Color::Yellow))
     } else {
         let selected_count = app.selected_ticket_count();
         if app.active_tab == Tab::Filters {
@@ -931,6 +1044,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     if app.show_keybindings {
         widgets::keybindings_help::render(f);
     }
+    widgets::move_failure::render(f, app.moves.failures());
 }
 
 fn render_filter_edit_modal(f: &mut ratatui::Frame, app: &App) {
@@ -972,6 +1086,12 @@ fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
     }
 }
 
+fn handle_move_failure_keys(app: &mut App, key: KeyCode) {
+    if matches!(key, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
+        app.moves.dismiss_failure();
+    }
+}
+
 fn current_move_options(app: &App) -> Option<(String, Vec<Status>)> {
     let ticket_key = app.detail_ticket_key.clone()?;
     let ticket = app.find_ticket(&ticket_key)?;
@@ -992,31 +1112,24 @@ fn queue_move_confirmation(app: &mut App, ticket_key: &str, selected: usize, new
     ));
 }
 
+/// Sends the move to Jira. The ticket keeps its status until Jira answers with `TicketMoved`;
+/// meanwhile the status bar shows the move as pending.
 fn perform_ticket_move(
     app: &mut App,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
     ticket_key: String,
     new_status: Status,
     resolution: Option<String>,
 ) {
-    let status_str = new_status.as_str().to_string();
-    let key_clone = ticket_key.clone();
-
-    // Optimistic update
-    app.update_ticket_status(&ticket_key, new_status);
     app.detail_mode = DetailMode::View;
-    let flash_msg = match &resolution {
-        Some(r) => format!(
-            "Moving {} to {} (resolution: {})...",
-            key_clone, status_str, r
-        ),
-        None => format!("Moving {} to {}...", key_clone, status_str),
-    };
-    app.flash = Some(flash_msg);
-
-    // Fire and forget the CLI call
-    tokio::spawn(async move {
-        let _ = jira_client::move_ticket(&key_clone, &status_str, resolution.as_deref()).await;
-    });
+    if !app.moves.start(&ticket_key, new_status.clone()) {
+        app.flash = Some(format!(
+            "{} is already being moved. Wait for Jira to answer.",
+            ticket_key
+        ));
+        return;
+    }
+    spawn_ticket_move(bg_tx, ticket_key, new_status, resolution);
 }
 
 /// Returns true if the given status is a terminal/done status that requires a resolution.
@@ -1025,7 +1138,12 @@ fn is_terminal_status(status: &Status) -> bool {
 }
 
 /// Either perform the move directly, or redirect to the resolution picker for terminal statuses.
-fn perform_or_pick_resolution(app: &mut App, ticket_key: String, new_status: Status) {
+fn perform_or_pick_resolution(
+    app: &mut App,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+    ticket_key: String,
+    new_status: Status,
+) {
     if is_terminal_status(&new_status) {
         app.detail_mode = DetailMode::ResolutionPicker {
             target_status: new_status,
@@ -1033,7 +1151,7 @@ fn perform_or_pick_resolution(app: &mut App, ticket_key: String, new_status: Sta
         };
         app.flash = Some("Select a resolution:".to_string());
     } else {
-        perform_ticket_move(app, ticket_key, new_status, None);
+        perform_ticket_move(app, bg_tx, ticket_key, new_status, None);
     }
 }
 
@@ -1215,14 +1333,31 @@ fn handle_bulk_keys(
                 app.bulk_state = None;
             }
         }
-        BulkState::Result { .. } => match key {
+        BulkState::Result { summary, scroll } => match key {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.bulk_state = None,
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.bulk_state = Some(BulkState::Result {
+                    summary,
+                    scroll: scroll.saturating_add(1),
+                });
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.bulk_state = Some(BulkState::Result {
+                    summary,
+                    scroll: scroll.saturating_sub(1),
+                });
+            }
             _ => {}
         },
     }
 }
 
-fn handle_detail_keys(app: &mut App, key: KeyCode, config: &AppConfig) {
+fn handle_detail_keys(
+    app: &mut App,
+    key: KeyCode,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+    config: &AppConfig,
+) {
     match app.detail_mode.clone() {
         DetailMode::View => {
             let ticket_detail_key = app
@@ -1327,7 +1462,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, config: &AppConfig) {
                 if let Some(target) = confirm_target {
                     if let Some((ticket_key, options)) = current_move_options(app) {
                         if options.contains(&target) {
-                            perform_or_pick_resolution(app, ticket_key, target);
+                            perform_or_pick_resolution(app, bg_tx, ticket_key, target);
                         }
                     }
                 } else if let Some((ticket_key, options)) = current_move_options(app) {
@@ -1340,7 +1475,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, config: &AppConfig) {
                 if let Some(target) = confirm_target {
                     if let Some((ticket_key, options)) = current_move_options(app) {
                         if options.contains(&target) {
-                            perform_or_pick_resolution(app, ticket_key, target);
+                            perform_or_pick_resolution(app, bg_tx, ticket_key, target);
                         }
                     }
                 }
@@ -1350,7 +1485,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, config: &AppConfig) {
                     if let Some((ticket_key, options)) = current_move_options(app) {
                         if let Some(target_idx) = options.iter().position(|s| *s == target_status) {
                             if c.is_ascii_uppercase() {
-                                perform_or_pick_resolution(app, ticket_key, target_status);
+                                perform_or_pick_resolution(app, bg_tx, ticket_key, target_status);
                             } else {
                                 queue_move_confirmation(
                                     app,
@@ -1399,6 +1534,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, config: &AppConfig) {
                     if let Some(ticket_key) = app.detail_ticket_key.clone() {
                         perform_ticket_move(
                             app,
+                            bg_tx,
                             ticket_key,
                             target_status,
                             Some(resolution.clone()),
@@ -1445,7 +1581,7 @@ async fn handle_search_keys(
                 let detail_loaded = app.is_ticket_detail_loaded(&key);
                 app.open_detail(key.clone());
                 if !detail_loaded && app.begin_detail_fetch(&key) {
-                    spawn_ticket_detail_fetch(bg_tx, key);
+                    spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
                 }
             }
         }
@@ -2136,11 +2272,15 @@ fn handle_filter_keys(
                     let tx = bg_tx.clone();
                     let cfg = config.clone();
                     let jql = filter.jql.clone();
+                    let requested_at = app.moves.now();
                     tokio::spawn(async move {
                         let result = jira_client::fetch_jql_query(&cfg, &jql)
                             .await
                             .map_err(|e| e.to_string());
-                        let _ = tx.send(BackgroundMessage::FilterResults(result));
+                        let _ = tx.send(BackgroundMessage::FilterResults {
+                            requested_at,
+                            result,
+                        });
                     });
                 }
             }
@@ -2153,7 +2293,7 @@ fn handle_filter_keys(
                     let detail_loaded = app.is_ticket_detail_loaded(&key);
                     app.open_detail(key.clone());
                     if !detail_loaded && app.begin_detail_fetch(&key) {
-                        spawn_ticket_detail_fetch(bg_tx, key);
+                        spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
                     }
                 }
             }
@@ -2166,7 +2306,7 @@ fn handle_filter_keys(
                 app.loading = true;
                 app.ticket_sync_stage = None;
                 app.flash = Some("Refreshing tickets...".to_string());
-                spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual, config);
+                spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual, config, app.moves.now());
             }
         }
         _ => {}
@@ -2251,7 +2391,7 @@ async fn handle_main_keys(
                 app.loading = true;
                 app.ticket_sync_stage = None;
                 app.flash = Some("Refreshing tickets...".to_string());
-                spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual, config);
+                spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual, config, app.moves.now());
             }
         }
         KeyCode::Char('z') => {
@@ -2288,7 +2428,7 @@ async fn handle_main_keys(
                 let detail_loaded = app.is_ticket_detail_loaded(&key);
                 app.open_detail(key.clone());
                 if !detail_loaded && app.begin_detail_fetch(&key) {
-                    spawn_ticket_detail_fetch(bg_tx, key);
+                    spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
                 }
             }
         }
@@ -2651,6 +2791,63 @@ mod tests {
         handle_filter_keys(&mut app, KeyCode::Enter, &tx, &mut config);
 
         assert_eq!(app.detail_ticket_key.as_deref(), Some("AMP-75"));
+    }
+
+    #[tokio::test]
+    async fn move_failure_stays_on_screen_until_dismissed() {
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![ticket("DSCI-2478", "Epic", Status::from_str("Backlog"))];
+        app.open_detail("DSCI-2478".to_string());
+        assert!(app.moves.start("DSCI-2478", Status::Closed));
+        app.finish_move(
+            "DSCI-2478",
+            Err("✗ Invalid transition state \"Closed\"".to_string()),
+        );
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut config = sample_config();
+
+        for code in [KeyCode::Char('m'), KeyCode::Down, KeyCode::Tab] {
+            handle_key(&mut app, KeyEvent::from(code), &tx, &mut config).await;
+            assert_eq!(app.moves.failures().len(), 1);
+        }
+        // The popup swallowed those keys instead of the detail view underneath.
+        assert!(matches!(app.detail_mode, DetailMode::View));
+        assert_eq!(app.detail_scroll, 0);
+
+        handle_key(&mut app, KeyEvent::from(KeyCode::Esc), &tx, &mut config).await;
+        assert!(app.moves.failures().is_empty());
+        assert!(app.is_detail_open());
+        assert_eq!(app.cache.my_tickets[0].status, Status::from_str("Backlog"));
+    }
+
+    // A plain #[test] has no Tokio runtime, so reaching `spawn_ticket_move` would panic
+    // instead of running jira.
+    #[test]
+    fn second_move_is_blocked_while_first_is_running() {
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![ticket("AMP-1", "A", Status::InProgress)];
+        app.open_detail("AMP-1".to_string());
+        assert!(app.moves.start("AMP-1", Status::InReview));
+        app.detail_mode = DetailMode::MovePicker {
+            selected: 0,
+            confirm_target: Some(Status::ReadyForWork),
+        };
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        handle_detail_keys(&mut app, KeyCode::Char('y'), &tx, &sample_config());
+
+        assert!(matches!(app.detail_mode, DetailMode::View));
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("AMP-1 is already being moved. Wait for Jira to answer.")
+        );
+        assert_eq!(
+            app.moves.pending_message().as_deref(),
+            Some("Moving AMP-1 to In Review…")
+        );
+        assert_eq!(app.cache.my_tickets[0].status, Status::InProgress);
     }
 
     #[test]

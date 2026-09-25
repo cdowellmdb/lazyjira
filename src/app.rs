@@ -254,6 +254,8 @@ pub enum BulkState {
     },
     Result {
         summary: BulkSummary,
+        /// Lines scrolled past, so every failure can be read.
+        scroll: u16,
     },
 }
 
@@ -306,6 +308,8 @@ pub struct App {
     pub show_keybindings: bool,
     /// Ticket keys currently being fetched for rich detail.
     detail_fetching: HashSet<String>,
+    /// Single-ticket moves waiting on Jira, confirmed, or rejected.
+    pub moves: crate::moves::MoveTracker,
     /// Monotonic generation used to invalidate derived visibility caches.
     view_generation: u64,
     /// Cached visible ticket keys for selection/counting in the active tab.
@@ -365,6 +369,7 @@ impl App {
             cache_stale_age_secs: None,
             show_keybindings: false,
             detail_fetching: HashSet::new(),
+            moves: crate::moves::MoveTracker::default(),
             view_generation: 0,
             visible_keys_cache: RefCell::new(VisibleKeysCache::default()),
             should_quit: false,
@@ -407,8 +412,10 @@ impl App {
         }
     }
 
-    pub fn replace_cache(&mut self, cache: Cache) {
+    /// Replaces the cache with a Jira read requested at `requested_at` (see `MoveTracker::now`).
+    pub fn replace_cache(&mut self, cache: Cache, requested_at: u64) {
         self.cache = cache;
+        self.reapply_moves_since(requested_at);
         self.mark_cache_changed();
     }
 
@@ -1295,10 +1302,45 @@ impl App {
             .or_else(|| self.filter_results.iter().find(|t| t.key == key))
     }
 
-    /// Enrich a cached ticket with full detail from JSON (description, accurate status/assignee).
-    pub fn enrich_ticket(&mut self, key: &str, detail: &crate::cache::Ticket) {
+    /// Applies `update` to every cached copy of `key`: My Work, Team, epic children and
+    /// filter results.
+    fn update_ticket(&mut self, key: &str, mut update: impl FnMut(&mut crate::cache::Ticket)) {
+        let copies = self
+            .cache
+            .my_tickets
+            .iter_mut()
+            .chain(self.cache.team_tickets.iter_mut())
+            .chain(
+                self.cache
+                    .epics
+                    .iter_mut()
+                    .flat_map(|e| e.children.iter_mut()),
+            )
+            .chain(self.filter_results.iter_mut())
+            .filter(|ticket| ticket.key == key);
         let mut changed = false;
-        let update = |ticket: &mut crate::cache::Ticket| {
+        for ticket in copies {
+            update(ticket);
+            changed = true;
+        }
+        if changed {
+            self.mark_cache_changed();
+        }
+    }
+
+    /// Enrich a cached ticket with a detail read (description, accurate status/assignee)
+    /// requested at `requested_at`. Returns false, changing nothing, if the read predates the
+    /// ticket's latest confirmed move.
+    pub fn enrich_ticket(
+        &mut self,
+        key: &str,
+        requested_at: u64,
+        detail: &crate::cache::Ticket,
+    ) -> bool {
+        if self.moves.is_stale(key, requested_at) {
+            return false;
+        }
+        self.update_ticket(key, |ticket| {
             ticket.status = detail.status.clone();
             if detail.assignee.is_some() {
                 ticket.assignee = detail.assignee.clone();
@@ -1321,102 +1363,21 @@ impl App {
                 ticket.activity = detail.activity.clone();
             }
             ticket.detail_loaded = true;
-        };
-        for ticket in &mut self.cache.my_tickets {
-            if ticket.key == key {
-                update(ticket);
-                changed = true;
-            }
-        }
-        for ticket in &mut self.cache.team_tickets {
-            if ticket.key == key {
-                update(ticket);
-                changed = true;
-            }
-        }
-        for epic in &mut self.cache.epics {
-            for ticket in &mut epic.children {
-                if ticket.key == key {
-                    update(ticket);
-                    changed = true;
-                }
-            }
-        }
-        if changed {
-            self.mark_cache_changed();
-        }
+        });
+        true
     }
 
-    /// Update a ticket's status in the cache (optimistic update).
+    /// Set a ticket's status in the cache.
     pub fn update_ticket_status(&mut self, key: &str, new_status: crate::cache::Status) {
-        let mut changed = false;
-        for ticket in &mut self.cache.my_tickets {
-            if ticket.key == key {
-                ticket.status = new_status.clone();
-                changed = true;
-            }
-        }
-        for ticket in &mut self.cache.team_tickets {
-            if ticket.key == key {
-                ticket.status = new_status.clone();
-                changed = true;
-            }
-        }
-        for epic in &mut self.cache.epics {
-            for ticket in &mut epic.children {
-                if ticket.key == key {
-                    ticket.status = new_status.clone();
-                    changed = true;
-                }
-            }
-        }
-        for ticket in &mut self.filter_results {
-            if ticket.key == key {
-                ticket.status = new_status.clone();
-                changed = true;
-            }
-        }
-        if changed {
-            self.mark_cache_changed();
-        }
+        self.update_ticket(key, |ticket| ticket.status = new_status.clone());
     }
 
     /// Update a ticket's assignee in the cache.
     pub fn update_ticket_assignee(&mut self, key: &str, name: &str, email: &str) {
-        let mut changed = false;
-        for ticket in &mut self.cache.my_tickets {
-            if ticket.key == key {
-                ticket.assignee = Some(name.to_string());
-                ticket.assignee_email = Some(email.to_string());
-                changed = true;
-            }
-        }
-        for ticket in &mut self.cache.team_tickets {
-            if ticket.key == key {
-                ticket.assignee = Some(name.to_string());
-                ticket.assignee_email = Some(email.to_string());
-                changed = true;
-            }
-        }
-        for epic in &mut self.cache.epics {
-            for ticket in &mut epic.children {
-                if ticket.key == key {
-                    ticket.assignee = Some(name.to_string());
-                    ticket.assignee_email = Some(email.to_string());
-                    changed = true;
-                }
-            }
-        }
-        for ticket in &mut self.filter_results {
-            if ticket.key == key {
-                ticket.assignee = Some(name.to_string());
-                ticket.assignee_email = Some(email.to_string());
-                changed = true;
-            }
-        }
-        if changed {
-            self.mark_cache_changed();
-        }
+        self.update_ticket(key, |ticket| {
+            ticket.assignee = Some(name.to_string());
+            ticket.assignee_email = Some(email.to_string());
+        });
     }
 }
 
