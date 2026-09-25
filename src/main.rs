@@ -1,10 +1,14 @@
 mod app;
+mod bulk_plan;
 mod bulk_upload;
 mod cache;
 mod config;
 mod jira_client;
+mod jira_rest;
+mod move_picker;
 mod moves;
 mod setup;
+mod transitions;
 mod views;
 mod widgets;
 
@@ -23,8 +27,10 @@ use std::process::Command;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::bulk_plan::{BulkJob, BulkPlan, FetchedTransitions};
 use crate::cache::Status;
 use crate::config::AppConfig;
+use crate::move_picker::JiraCall;
 use app::{
     App, BulkAction, BulkState, BulkSummary, BulkTarget, BulkUploadPreview, BulkUploadState,
     BulkUploadSummary, DetailMode, FilterFocus, Tab, TicketSyncStage,
@@ -53,6 +59,17 @@ enum BackgroundMessage {
         key: String,
         requested_at: u64,
         result: std::result::Result<crate::cache::Ticket, String>,
+    },
+    /// Jira's transitions for the move picker. `request` is the picker's `MoveLoading` request.
+    TransitionsFetched {
+        key: String,
+        request: u64,
+        result: std::result::Result<Vec<crate::transitions::Transition>, String>,
+    },
+    /// Every selected ticket's transitions for a bulk move, for the bulk `MoveLoading` request.
+    BulkTransitionsFetched {
+        request: u64,
+        fetched: FetchedTransitions,
     },
     TicketMoved {
         key: String,
@@ -192,90 +209,84 @@ fn queue_detail_prefetch(app: &mut App, bg_tx: &UnboundedSender<BackgroundMessag
     spawn_ticket_detail_prefetch(bg_tx, prefetch_keys, app.moves.now());
 }
 
+fn spawn_transitions_fetch(tx: &UnboundedSender<BackgroundMessage>, key: String, request: u64) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let result = jira_rest::get_transitions(&key)
+            .await
+            .map_err(|e| format!("{:#}", e));
+        let _ = tx.send(BackgroundMessage::TransitionsFetched {
+            key,
+            request,
+            result,
+        });
+    });
+}
+
 fn spawn_ticket_move(
     tx: &UnboundedSender<BackgroundMessage>,
     key: String,
-    status: Status,
-    resolution: Option<String>,
+    transition_id: String,
+    resolution_id: Option<String>,
 ) {
     let tx = tx.clone();
     tokio::spawn(async move {
-        // `{:#}` keeps the whole error chain, e.g. why jira could not be run.
-        let result = jira_client::move_ticket(&key, status.as_str(), resolution.as_deref())
+        // `{:#}` keeps the whole error chain, e.g. why Jira could not be reached.
+        let result = jira_rest::transition(&key, &transition_id, resolution_id.as_deref())
             .await
             .map_err(|e| format!("{:#}", e));
         let _ = tx.send(BackgroundMessage::TicketMoved { key, result });
     });
 }
 
-fn bulk_target_already_applied(ticket: &crate::cache::Ticket, target: &BulkTarget) -> bool {
-    match target {
-        BulkTarget::Move { status, .. } => &ticket.status == status,
-        BulkTarget::Assign { member_email, .. } => {
-            ticket.assignee_email.as_deref() == Some(member_email.as_str())
+/// Starts the Jira call the move picker asked for, if any.
+fn start_picker_call(tx: &UnboundedSender<BackgroundMessage>, call: Option<JiraCall>) {
+    match call {
+        Some(JiraCall::FetchTransitions { key, request }) => {
+            spawn_transitions_fetch(tx, key, request)
         }
+        Some(JiraCall::Transition {
+            key,
+            id,
+            resolution_id,
+        }) => spawn_ticket_move(tx, key, id, resolution_id),
+        None => {}
     }
-}
-
-fn partition_bulk_targets(
-    app: &App,
-    targets: &[String],
-    target: &BulkTarget,
-) -> (Vec<String>, usize) {
-    let mut attempt = Vec::new();
-    let mut skipped = 0usize;
-    for key in targets {
-        match app.find_ticket(key) {
-            Some(ticket) if bulk_target_already_applied(ticket, target) => skipped += 1,
-            Some(_) => attempt.push(key.clone()),
-            None => skipped += 1,
-        }
-    }
-    (attempt, skipped)
 }
 
 fn summarize_bulk_results(
     action: BulkAction,
     target: BulkTarget,
-    total: usize,
-    attempted: usize,
-    skipped: usize,
     results: Vec<(String, std::result::Result<(), String>)>,
+    skipped: Vec<(String, String)>,
 ) -> BulkSummary {
-    let mut succeeded = 0usize;
-    let mut failed = 0usize;
+    let attempted = results.len();
     let mut successful_keys = Vec::new();
     let mut failed_details = Vec::new();
     for (key, result) in results {
         match result {
-            Ok(()) => {
-                succeeded += 1;
-                successful_keys.push(key);
-            }
-            Err(err) => {
-                failed += 1;
-                failed_details.push((key, err));
-            }
+            Ok(()) => successful_keys.push(key),
+            Err(err) => failed_details.push((key, err)),
         }
     }
     BulkSummary {
         action,
         target,
-        total,
+        total: attempted + skipped.len(),
         attempted,
-        succeeded,
-        skipped,
-        failed,
+        succeeded: successful_keys.len(),
+        failed: failed_details.len(),
         successful_keys,
         failed_details,
+        skipped,
     }
 }
 
 fn apply_bulk_successes(app: &mut App, summary: &BulkSummary) {
     match &summary.target {
-        BulkTarget::Move { status, .. } => {
+        BulkTarget::Move { destination, .. } => {
             for key in &summary.successful_keys {
-                app.record_move(key, status.clone());
+                app.record_move(key, destination);
             }
         }
         BulkTarget::Assign {
@@ -290,83 +301,78 @@ fn apply_bulk_successes(app: &mut App, summary: &BulkSummary) {
     app.clamp_selection();
 }
 
-fn spawn_bulk_execution(
+/// How many Jira calls a bulk action makes at once.
+const MAX_BULK_CONCURRENCY: usize = 6;
+
+/// Runs `task` on each item, at most `MAX_BULK_CONCURRENCY` at a time, and collects the
+/// `(ticket key, result)` pairs the tasks return, in the order they finish.
+async fn run_bounded<I, T, F, Fut>(
+    items: Vec<I>,
+    task: F,
+) -> Vec<(String, std::result::Result<T, String>)>
+where
+    F: Fn(I) -> Fut,
+    Fut: std::future::Future<Output = (String, std::result::Result<T, String>)> + Send + 'static,
+    T: Send + 'static,
+{
+    let mut items = items.into_iter();
+    let mut tasks = tokio::task::JoinSet::new();
+    for item in items.by_ref().take(MAX_BULK_CONCURRENCY) {
+        tasks.spawn(task(item));
+    }
+    let mut results = Vec::new();
+    while let Some(joined) = tasks.join_next().await {
+        results.push(joined.unwrap_or_else(|err| ("unknown".to_string(), Err(err.to_string()))));
+        if let Some(item) = items.next() {
+            tasks.spawn(task(item));
+        }
+    }
+    results
+}
+
+fn spawn_bulk_transitions_fetch(
     tx: &UnboundedSender<BackgroundMessage>,
     targets: Vec<String>,
-    attempt_keys: Vec<String>,
-    target: BulkTarget,
-    skipped: usize,
+    request: u64,
 ) {
-    const MAX_CONCURRENCY: usize = 6;
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let mut fetched = run_bounded(targets.clone(), |key| async move {
+            let result = jira_rest::get_transitions(&key)
+                .await
+                .map_err(|e| format!("{:#}", e));
+            (key, result)
+        })
+        .await;
+        // Back into selection order, which the skip reasons in the summary follow.
+        fetched.sort_by_key(|(key, _)| targets.iter().position(|target| target == key));
+        let _ = tx.send(BackgroundMessage::BulkTransitionsFetched { request, fetched });
+    });
+}
+
+fn spawn_bulk_execution(
+    tx: &UnboundedSender<BackgroundMessage>,
+    target: BulkTarget,
+    plan: BulkPlan,
+) {
     let tx = tx.clone();
     tokio::spawn(async move {
         let action = match target {
             BulkTarget::Move { .. } => BulkAction::Move,
             BulkTarget::Assign { .. } => BulkAction::Assign,
         };
-        let total = targets.len();
-        let attempted = attempt_keys.len();
-        if attempt_keys.is_empty() {
-            let summary =
-                summarize_bulk_results(action, target, total, attempted, skipped, Vec::new());
-            let _ = tx.send(BackgroundMessage::BulkCompleted(summary));
-            return;
-        }
-
-        let mut iter = attempt_keys.into_iter();
-        let mut tasks = tokio::task::JoinSet::new();
-        let mut results = Vec::new();
-
-        let initial_workers = MAX_CONCURRENCY.min(attempted);
-        for _ in 0..initial_workers {
-            if let Some(key) = iter.next() {
-                let run_target = target.clone();
-                tasks.spawn(async move {
-                    let result = match run_target {
-                        BulkTarget::Move { status, resolution } => {
-                            jira_client::move_ticket(&key, status.as_str(), resolution.as_deref())
-                                .await
-                                .map_err(|e| e.to_string())
-                        }
-                        BulkTarget::Assign { member_email, .. } => {
-                            jira_client::assign_ticket(&key, &member_email)
-                                .await
-                                .map_err(|e| e.to_string())
-                        }
-                    };
-                    (key, result)
-                });
-            }
-        }
-
-        while let Some(joined) = tasks.join_next().await {
-            match joined {
-                Ok(outcome) => results.push(outcome),
-                Err(err) => results.push(("unknown".to_string(), Err(err.to_string()))),
-            }
-            if let Some(next_key) = iter.next() {
-                let run_target = target.clone();
-                tasks.spawn(async move {
-                    let result = match run_target {
-                        BulkTarget::Move { status, resolution } => jira_client::move_ticket(
-                            &next_key,
-                            status.as_str(),
-                            resolution.as_deref(),
-                        )
-                        .await
-                        .map_err(|e| e.to_string()),
-                        BulkTarget::Assign { member_email, .. } => {
-                            jira_client::assign_ticket(&next_key, &member_email)
-                                .await
-                                .map_err(|e| e.to_string())
-                        }
-                    };
-                    (next_key, result)
-                });
-            }
-        }
-
-        let summary = summarize_bulk_results(action, target, total, attempted, skipped, results);
+        let results = run_bounded(plan.jobs, |(key, job)| async move {
+            let result = match job {
+                BulkJob::Move {
+                    transition,
+                    resolution_id,
+                } => jira_rest::transition(&key, &transition.id, resolution_id.as_deref()).await,
+                BulkJob::Assign { email } => jira_client::assign_ticket(&key, &email).await,
+            };
+            (key, result.map_err(|e| format!("{:#}", e)))
+        })
+        .await;
+        let summary = summarize_bulk_results(action, target, results, plan.skipped);
         let _ = tx.send(BackgroundMessage::BulkCompleted(summary));
     });
 }
@@ -641,6 +647,26 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+                BackgroundMessage::TransitionsFetched {
+                    key,
+                    request,
+                    result,
+                } => move_picker::receive(&mut app, &key, request, result),
+                BackgroundMessage::BulkTransitionsFetched { request, fetched } => {
+                    if let Some(BulkState::MoveLoading {
+                        targets,
+                        request: waiting,
+                    }) = &app.bulk_state
+                    {
+                        if *waiting == request {
+                            app.bulk_state = Some(BulkState::MoveStatusPicker {
+                                targets: targets.clone(),
+                                fetched,
+                                selected: 0,
+                            });
+                        }
+                    }
+                }
                 BackgroundMessage::TicketMoved { key, result } => {
                     let succeeded = result.is_ok();
                     app.finish_move(&key, result);
@@ -702,7 +728,10 @@ async fn main() -> Result<()> {
                     };
                     app.flash = Some(format!(
                         "Bulk {} complete: {} succeeded, {} failed, {} skipped",
-                        action_label, summary.succeeded, summary.failed, summary.skipped
+                        action_label,
+                        summary.succeeded,
+                        summary.failed,
+                        summary.skipped.len()
                     ));
                     app.bulk_state = Some(BulkState::Result { summary, scroll: 0 });
                 }
@@ -838,11 +867,11 @@ async fn handle_key(
     } else if app.is_edit_open() {
         handle_edit_keys(app, key.code, bg_tx);
     } else if app.is_bulk_open() {
-        handle_bulk_keys(app, key.code, bg_tx, config);
+        handle_bulk_keys(app, key.code, bg_tx);
     } else if app.show_keybindings {
         handle_keybindings_keys(app, key.code);
     } else if app.is_detail_open() {
-        handle_detail_keys(app, key.code, bg_tx, config);
+        handle_detail_keys(app, key.code, bg_tx);
     } else if app.search.is_some() {
         handle_search_keys(app, key.code, key.modifiers, bg_tx).await;
     } else if app.active_tab == Tab::Filters {
@@ -1018,7 +1047,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
 
     // Detail overlay
     if app.is_detail_open() {
-        widgets::ticket_detail::render(f, app, &config.resolutions);
+        widgets::ticket_detail::render(f, app);
     }
     if app.is_create_ticket_open() {
         widgets::create_ticket::render(f, app);
@@ -1036,7 +1065,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         render_filter_edit_modal(f, app);
     }
     if app.is_bulk_open() {
-        widgets::bulk_actions::render(f, app, &config.resolutions);
+        widgets::bulk_actions::render(f, app);
     }
     if app.is_bulk_upload_open() {
         widgets::bulk_upload::render(f, app);
@@ -1087,71 +1116,27 @@ fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
 }
 
 fn handle_move_failure_keys(app: &mut App, key: KeyCode) {
-    if matches!(key, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
-        app.moves.dismiss_failure();
+    match key {
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.moves.dismiss_failure(),
+        KeyCode::Char('o') => {
+            if let Some(failure) = app.moves.failures().first() {
+                open_in_browser(&jira_client::browse_url(&failure.key));
+            }
+        }
+        _ => {}
     }
 }
 
-fn current_move_options(app: &App) -> Option<(String, Vec<Status>)> {
-    let ticket_key = app.detail_ticket_key.clone()?;
-    let ticket = app.find_ticket(&ticket_key)?;
-    let options = ticket.status.others().into_iter().cloned().collect();
-    Some((ticket_key, options))
+fn open_in_browser(url: &str) {
+    let _ = Command::new("open").arg(url).spawn();
 }
 
-fn queue_move_confirmation(app: &mut App, ticket_key: &str, selected: usize, new_status: Status) {
-    let shortcut = new_status.move_shortcut().to_ascii_uppercase();
-    let status_str = new_status.as_str().to_string();
-    app.detail_mode = DetailMode::MovePicker {
-        selected,
-        confirm_target: Some(new_status),
-    };
-    app.flash = Some(format!(
-        "Move {} to {}? Press Enter/y to confirm (or {} to move now).",
-        ticket_key, status_str, shortcut
-    ));
-}
-
-/// Sends the move to Jira. The ticket keeps its status until Jira answers with `TicketMoved`;
-/// meanwhile the status bar shows the move as pending.
-fn perform_ticket_move(
-    app: &mut App,
-    bg_tx: &UnboundedSender<BackgroundMessage>,
-    ticket_key: String,
-    new_status: Status,
-    resolution: Option<String>,
-) {
-    app.detail_mode = DetailMode::View;
-    if !app.moves.start(&ticket_key, new_status.clone()) {
-        app.flash = Some(format!(
-            "{} is already being moved. Wait for Jira to answer.",
-            ticket_key
-        ));
-        return;
-    }
-    spawn_ticket_move(bg_tx, ticket_key, new_status, resolution);
-}
-
-/// Returns true if the given status is a terminal/done status that requires a resolution.
-fn is_terminal_status(status: &Status) -> bool {
-    matches!(status, Status::Closed)
-}
-
-/// Either perform the move directly, or redirect to the resolution picker for terminal statuses.
-fn perform_or_pick_resolution(
-    app: &mut App,
-    bg_tx: &UnboundedSender<BackgroundMessage>,
-    ticket_key: String,
-    new_status: Status,
-) {
-    if is_terminal_status(&new_status) {
-        app.detail_mode = DetailMode::ResolutionPicker {
-            target_status: new_status,
-            selected: 0,
-        };
-        app.flash = Some("Select a resolution:".to_string());
-    } else {
-        perform_ticket_move(app, bg_tx, ticket_key, new_status, None);
+/// The list row after `key`: j/Down moves down, k/Up moves up, other keys leave it.
+fn list_step(selected: usize, key: KeyCode, rows: usize) -> usize {
+    match key {
+        KeyCode::Char('j') | KeyCode::Down => (selected + 1).min(rows.saturating_sub(1)),
+        KeyCode::Char('k') | KeyCode::Up => selected.saturating_sub(1),
+        _ => selected,
     }
 }
 
@@ -1172,12 +1157,7 @@ fn begin_bulk_from_selection(app: &mut App) {
     });
 }
 
-fn handle_bulk_keys(
-    app: &mut App,
-    key: KeyCode,
-    bg_tx: &UnboundedSender<BackgroundMessage>,
-    config: &AppConfig,
-) {
+fn handle_bulk_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
     let state = match app.bulk_state.clone() {
         Some(state) => state,
         None => return,
@@ -1198,88 +1178,98 @@ fn handle_bulk_keys(
                     selected: selected.saturating_sub(1),
                 });
             }
+            KeyCode::Enter if selected == 0 => {
+                let request = app.next_request_id();
+                spawn_bulk_transitions_fetch(bg_tx, targets.clone(), request);
+                app.bulk_state = Some(BulkState::MoveLoading { targets, request });
+            }
             KeyCode::Enter => {
-                app.bulk_state = Some(if selected == 0 {
-                    BulkState::MoveStatusPicker {
-                        targets,
-                        selected: 0,
-                    }
-                } else {
-                    BulkState::AssignPicker {
-                        targets,
-                        selected: 0,
-                    }
+                app.bulk_state = Some(BulkState::AssignPicker {
+                    targets,
+                    selected: 0,
                 });
             }
             _ => {}
         },
-        BulkState::MoveStatusPicker { targets, selected } => match key {
-            KeyCode::Esc => app.bulk_state = None,
-            KeyCode::Char('j') | KeyCode::Down => {
-                let max = Status::all().len().saturating_sub(1);
-                app.bulk_state = Some(BulkState::MoveStatusPicker {
-                    targets,
-                    selected: (selected + 1).min(max),
-                });
+        BulkState::MoveLoading { .. } => {
+            if key == KeyCode::Esc {
+                app.bulk_state = None;
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                app.bulk_state = Some(BulkState::MoveStatusPicker {
-                    targets,
-                    selected: selected.saturating_sub(1),
-                });
-            }
-            KeyCode::Enter => {
-                let Some(status) = Status::all().get(selected).cloned() else {
-                    return;
-                };
-                if is_terminal_status(&status) {
-                    app.bulk_state = Some(BulkState::MoveResolutionPicker {
+        }
+        BulkState::MoveStatusPicker {
+            targets,
+            fetched,
+            selected,
+        } => {
+            let destinations = bulk_plan::destinations(&fetched);
+            match key {
+                KeyCode::Esc => app.bulk_state = None,
+                KeyCode::Enter => {
+                    let Some((destination, _)) = destinations.into_iter().nth(selected) else {
+                        return;
+                    };
+                    let plan = bulk_plan::plan_move(app, &fetched, &destination);
+                    app.bulk_state =
+                        Some(if plan.resolution_choices().iter().any(Option::is_some) {
+                            BulkState::MoveResolutionPicker {
+                                targets,
+                                destination,
+                                plan,
+                                selected: 0,
+                            }
+                        } else {
+                            BulkState::Confirm {
+                                targets,
+                                target: BulkTarget::Move {
+                                    destination,
+                                    resolution: None,
+                                },
+                                plan: plan.with_resolution(None),
+                            }
+                        });
+                }
+                _ => {
+                    app.bulk_state = Some(BulkState::MoveStatusPicker {
                         targets,
-                        status,
-                        selected: 0,
-                    });
-                } else {
-                    app.bulk_state = Some(BulkState::Confirm {
-                        targets,
-                        target: BulkTarget::Move {
-                            status,
-                            resolution: None,
-                        },
+                        fetched,
+                        selected: list_step(selected, key, destinations.len()),
                     });
                 }
             }
-            _ => {}
-        },
+        }
         BulkState::MoveResolutionPicker {
             targets,
-            status,
+            destination,
+            plan,
             selected,
-        } => match key {
-            KeyCode::Esc => app.bulk_state = None,
-            KeyCode::Char('j') | KeyCode::Down => {
-                let max = config.resolutions.len().saturating_sub(1);
-                app.bulk_state = Some(BulkState::MoveResolutionPicker {
-                    targets,
-                    status,
-                    selected: (selected + 1).min(max),
-                });
+        } => {
+            let choices = plan.resolution_choices();
+            match key {
+                KeyCode::Esc => app.bulk_state = None,
+                KeyCode::Enter => {
+                    let Some(choice) = choices.get(selected) else {
+                        return;
+                    };
+                    let target = BulkTarget::Move {
+                        destination,
+                        resolution: choice.as_ref().map(|r| r.name.clone()),
+                    };
+                    app.bulk_state = Some(BulkState::Confirm {
+                        targets,
+                        target,
+                        plan: plan.with_resolution(choice.as_ref()),
+                    });
+                }
+                _ => {
+                    app.bulk_state = Some(BulkState::MoveResolutionPicker {
+                        targets,
+                        destination,
+                        plan,
+                        selected: list_step(selected, key, choices.len()),
+                    });
+                }
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                app.bulk_state = Some(BulkState::MoveResolutionPicker {
-                    targets,
-                    status,
-                    selected: selected.saturating_sub(1),
-                });
-            }
-            KeyCode::Enter => {
-                let resolution = config.resolutions.get(selected).cloned();
-                app.bulk_state = Some(BulkState::Confirm {
-                    targets,
-                    target: BulkTarget::Move { status, resolution },
-                });
-            }
-            _ => {}
-        },
+        }
         BulkState::AssignPicker { targets, selected } => {
             let max = app.cache.team_members.len().saturating_sub(1);
             match key {
@@ -1301,30 +1291,36 @@ fn handle_bulk_keys(
                         app.flash = Some("No team members configured".to_string());
                         return;
                     };
+                    let target = BulkTarget::Assign {
+                        member_email: member.email.clone(),
+                        member_name: member.name.clone(),
+                    };
+                    let plan = bulk_plan::plan_assign(app, &targets, &member.email);
                     app.bulk_state = Some(BulkState::Confirm {
                         targets,
-                        target: BulkTarget::Assign {
-                            member_email: member.email.clone(),
-                            member_name: member.name.clone(),
-                        },
+                        target,
+                        plan,
                     });
                 }
                 _ => {}
             }
         }
-        BulkState::Confirm { targets, target } => match key {
+        BulkState::Confirm {
+            targets,
+            target,
+            plan,
+        } => match key {
             KeyCode::Esc => app.bulk_state = None,
             KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                let (attempt_keys, skipped) = partition_bulk_targets(app, &targets, &target);
                 app.flash = Some(format!(
                     "Running bulk action on {} tickets...",
                     targets.len()
                 ));
                 app.bulk_state = Some(BulkState::Running {
-                    targets: targets.clone(),
+                    targets,
                     target: target.clone(),
                 });
-                spawn_bulk_execution(bg_tx, targets, attempt_keys, target, skipped);
+                spawn_bulk_execution(bg_tx, target, plan);
             }
             _ => {}
         },
@@ -1352,12 +1348,7 @@ fn handle_bulk_keys(
     }
 }
 
-fn handle_detail_keys(
-    app: &mut App,
-    key: KeyCode,
-    bg_tx: &UnboundedSender<BackgroundMessage>,
-    config: &AppConfig,
-) {
+fn handle_detail_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
     match app.detail_mode.clone() {
         DetailMode::View => {
             let ticket_detail_key = app
@@ -1372,22 +1363,13 @@ fn handle_detail_keys(
                 KeyCode::Char('o') => {
                     if let Some(key) = ticket_detail_key.as_ref() {
                         if let Some(ticket) = app.find_ticket(key) {
-                            let url = ticket.url.clone();
-                            let _ = std::process::Command::new("open").arg(&url).spawn();
+                            open_in_browser(&ticket.url);
                         }
                     } else if let Some(epic_key) = app.detail_epic_key.as_ref() {
-                        let url = format!("https://jira.mongodb.org/browse/{}", epic_key);
-                        let _ = std::process::Command::new("open").arg(&url).spawn();
+                        open_in_browser(&format!("https://jira.mongodb.org/browse/{}", epic_key));
                     }
                 }
-                KeyCode::Char('m') => {
-                    if ticket_detail_key.is_some() {
-                        app.detail_mode = DetailMode::MovePicker {
-                            selected: 0,
-                            confirm_target: None,
-                        };
-                    }
-                }
+                KeyCode::Char('m') => start_picker_call(bg_tx, move_picker::open(app)),
                 KeyCode::Char('C') => {
                     if let Some(key) = ticket_detail_key {
                         app.comment_state = Some(app::CommentState {
@@ -1438,112 +1420,11 @@ fn handle_detail_keys(
                 _ => {}
             }
         }
-        DetailMode::MovePicker {
-            selected,
-            confirm_target,
-        } => match key {
-            KeyCode::Esc => app.detail_mode = DetailMode::View,
-            KeyCode::Char('j') | KeyCode::Down => {
-                if let Some((_, options)) = current_move_options(app) {
-                    let new_sel = (selected + 1).min(options.len().saturating_sub(1));
-                    app.detail_mode = DetailMode::MovePicker {
-                        selected: new_sel,
-                        confirm_target: None,
-                    };
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                app.detail_mode = DetailMode::MovePicker {
-                    selected: selected.saturating_sub(1),
-                    confirm_target: None,
-                };
-            }
-            KeyCode::Enter => {
-                if let Some(target) = confirm_target {
-                    if let Some((ticket_key, options)) = current_move_options(app) {
-                        if options.contains(&target) {
-                            perform_or_pick_resolution(app, bg_tx, ticket_key, target);
-                        }
-                    }
-                } else if let Some((ticket_key, options)) = current_move_options(app) {
-                    if let Some(new_status) = options.get(selected).cloned() {
-                        queue_move_confirmation(app, &ticket_key, selected, new_status);
-                    }
-                }
-            }
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                if let Some(target) = confirm_target {
-                    if let Some((ticket_key, options)) = current_move_options(app) {
-                        if options.contains(&target) {
-                            perform_or_pick_resolution(app, bg_tx, ticket_key, target);
-                        }
-                    }
-                }
-            }
-            KeyCode::Char(c) => {
-                if let Some(target_status) = Status::from_move_shortcut(c) {
-                    if let Some((ticket_key, options)) = current_move_options(app) {
-                        if let Some(target_idx) = options.iter().position(|s| *s == target_status) {
-                            if c.is_ascii_uppercase() {
-                                perform_or_pick_resolution(app, bg_tx, ticket_key, target_status);
-                            } else {
-                                queue_move_confirmation(
-                                    app,
-                                    &ticket_key,
-                                    target_idx,
-                                    target_status,
-                                );
-                            }
-                        } else {
-                            app.flash = Some(format!(
-                                "{} is already {}",
-                                ticket_key,
-                                target_status.as_str()
-                            ));
-                        }
-                    }
-                }
-            }
-            _ => {}
-        },
-        DetailMode::ResolutionPicker {
-            target_status,
-            selected,
-        } => match key {
-            KeyCode::Esc => {
-                app.detail_mode = DetailMode::MovePicker {
-                    selected: 0,
-                    confirm_target: None,
-                };
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                let max = config.resolutions.len().saturating_sub(1);
-                app.detail_mode = DetailMode::ResolutionPicker {
-                    target_status,
-                    selected: (selected + 1).min(max),
-                };
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                app.detail_mode = DetailMode::ResolutionPicker {
-                    target_status,
-                    selected: selected.saturating_sub(1),
-                };
-            }
-            KeyCode::Enter => {
-                if let Some(resolution) = config.resolutions.get(selected) {
-                    if let Some(ticket_key) = app.detail_ticket_key.clone() {
-                        perform_ticket_move(
-                            app,
-                            bg_tx,
-                            ticket_key,
-                            target_status,
-                            Some(resolution.clone()),
-                        );
-                    }
-                }
-            }
-            _ => {}
-        },
+        DetailMode::MoveLoading { .. }
+        | DetailMode::MovePicker(_)
+        | DetailMode::ResolutionPicker { .. } => {
+            start_picker_call(bg_tx, move_picker::handle_key(app, key))
+        }
         DetailMode::History { scroll } => match key {
             KeyCode::Esc => app.detail_mode = DetailMode::View,
             KeyCode::Down | KeyCode::Char('j') => {
@@ -2451,7 +2332,6 @@ mod tests {
             },
             team: BTreeMap::new(),
             statuses: crate::config::StatusConfig::default(),
-            resolutions: crate::config::default_resolutions(),
             filters: vec![],
         }
     }
@@ -2461,6 +2341,7 @@ mod tests {
             key: key.to_string(),
             summary: summary.to_string(),
             status,
+            jira_status: None,
             assignee: None,
             assignee_email: None,
             reporter: None,
@@ -2477,21 +2358,19 @@ mod tests {
     #[test]
     fn summarize_bulk_results_all_success() {
         let target = BulkTarget::Move {
-            status: Status::InProgress,
+            destination: "In Progress".to_string(),
             resolution: None,
         };
         let summary = summarize_bulk_results(
             BulkAction::Move,
             target.clone(),
-            2,
-            2,
-            0,
             vec![("AMP-1".to_string(), Ok(())), ("AMP-2".to_string(), Ok(()))],
+            Vec::new(),
         );
         assert_eq!(summary.target, target);
         assert_eq!(summary.succeeded, 2);
         assert_eq!(summary.failed, 0);
-        assert_eq!(summary.skipped, 0);
+        assert!(summary.skipped.is_empty());
     }
 
     #[test]
@@ -2502,20 +2381,21 @@ mod tests {
                 member_email: "dev@example.com".to_string(),
                 member_name: "Dev".to_string(),
             },
-            3,
-            2,
-            1,
             vec![
                 ("AMP-1".to_string(), Ok(())),
                 ("AMP-2".to_string(), Err("boom".to_string())),
             ],
+            vec![("AMP-3".to_string(), "already assigned".to_string())],
         );
         assert_eq!(summary.total, 3);
         assert_eq!(summary.attempted, 2);
         assert_eq!(summary.succeeded, 1);
         assert_eq!(summary.failed, 1);
-        assert_eq!(summary.skipped, 1);
         assert_eq!(summary.failed_details.len(), 1);
+        assert_eq!(
+            summary.skipped,
+            [("AMP-3".to_string(), "already assigned".to_string())]
+        );
     }
 
     #[test]
@@ -2523,19 +2403,81 @@ mod tests {
         let summary = summarize_bulk_results(
             BulkAction::Move,
             BulkTarget::Move {
-                status: Status::Closed,
-                resolution: Some("Done".to_string()),
+                destination: "Closed".to_string(),
+                resolution: None,
             },
-            2,
-            0,
-            2,
             vec![],
+            vec![
+                ("AMP-1".to_string(), "already Closed".to_string()),
+                (
+                    "AMP-2".to_string(),
+                    "no transition to Closed from Open".to_string(),
+                ),
+            ],
         );
         assert_eq!(summary.total, 2);
         assert_eq!(summary.attempted, 0);
         assert_eq!(summary.succeeded, 0);
         assert_eq!(summary.failed, 0);
-        assert_eq!(summary.skipped, 2);
+        assert_eq!(summary.skipped.len(), 2);
+    }
+
+    // No Tokio runtime: nothing here may reach Jira.
+    #[test]
+    fn bulk_move_asks_once_for_a_resolution_then_confirms_the_plan() {
+        use crate::transitions::tests::{transition, with_resolution};
+
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![
+            ticket("DEMO-1", "A", Status::InProgress),
+            ticket("DEMO-2", "B", Status::InProgress),
+        ];
+        let done = transition("805", "Done", "Done");
+        app.bulk_state = Some(BulkState::MoveStatusPicker {
+            targets: vec!["DEMO-1".to_string(), "DEMO-2".to_string()],
+            fetched: vec![
+                (
+                    "DEMO-1".to_string(),
+                    Ok(vec![with_resolution(
+                        done.clone(),
+                        true,
+                        &[("101", "Fixed")],
+                    )]),
+                ),
+                (
+                    "DEMO-2".to_string(),
+                    Ok(vec![
+                        transition("803", "Stop Progress", "Open"),
+                        with_resolution(done, true, &[("102", "Won't Fix")]),
+                    ]),
+                ),
+            ],
+            selected: 0,
+        });
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // "Done" (2 tickets) sorts before "Open" (1 ticket).
+        handle_bulk_keys(&mut app, KeyCode::Enter, &tx);
+        assert!(matches!(
+            app.bulk_state,
+            Some(BulkState::MoveResolutionPicker { ref destination, .. }) if destination == "Done"
+        ));
+        handle_bulk_keys(&mut app, KeyCode::Enter, &tx);
+
+        let Some(BulkState::Confirm { target, plan, .. }) = &app.bulk_state else {
+            panic!("expected the confirm step");
+        };
+        assert_eq!(
+            target,
+            &BulkTarget::Move {
+                destination: "Done".to_string(),
+                resolution: Some("Fixed".to_string()),
+            }
+        );
+        assert_eq!(plan.jobs.len(), 1);
+        assert_eq!(plan.jobs[0].0, "DEMO-1");
+        assert_eq!(plan.skipped[0].0, "DEMO-2");
     }
 
     #[tokio::test]
@@ -2799,10 +2741,10 @@ mod tests {
         app.loading = false;
         app.cache.my_tickets = vec![ticket("DSCI-2478", "Epic", Status::from_str("Backlog"))];
         app.open_detail("DSCI-2478".to_string());
-        assert!(app.moves.start("DSCI-2478", Status::Closed));
+        assert!(app.moves.start("DSCI-2478", "Done"));
         app.finish_move(
             "DSCI-2478",
-            Err("✗ Invalid transition state \"Closed\"".to_string()),
+            Err("Jira answered 400 Bad Request.\nresolution: Resolution is required.".to_string()),
         );
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let mut config = sample_config();
@@ -2819,35 +2761,6 @@ mod tests {
         assert!(app.moves.failures().is_empty());
         assert!(app.is_detail_open());
         assert_eq!(app.cache.my_tickets[0].status, Status::from_str("Backlog"));
-    }
-
-    // A plain #[test] has no Tokio runtime, so reaching `spawn_ticket_move` would panic
-    // instead of running jira.
-    #[test]
-    fn second_move_is_blocked_while_first_is_running() {
-        let mut app = App::new();
-        app.loading = false;
-        app.cache.my_tickets = vec![ticket("AMP-1", "A", Status::InProgress)];
-        app.open_detail("AMP-1".to_string());
-        assert!(app.moves.start("AMP-1", Status::InReview));
-        app.detail_mode = DetailMode::MovePicker {
-            selected: 0,
-            confirm_target: Some(Status::ReadyForWork),
-        };
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-
-        handle_detail_keys(&mut app, KeyCode::Char('y'), &tx, &sample_config());
-
-        assert!(matches!(app.detail_mode, DetailMode::View));
-        assert_eq!(
-            app.flash.as_deref(),
-            Some("AMP-1 is already being moved. Wait for Jira to answer.")
-        );
-        assert_eq!(
-            app.moves.pending_message().as_deref(),
-            Some("Moving AMP-1 to In Review…")
-        );
-        assert_eq!(app.cache.my_tickets[0].status, Status::InProgress);
     }
 
     #[test]

@@ -5,7 +5,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use super::form;
 use crate::moves::MoveFailure;
 
-/// Shows the oldest move Jira rejected, with jira-cli's full error.
+/// Shows the oldest move Jira rejected, with Jira's full error.
 pub fn render(f: &mut ratatui::Frame, failures: &[MoveFailure]) {
     let Some(failure) = failures.first() else {
         return;
@@ -16,8 +16,7 @@ pub fn render(f: &mut ratatui::Frame, failures: &[MoveFailure]) {
         Line::from(Span::styled(
             format!(
                 "Jira did not move {} to {}. Its status is unchanged.",
-                failure.key,
-                failure.target.as_str()
+                failure.key, failure.target
             ),
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )),
@@ -26,8 +25,8 @@ pub fn render(f: &mut ratatui::Frame, failures: &[MoveFailure]) {
     lines.extend(Text::raw(failure.error.as_str()).lines);
     lines.push(Line::from(""));
     let footer = match failures.len() - 1 {
-        0 => "[Enter/Esc] dismiss".to_string(),
-        more => format!("[Enter/Esc] dismiss ({} more)", more),
+        0 => "[o] open in browser  [Enter/Esc] dismiss".to_string(),
+        more => format!("[o] open in browser  [Enter/Esc] dismiss ({} more)", more),
     };
     lines.push(Line::from(Span::styled(
         footer,

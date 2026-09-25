@@ -3,7 +3,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::{App, BulkAction, BulkState, BulkSummary, BulkTarget};
-use crate::cache::Status;
+use crate::bulk_plan;
 
 use super::form;
 
@@ -24,9 +24,12 @@ fn render_option(lines: &mut Vec<Line>, label: &str, selected: bool) {
 
 fn target_label(target: &BulkTarget) -> String {
     match target {
-        BulkTarget::Move { status, resolution } => match resolution {
-            Some(resolution) => format!("Move to {} (resolution: {})", status.as_str(), resolution),
-            None => format!("Move to {}", status.as_str()),
+        BulkTarget::Move {
+            destination,
+            resolution,
+        } => match resolution {
+            Some(resolution) => format!("Move to {} (resolution: {})", destination, resolution),
+            None => format!("Move to {}", destination),
         },
         BulkTarget::Assign {
             member_name,
@@ -53,6 +56,31 @@ fn sample_keys(targets: &[String]) -> String {
     }
 }
 
+/// A titled list of "KEY: reason" lines, if there are any.
+fn push_ticket_reasons(
+    lines: &mut Vec<Line>,
+    title: &'static str,
+    color: Color,
+    reasons: &[(String, String)],
+) {
+    if reasons.is_empty() {
+        return;
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        title,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )));
+    for (key, reason) in reasons {
+        let text = Text::styled(format!("  {}: {}", key, reason), Style::default().fg(color));
+        lines.extend(text.lines);
+    }
+}
+
+fn hint(text: String) -> Line<'static> {
+    Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
+}
+
 fn render_result(lines: &mut Vec<Line>, summary: &BulkSummary) {
     let action = match summary.action {
         BulkAction::Move => "Bulk Move",
@@ -72,23 +100,11 @@ fn render_result(lines: &mut Vec<Line>, summary: &BulkSummary) {
     lines.push(Line::from(format!("Total: {}", summary.total)));
     lines.push(Line::from(format!("Attempted: {}", summary.attempted)));
     lines.push(Line::from(format!("Succeeded: {}", summary.succeeded)));
-    lines.push(Line::from(format!("Skipped: {}", summary.skipped)));
+    lines.push(Line::from(format!("Skipped: {}", summary.skipped.len())));
     lines.push(Line::from(format!("Failed: {}", summary.failed)));
 
-    if !summary.failed_details.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Failures:",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        )));
-        for (key, err) in &summary.failed_details {
-            let error = Text::styled(
-                format!("  {}: {}", key, err),
-                Style::default().fg(Color::Red),
-            );
-            lines.extend(error.lines);
-        }
-    }
+    push_ticket_reasons(lines, "Failures:", Color::Red, &summary.failed_details);
+    push_ticket_reasons(lines, "Skipped:", Color::Yellow, &summary.skipped);
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -97,7 +113,7 @@ fn render_result(lines: &mut Vec<Line>, summary: &BulkSummary) {
     )));
 }
 
-pub fn render(f: &mut ratatui::Frame, app: &App, resolutions: &[String]) {
+pub fn render(f: &mut ratatui::Frame, app: &App) {
     let Some(state) = app.bulk_state.as_ref() else {
         return;
     };
@@ -127,41 +143,70 @@ pub fn render(f: &mut ratatui::Frame, app: &App, resolutions: &[String]) {
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        BulkState::MoveStatusPicker { targets, selected } => {
-            lines.push(Line::from(format!("Tickets: {}", targets.len())));
-            lines.push(Line::from(""));
-            for (i, status) in Status::all().iter().enumerate() {
-                render_option(&mut lines, status.as_str(), i == *selected);
-            }
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "[j/k] choose status  [Enter] next  [Esc] cancel",
-                Style::default().fg(Color::DarkGray),
+        BulkState::MoveLoading { targets, .. } => {
+            lines.push(Line::from(format!(
+                "Loading the transitions of {} tickets from Jira…",
+                targets.len()
             )));
+            lines.push(Line::from(""));
+            lines.push(hint("[Esc] cancel".to_string()));
         }
-        BulkState::MoveResolutionPicker {
+        BulkState::MoveStatusPicker {
             targets,
-            status,
+            fetched,
             selected,
         } => {
             lines.push(Line::from(format!("Tickets: {}", targets.len())));
-            lines.push(Line::from(format!("Move target: {}", status.as_str())));
             lines.push(Line::from(""));
-            if resolutions.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "No configured resolutions. Press Enter to continue.",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            } else {
-                for (i, resolution) in resolutions.iter().enumerate() {
-                    render_option(&mut lines, resolution, i == *selected);
-                }
+            let destinations = bulk_plan::destinations(fetched);
+            if destinations.is_empty() {
+                lines.push(hint(
+                    "Jira offers no transitions for these tickets.".to_string(),
+                ));
+            }
+            for (i, (destination, count)) in destinations.iter().enumerate() {
+                let label = format!("{} ({} of {} tickets)", destination, count, targets.len());
+                render_option(&mut lines, &label, i == *selected);
+            }
+            let failed: Vec<(&String, &String)> = fetched
+                .iter()
+                .filter_map(|(key, result)| Some((key, result.as_ref().err()?)))
+                .collect();
+            if let Some((key, error)) = failed.first() {
+                lines.push(Line::from(""));
+                let text = format!(
+                    "Couldn't load the transitions of {} ticket(s), so they will be skipped. {}: {}",
+                    failed.len(),
+                    key,
+                    error
+                );
+                lines.extend(Text::styled(text, Style::default().fg(Color::Red)).lines);
             }
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "[j/k] choose resolution  [Enter] next  [Esc] cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(hint(
+                "[j/k] choose status  [Enter] next  [Esc] cancel".to_string(),
+            ));
+        }
+        BulkState::MoveResolutionPicker {
+            targets,
+            destination,
+            plan,
+            selected,
+        } => {
+            lines.push(Line::from(format!("Tickets: {}", targets.len())));
+            lines.push(Line::from(format!("Move to: {}", destination)));
+            lines.push(Line::from(""));
+            for (i, choice) in plan.resolution_choices().iter().enumerate() {
+                let name = choice.as_ref().map_or("No resolution", |r| r.name.as_str());
+                render_option(&mut lines, name, i == *selected);
+            }
+            lines.push(Line::from(""));
+            lines.push(hint(
+                "Tickets that require a different resolution will be skipped.".to_string(),
+            ));
+            lines.push(hint(
+                "[j/k] choose resolution  [Enter] next  [Esc] cancel".to_string(),
+            ));
         }
         BulkState::AssignPicker { targets, selected } => {
             lines.push(Line::from(format!("Tickets: {}", targets.len())));
@@ -185,7 +230,11 @@ pub fn render(f: &mut ratatui::Frame, app: &App, resolutions: &[String]) {
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        BulkState::Confirm { targets, target } => {
+        BulkState::Confirm {
+            targets,
+            target,
+            plan,
+        } => {
             lines.push(Line::from(Span::styled(
                 "Please confirm",
                 Style::default()
@@ -196,6 +245,11 @@ pub fn render(f: &mut ratatui::Frame, app: &App, resolutions: &[String]) {
             lines.push(Line::from(format!("Action: {}", target_label(target))));
             lines.push(Line::from(format!("Tickets: {}", targets.len())));
             lines.push(Line::from(format!("Keys: {}", sample_keys(targets))));
+            lines.push(Line::from(format!(
+                "To send: {}  Skipped: {} (reasons shown after the run)",
+                plan.jobs.len(),
+                plan.skipped.len()
+            )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "[Enter/y] run  [Esc] cancel",
