@@ -1,181 +1,84 @@
 # lazyjira
 
-A terminal UI for Jira focused on fast triage and team visibility.
+A fast, keyboard-driven terminal UI for Jira, built for daily triage and for keeping an eye on your team's work.
+
+lazyjira runs on top of the [`jira` CLI](https://github.com/ankitpokhrel/jira-cli). It uses your existing CLI login, opens instantly from a local cache, and refreshes in the background. It was built for one team's workflow on `jira.mongodb.org`, so a few parts still assume that instance (see [Limitations](#limitations)).
+
+![lazyjira moving through My Work, a ticket detail, Team, Epics, Unassigned, and a saved filter](docs/images/demo.gif)
 
 ## Features
 
-- Five tabs: `My Work`, `Team`, `Epics`, `Unassigned`, `Filters`
-- Status-grouped ticket views with focus filters
-- Epic relationship mapping + progress bars
-- Optional epic focus list for the Epics tab (`epics_i_care_about`)
-- Rich ticket detail with description, labels, assignee, epic, activity history
-- In-TUI actions: create tickets, comment, assign, edit fields, move status
-- Multi-select + bulk move/assign from list views
-- Bulk CSV upload for mass ticket creation with mandatory preview
-- Saved JQL filters with persistent config
-- Local caching for fast startup and detail open
+- Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, **Filters**
+- Tickets grouped by status, with one-key status focus and a Done toggle
+- Epic progress bars, with an optional list of the epics you care about
+- Ticket detail with description, labels, assignee, epic, and activity history
+- Create, comment on, assign, edit, and move tickets without leaving the terminal
+- Multi-select with bulk move and bulk assign
+- Bulk ticket creation from a CSV, with a validated preview before anything is sent
+- Saved JQL filters
+- Local cache for fast startup and instant detail views
 
-## Setup
+## Requirements
 
-On first run, lazyjira prompts for your Jira project key and team name, then writes `~/.config/lazyjira/config.toml`. Edit the file directly to add team members, custom statuses, saved filters, or an epic focus list for the Epics tab.
+- The [`jira` CLI](https://github.com/ankitpokhrel/jira-cli) on your `PATH` and logged in (`jira init`). Running `jira me` should print your email.
+- macOS (Apple Silicon or Intel) or Linux x86_64. Windows is not supported.
+- A stable Rust toolchain, only if you build from source.
 
-### Requirements
+## Install
 
-- [`jira`](https://github.com/ankitpokhrel/jira-cli) CLI authenticated and in your `$PATH`
-- Rust toolchain (`cargo`) if installing from source
+Download the prebuilt binary from the [latest GitHub Release](https://github.com/cdowellmdb/lazyjira/releases/latest). Set `TARGET` for your platform:
 
-## Run
-
-```bash
-cargo run
-```
-
-## Install / Update
-
-Recommended: install the prebuilt binary from the latest [GitHub Release](https://github.com/cdowellmdb/lazyjira/releases).
-
-Apple Silicon macOS:
+| Platform | `TARGET` |
+|----------|----------|
+| macOS, Apple Silicon | `aarch64-apple-darwin` |
+| macOS, Intel | `x86_64-apple-darwin` |
+| Linux x86_64 | `x86_64-unknown-linux-gnu` |
 
 ```bash
-curl -L -o lazyjira.tar.gz https://github.com/cdowellmdb/lazyjira/releases/latest/download/lazyjira-aarch64-apple-darwin.tar.gz
+TARGET=aarch64-apple-darwin
+curl -fL -o lazyjira.tar.gz "https://github.com/cdowellmdb/lazyjira/releases/latest/download/lazyjira-$TARGET.tar.gz"
 tar -xzf lazyjira.tar.gz
-chmod +x lazyjira
+mkdir -p ~/.cargo/bin
 mv lazyjira ~/.cargo/bin/lazyjira
 ```
 
-Intel macOS:
+Make sure `~/.cargo/bin` is on your `PATH`, or move the binary to another directory that is. Run `lazyjira --help` to check the install. To update, run the same commands again.
+
+To build from source instead:
 
 ```bash
-curl -L -o lazyjira.tar.gz https://github.com/cdowellmdb/lazyjira/releases/latest/download/lazyjira-x86_64-apple-darwin.tar.gz
-tar -xzf lazyjira.tar.gz
-chmod +x lazyjira
-mv lazyjira ~/.cargo/bin/lazyjira
-```
-
-Linux x86_64:
-
-```bash
-curl -L -o lazyjira.tar.gz https://github.com/cdowellmdb/lazyjira/releases/latest/download/lazyjira-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf lazyjira.tar.gz
-chmod +x lazyjira
-mv lazyjira ~/.cargo/bin/lazyjira
-```
-
-Build locally from the current checkout instead:
-
-```bash
+# From a local checkout
 cargo install --path . --force
+
+# From a release tag
+cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.1.1
 ```
 
-Build locally from a tagged GitHub release:
+## Quick start
 
 ```bash
-cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.1.0
+lazyjira
 ```
 
-Dev rebuild:
+The first run asks for two things:
 
-```bash
-lazyjira --dev            # debug build + run
-lazyjira --dev-release    # release build + run
-```
+1. **Jira project key**, for example `AMP`.
+2. **Team name**, which must match your team's value in the Jira `Assigned Teams` field. The Unassigned tab uses it to find your team's unassigned tickets.
 
-## Releases
+lazyjira then saves `~/.config/lazyjira/config.toml`, adds you to the team roster using the email from `jira me`, and loads your tickets. Press `?` at any time to see the keybindings.
 
-- GitHub Releases are created by pushing a version tag like `v0.1.0`.
-- Release assets include prebuilt binaries for Linux x86_64, macOS Intel, and macOS Apple Silicon.
-- The release process is documented in [`docs/RELEASING.md`](docs/RELEASING.md).
-
-## Keybindings
-
-### Global
-
-| Key | Action |
-|-----|--------|
-| `Tab` | Next tab |
-| `j/k` | Navigate |
-| `Space` | Toggle ticket/group selection |
-| `A` | Select all visible tickets |
-| `u` | Clear selected tickets |
-| `B` | Open bulk action menu |
-| `U` | Open bulk CSV upload |
-| `Enter` | Open detail |
-| `/` | Search |
-| `c` | Create ticket |
-| `d` | Toggle Done visibility |
-| `p/w/n/v` | Focus status filter |
-| `r` | Refresh |
-| `?` | Keybindings help |
-| `q` | Quit |
-
-### Detail View
-
-| Key | Action |
-|-----|--------|
-| `Esc` | Close |
-| `Up/Down` | Scroll |
-| `o` | Open in browser |
-| `m` | Move status |
-| `C` | Comment |
-| `a` | Assign/reassign |
-| `e` | Edit summary + labels |
-| `h` | Activity history |
-
-Move picker: `p/w/n/t/v/b/d` to select + confirm, uppercase to move immediately.
-
-### Filters Tab
-
-| Key | Action |
-|-----|--------|
-| `j/k` | Navigate within focused pane |
-| `Space` | Toggle selection (results pane) |
-| `A` | Select all results (results pane) |
-| `u` | Clear selection (results pane) |
-| `B` | Open bulk actions (results pane) |
-| `U` | Open bulk CSV upload |
-| `Tab` | Switch to results / next tab |
-| `Shift+Tab` | Back to sidebar |
-| `Enter` | Run filter (sidebar) / open ticket (results) |
-| `z/Z` | Fold current status group / fold all status groups |
-| `n` | New filter |
-| `e` | Edit filter |
-| `x` | Delete filter |
-
-## Bulk CSV Upload
-
-Use `U` to open the bulk CSV upload modal from any main view.
-
-Flow:
-1. Enter a CSV file path.
-2. Preview parsed rows, warnings, and validation errors.
-3. Submit only when preview has zero invalid rows.
-
-CSV rules (V1):
-- Required header: `summary`
-- Optional headers: `type,assignee_email,epic_key,labels,description`
-- `type` defaults to `Task` and must be one of `Task`, `Bug`, `Story`
-- `labels` uses `|` separators in one cell (example: `frontend|urgent`)
-- `epic_key` must match a known cached epic
-- Row limit: 500 rows per upload
-
-Warnings:
-- Duplicate summary against existing visible tickets
-- Duplicate summary within the CSV
-
-Warnings do not block submission. Validation errors do.
+To see teammates in the Team tab, add them to the `[team]` section of the config file and restart lazyjira.
 
 ## Configuration
 
-Config lives at `~/.config/lazyjira/config.toml`:
+Config lives at `~/.config/lazyjira/config.toml`. lazyjira reads it once at startup.
 
 ```toml
 [jira]
 project = "AMP"
 team_name = "Code Generation"
 done_window_days = 14
-# Keep this in the [jira] section.
-
-epics_i_care_about = ["AMP-100", "AMP-200"] # optional; empty/missing = show all epics; list order controls Epics tab order
+epics_i_care_about = ["AMP-100", "AMP-200"]
 
 [team]
 "Alice Smith" = "alice.smith@example.com"
@@ -194,8 +97,112 @@ name = "Recent P1s"
 jql = "priority = P1 AND created >= -7d"
 ```
 
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `jira.project` | required | Jira project key to query. |
+| `jira.team_name` | required | Your team's `Assigned Teams` value. Used by the Unassigned tab. |
+| `jira.done_window_days` | `14` | How many days of recently finished tickets to load. |
+| `jira.epics_i_care_about` | empty (all epics) | Limits the Epics tab to these epics, in this order. Must be in the `[jira]` section. |
+| `team` | you | Display name mapped to Jira email for everyone shown in the Team tab. |
+| `statuses.active`, `statuses.done` | shown above | Status names that count as active or done when loading tickets. |
+| `resolutions` | built-in list | Resolutions offered when you move a ticket to Closed. This is a top-level key, so put it above `[jira]`. |
+| `filters` | empty | Saved JQL filters for the Filters tab. |
+
+When you create, edit, or delete a saved filter in the app, lazyjira rewrites this file, and any comments you added are lost.
+
+## Keybindings
+
+### Global
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Next tab |
+| `j/k`, `Up/Down` | Navigate |
+| `Enter` | Open ticket detail (or epic detail on an Epics header) |
+| `/` | Search tickets, labels, and team members (`Esc` to exit) |
+| `Space` | Toggle ticket/group selection |
+| `A` | Select all visible tickets |
+| `u` | Clear selected tickets |
+| `B` | Open bulk action menu (move/assign) |
+| `U` | Open bulk CSV upload |
+| `c` | Create ticket |
+| `z/Z` | Fold current group / fold all groups |
+| `d` | Toggle Done visibility |
+| `p/w/n/v` | Focus In Progress / Ready for Work / Needs Triage / In Review |
+| `r` | Refresh |
+| `?` | Keybindings help |
+| `q` | Quit |
+
+### Detail view
+
+| Key | Action |
+|-----|--------|
+| `Esc` | Close |
+| `Up/Down` | Scroll |
+| `o` | Open in browser |
+| `m` | Move status |
+| `C` | Comment |
+| `a` | Assign/reassign |
+| `e` | Edit summary + labels |
+| `h` | Activity history |
+
+In the move picker, press `p/w/n/t/v/b/c` (In Progress, Ready for Work, Needs Triage, To Do, In Review, Blocked, Closed) to pick a status, then `Enter` or `y` to confirm. Press the uppercase letter to move right away. Moving to Closed asks for a resolution.
+
+### Filters tab
+
+| Key | Action |
+|-----|--------|
+| `j/k` | Navigate within focused pane |
+| `Tab` | Switch to results / next tab |
+| `Shift+Tab` | Back to sidebar |
+| `Enter` | Run filter (sidebar) / open ticket (results) |
+| `n` | New filter |
+| `e` | Edit filter |
+| `x` | Delete filter |
+| `z/Z` | Fold current status group / fold all status groups |
+| `Space`, `A`, `u`, `B` | Select and bulk actions (results pane) |
+| `U` | Open bulk CSV upload |
+
+## Bulk CSV upload
+
+Press `U` from any main view, enter the path to a CSV file, and review the preview. You can only submit once the preview shows zero invalid rows. Start from the template in [`docs/examples/bulk_create_template.csv`](docs/examples/bulk_create_template.csv).
+
+```csv
+summary,type,assignee_email,epic_key,labels,description
+"Fix flaky login test",Bug,qa@example.com,AMP-5678,"test|stability","Intermittent failure in CI"
+```
+
+- `summary` is the only required column.
+- Optional columns: `type`, `assignee_email`, `epic_key`, `labels`, `description`.
+- `type` defaults to `Task` and must be `Task`, `Bug`, or `Story`.
+- Separate `labels` with `|` in one cell, for example `frontend|urgent`.
+- `epic_key` must match an epic lazyjira has already cached.
+- Up to 500 rows per upload.
+
+The preview also warns about summaries that match an existing ticket or repeat within the CSV. Warnings don't block submission, but validation errors do.
+
 ## Cache
 
-- Startup loads a persisted snapshot, then refreshes active tickets, then recently done.
-- Epic relationships and ticket detail are cached locally and refreshed in the background.
-- Cache files are project-scoped (`~/.cache/lazyjira/`, `/tmp/lazyjira_*`).
+- On startup, lazyjira shows the last saved snapshot, then refreshes active tickets, then recently finished ones.
+- Epic relationships and ticket details are cached and refreshed in the background.
+- Cache files are per project: a snapshot in `~/.cache/lazyjira/`, plus epic and ticket-detail caches named `lazyjira_*` in the system temp directory (`$TMPDIR`, or `/tmp`).
+
+## Limitations
+
+- Browser links (`o`) always point to `https://jira.mongodb.org/browse/…`, and they open with the macOS `open` command, so they may not work on Linux.
+- The Unassigned tab queries the `Assigned Teams` custom field. It doesn't work on Jira instances that don't have that field.
+- The move picker offers a fixed set of statuses: Needs Triage, Ready for Work, To Do, In Progress, In Review, Blocked, and Closed. `[statuses]` changes which tickets are loaded, not where you can move them.
+- New tickets, from the create form or a CSV, can only be `Task`, `Bug`, or `Story`.
+
+## Development
+
+```bash
+cargo test
+cargo run --release
+```
+
+`lazyjira --dev` rebuilds from the source checkout the binary was built from, then runs it. `--dev-release` does the same with an optimized build. Both flags only work for binaries built from a local checkout, not for release downloads.
+
+To re-record the demo GIF, install [VHS](https://github.com/charmbracelet/vhs) and run `docs/demo/record.sh`. It uses a fake `jira` CLI and a throwaway `HOME`, so no real Jira data ends up in the recording.
+
+Releases are published by pushing a `v*` tag. See [`docs/RELEASING.md`](docs/RELEASING.md).

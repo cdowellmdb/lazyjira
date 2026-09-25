@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""Fake `jira` CLI that serves made-up tickets for recording the README demo.
+
+Only covers the subcommands and output formats lazyjira calls in
+src/jira_client.rs. Writes (move, comment, assign, edit, create) succeed
+without changing anything.
+"""
+
+import json
+import re
+import sys
+
+ME = "alex.rivera@example.com"
+TEAM = {
+    "alex.rivera@example.com": "Alex Rivera",
+    "priya.shah@example.com": "Priya Shah",
+    "sam.chen@example.com": "Sam Chen",
+    "jordan.lee@example.com": "Jordan Lee",
+}
+
+EPICS = [
+    ("DEMO-100", "In Progress", "Checkout redesign"),
+    ("DEMO-200", "In Progress", "Search performance"),
+    ("DEMO-300", "To Do", "Mobile onboarding"),
+]
+
+# key, type, status, assignee email, summary, labels, epic
+TICKETS = [
+    ("DEMO-101", "Story", "In Progress", "alex.rivera@example.com", "Add saved payment methods to checkout", ["checkout", "frontend"], "DEMO-100"),
+    ("DEMO-102", "Bug", "In Review", "alex.rivera@example.com", "Fix tax rounding for multi-currency carts", ["checkout", "billing"], "DEMO-100"),
+    ("DEMO-150", "Task", "Blocked", "alex.rivera@example.com", "Rotate payment provider API keys", ["security"], "DEMO-100"),
+    ("DEMO-201", "Task", "Ready for Work", "alex.rivera@example.com", "Profile slow facet queries", ["search", "perf"], "DEMO-200"),
+    ("DEMO-205", "Bug", "Needs Triage", "alex.rivera@example.com", "Search returns stale results after reindex", ["search"], "DEMO-200"),
+    ("DEMO-110", "Task", "Done", "alex.rivera@example.com", "Remove legacy cart endpoint", ["checkout", "cleanup"], "DEMO-100"),
+    ("DEMO-103", "Story", "In Progress", "priya.shah@example.com", "Address autocomplete on shipping form", ["checkout", "frontend"], "DEMO-100"),
+    ("DEMO-202", "Task", "In Progress", "priya.shah@example.com", "Cache popular search suggestions", ["search", "perf"], "DEMO-200"),
+    ("DEMO-104", "Task", "Done", "priya.shah@example.com", "Checkout A/B test dashboard", ["analytics"], "DEMO-100"),
+    ("DEMO-301", "Story", "To Do", "sam.chen@example.com", "Welcome carousel for first launch", ["mobile", "onboarding"], "DEMO-300"),
+    ("DEMO-302", "Bug", "In Review", "sam.chen@example.com", "Push permission prompt shows twice on Android", ["mobile", "android"], "DEMO-300"),
+    ("DEMO-203", "Task", "Blocked", "sam.chen@example.com", "Upgrade search cluster", ["search", "infra"], "DEMO-200"),
+    ("DEMO-204", "Story", "In Progress", "jordan.lee@example.com", "Typo-tolerant product search", ["search"], "DEMO-200"),
+    ("DEMO-303", "Task", "Ready for Work", "jordan.lee@example.com", "Track onboarding funnel events", ["mobile", "analytics"], "DEMO-300"),
+    ("DEMO-105", "Task", "Done", "jordan.lee@example.com", "Load test checkout at peak traffic", ["checkout", "perf"], "DEMO-100"),
+    ("DEMO-106", "Bug", "Needs Triage", None, "Coupon field accepts expired codes", ["checkout"], "DEMO-100"),
+    ("DEMO-206", "Task", "To Do", None, "Document search ranking signals", ["search", "docs"], "DEMO-200"),
+    ("DEMO-304", "Task", "Needs Triage", None, "Localize onboarding copy for es-MX", ["mobile", "i18n"], "DEMO-300"),
+    ("DEMO-400", "Bug", "Needs Triage", None, "Flaky timeout in nightly e2e suite", ["ci"], None),
+]
+
+
+def ticket_dict(row):
+    key, issue_type, status, assignee, summary, labels, epic = row
+    return {
+        "key": key,
+        "type": issue_type,
+        "status": status,
+        "assignee": assignee,
+        "summary": summary,
+        "labels": labels,
+        "epic": epic,
+    }
+
+
+def matches(ticket, clause):
+    clause = clause.strip()
+    lower = clause.lower()
+
+    m = re.fullmatch(r'assignee\s*=\s*"?([^"]+?)"?', clause, re.I)
+    if m:
+        value = m.group(1)
+        email = ME if value.lower() == "currentuser()" else value
+        return ticket["assignee"] == email
+    if re.fullmatch(r"assignee\s+is\s+empty", lower):
+        return ticket["assignee"] is None
+
+    m = re.fullmatch(r"status\s+in\s*\((.*)\)", clause, re.I)
+    if m:
+        statuses = [s.strip().strip('"').lower() for s in m.group(1).split(",")]
+        return ticket["status"].lower() in statuses
+    m = re.fullmatch(r'status\s*=\s*"?([^"]+?)"?', clause, re.I)
+    if m:
+        return ticket["status"].lower() == m.group(1).lower()
+
+    m = re.fullmatch(r'(?:type|issuetype)\s*=\s*"?([^"]+?)"?', clause, re.I)
+    if m:
+        return ticket["type"].lower() == m.group(1).lower()
+    m = re.fullmatch(r'labels\s*=\s*"?([^"]+?)"?', clause, re.I)
+    if m:
+        return m.group(1) in ticket["labels"]
+    m = re.fullmatch(r'(?:"epic link"|parent)\s*=\s*"?([^"]+?)"?', clause, re.I)
+    if m:
+        return ticket["epic"] == m.group(1).upper()
+
+    # Anything else ("Assigned Teams", updated/created windows, priority) matches everything.
+    return True
+
+
+def run_query(jql):
+    jql = re.split(r"\border\s+by\b", jql, flags=re.I)[0]
+    clauses = re.split(r"\s+and\s+", jql, flags=re.I)
+    tickets = [ticket_dict(row) for row in TICKETS]
+    return [t for t in tickets if all(matches(t, c) for c in clauses)]
+
+
+def flag(args, name):
+    if name in args:
+        idx = args.index(name)
+        if idx + 1 < len(args):
+            return args[idx + 1]
+    return None
+
+
+def issue_list(args):
+    paginate = flag(args, "--paginate") or "0:100"
+    if int(paginate.split(":")[0]) > 0:
+        return
+
+    if flag(args, "-t") == "Epic":
+        for key, status, summary in EPICS:
+            print(f"{key}\t{status}\t{summary}")
+        return
+
+    for t in run_query(flag(args, "-q") or ""):
+        assignee = TEAM.get(t["assignee"], "") if t["assignee"] else ""
+        print(f"{t['key']}\t{t['status']}\t{assignee}\t{t['summary']}")
+
+
+def person(email):
+    if not email:
+        return None
+    return {"displayName": TEAM[email], "emailAddress": email}
+
+
+def issue_view(key):
+    rows = [ticket_dict(row) for row in TICKETS if row[0] == key]
+    if not rows:
+        sys.exit(f"issue {key} not found")
+    t = rows[0]
+    reporter = "priya.shah@example.com" if t["assignee"] != "priya.shah@example.com" else ME
+    histories = [
+        {
+            "created": "2026-09-15T09:12:00.000+0000",
+            "author": person(reporter),
+            "items": [{"field": "status", "fromString": "Needs Triage", "toString": "Ready for Work"}],
+        }
+    ]
+    if t["assignee"]:
+        histories.append(
+            {
+                "created": "2026-09-16T16:40:00.000+0000",
+                "author": person(reporter),
+                "items": [{"field": "assignee", "fromString": "", "toString": TEAM[t["assignee"]]}],
+            }
+        )
+    if t["status"] not in ("Needs Triage", "Ready for Work", "To Do"):
+        histories.append(
+            {
+                "created": "2026-09-18T10:05:00.000+0000",
+                "author": person(t["assignee"] or reporter),
+                "items": [{"field": "status", "fromString": "Ready for Work", "toString": t["status"]}],
+            }
+        )
+    comments = [
+        {
+            "created": "2026-09-22T13:30:00.000+0000",
+            "author": person(reporter),
+            "body": "Looping in design for the edge cases before we ship.",
+        }
+    ]
+    payload = {
+        "key": t["key"],
+        "fields": {
+            "summary": t["summary"],
+            "status": {"name": t["status"]},
+            "assignee": person(t["assignee"]),
+            "reporter": person(reporter),
+            "description": (
+                f"{t['summary']}.\n\n"
+                "Acceptance criteria:\n"
+                "- Behavior is covered by automated tests\n"
+                "- Metrics dashboard shows no regressions\n"
+                "- Docs updated if user-facing"
+            ),
+            "labels": t["labels"],
+            "parent": {"key": t["epic"]} if t["epic"] else None,
+            "comment": {"comments": comments},
+        },
+        "changelog": {"histories": histories},
+    }
+    print(json.dumps(payload))
+
+
+def main(args):
+    if args == ["me"]:
+        print(ME)
+    elif args[:2] == ["issue", "list"]:
+        issue_list(args[2:])
+    elif args[:2] == ["issue", "view"] and len(args) >= 3:
+        issue_view(args[2])
+    elif args[:2] == ["issue", "create"]:
+        print("Issue DEMO-500 created")
+    elif args[:2] in (["issue", "move"], ["issue", "assign"], ["issue", "edit"], ["issue", "comment"]):
+        print("ok")
+    else:
+        sys.exit(f"demo jira: unsupported command: {' '.join(args)}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

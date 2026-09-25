@@ -1,0 +1,18 @@
+[jira]
+project = "DEMO"
+team_name = "Platform Team"
+done_window_days = 14
+
+[team]
+"Alex Rivera" = "alex.rivera@example.com"
+"Jordan Lee" = "jordan.lee@example.com"
+"Priya Shah" = "priya.shah@example.com"
+"Sam Chen" = "sam.chen@example.com"
+
+[[filters]]
+name = "My bugs"
+jql = "type = Bug AND assignee = currentUser()"
+
+[[filters]]
+name = "Blocked"
+jql = "status = Blocked"
