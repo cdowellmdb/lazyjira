@@ -31,7 +31,7 @@ pub struct BulkPlan {
 
 /// Plans assigning each of `targets` to `email`.
 pub fn plan_assign(app: &App, targets: &[String], email: &str) -> BulkPlan {
-    plan(app, targets, |ticket| {
+    plan(app, targets.iter().map(|key| (key, ())), |ticket, ()| {
         if ticket.assignee_email.as_deref() == Some(email) {
             return Err("already assigned".to_string());
         }
@@ -45,19 +45,15 @@ pub fn plan_assign(app: &App, targets: &[String], email: &str) -> BulkPlan {
 /// A ticket with no such transition, or with several the user could tell apart, is skipped.
 /// The resolution is added afterwards with [`BulkPlan::with_resolution`].
 pub fn plan_move(app: &App, fetched: &FetchedTransitions, destination: &str) -> BulkPlan {
-    let keys: Vec<String> = fetched.iter().map(|(key, _)| key.clone()).collect();
-    plan(app, &keys, |ticket| {
+    let per_ticket = fetched.iter().map(|(key, result)| (key, result));
+    plan(app, per_ticket, |ticket, transitions| {
         // The real status name, so a Resolved ticket can still be moved to Closed.
-        if ticket.status_name().eq_ignore_ascii_case(destination) {
-            return Err(format!("already {}", ticket.status_name()));
+        if ticket.status_name() == destination {
+            return Err(format!("already {}", destination));
         }
-        let transitions = match fetched.iter().find(|(key, _)| *key == ticket.key) {
-            Some((_, Ok(transitions))) => transitions,
-            Some((_, Err(error))) => {
-                return Err(format!("couldn't load its transitions: {}", error))
-            }
-            None => return Err("its transitions weren't loaded".to_string()),
-        };
+        let transitions = transitions
+            .as_ref()
+            .map_err(|error| format!("couldn't load its transitions: {}", error))?;
         let matching: Vec<&Transition> = transitions
             .iter()
             .filter(|t| t.to_name == destination)
@@ -86,18 +82,18 @@ pub fn plan_move(app: &App, fetched: &FetchedTransitions, destination: &str) -> 
 }
 
 /// Skips tickets that are no longer loaded, and asks `job_for` about the rest.
-fn plan(
+fn plan<'a, T>(
     app: &App,
-    targets: &[String],
-    job_for: impl Fn(&Ticket) -> Result<BulkJob, String>,
+    per_ticket: impl IntoIterator<Item = (&'a String, T)>,
+    job_for: impl Fn(&Ticket, T) -> Result<BulkJob, String>,
 ) -> BulkPlan {
     let mut plan = BulkPlan::default();
-    for key in targets {
-        match app
-            .find_ticket(key)
-            .ok_or("no longer loaded".to_string())
-            .and_then(&job_for)
-        {
+    for (key, item) in per_ticket {
+        let job = match app.find_ticket(key) {
+            Some(ticket) => job_for(ticket, item),
+            None => Err("no longer loaded".to_string()),
+        };
+        match job {
             Ok(job) => plan.jobs.push((key.clone(), job)),
             Err(reason) => plan.skipped.push((key.clone(), reason)),
         }
@@ -169,33 +165,14 @@ pub fn destinations(fetched: &FetchedTransitions) -> Vec<(String, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::Status;
     use crate::transitions::tests::{resolution, transition, with_resolution};
-
-    fn ticket(key: &str, status: &str) -> Ticket {
-        let mut ticket = Ticket {
-            key: key.to_string(),
-            summary: key.to_string(),
-            status: Status::ToDo,
-            jira_status: None,
-            assignee: None,
-            assignee_email: None,
-            reporter: None,
-            description: None,
-            labels: Vec::new(),
-            epic_key: None,
-            epic_name: None,
-            detail_loaded: false,
-            url: format!("https://jira.example.com/browse/{}", key),
-            activity: Vec::new(),
-        };
-        ticket.set_status(status);
-        ticket
-    }
 
     fn app_with(tickets: &[(&str, &str)]) -> App {
         let mut app = App::new();
-        app.cache.my_tickets = tickets.iter().map(|(k, s)| ticket(k, s)).collect();
+        app.cache.my_tickets = tickets
+            .iter()
+            .map(|(k, s)| Ticket::for_test(k, s))
+            .collect();
         app
     }
 

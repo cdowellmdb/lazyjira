@@ -132,40 +132,18 @@ mod tests {
 
     const KEY: &str = "DSCI-2478";
 
-    /// A ticket in the status Jira calls `status`.
-    fn ticket(key: &str, status: &str) -> Ticket {
-        let mut ticket = Ticket {
-            key: key.to_string(),
-            summary: key.to_string(),
-            status: Status::ToDo,
-            jira_status: None,
-            assignee: None,
-            assignee_email: None,
-            reporter: None,
-            description: None,
-            labels: Vec::new(),
-            epic_key: None,
-            epic_name: None,
-            detail_loaded: false,
-            url: format!("https://jira.example.com/browse/{}", key),
-            activity: Vec::new(),
-        };
-        ticket.set_status(status);
-        ticket
-    }
-
     /// An app where `KEY` is in Backlog in My Work, Team, an epic, and filter results.
     fn app_with_ticket_everywhere() -> App {
         let mut app = App::new();
         app.loading = false;
-        app.cache.my_tickets = vec![ticket(KEY, "Backlog")];
-        app.cache.team_tickets = vec![ticket(KEY, "Backlog")];
+        app.cache.my_tickets = vec![Ticket::for_test(KEY, "Backlog")];
+        app.cache.team_tickets = vec![Ticket::for_test(KEY, "Backlog")];
         app.cache.epics = vec![Epic {
             key: "DSCI-1".to_string(),
             summary: "Epic".to_string(),
-            children: vec![ticket(KEY, "Backlog")],
+            children: vec![Ticket::for_test(KEY, "Backlog")],
         }];
-        app.filter_results = vec![ticket(KEY, "Backlog")];
+        app.filter_results = vec![Ticket::for_test(KEY, "Backlog")];
         app.mark_cache_changed();
         app
     }
@@ -224,13 +202,17 @@ mod tests {
         assert_eq!(statuses_everywhere(&app), ["In Progress"; 4]);
 
         for requested_at in [requested_before_move, requested_during_move] {
-            assert!(!app.enrich_ticket(KEY, requested_at, &ticket(KEY, "Backlog")));
+            assert!(!app.enrich_ticket(KEY, requested_at, &Ticket::for_test(KEY, "Backlog")));
             assert_eq!(statuses_everywhere(&app), ["In Progress"; 4]);
         }
 
         // A read requested after Jira confirmed the move is trusted.
         let requested_after_move = app.moves.now();
-        assert!(app.enrich_ticket(KEY, requested_after_move, &ticket(KEY, "In Review")));
+        assert!(app.enrich_ticket(
+            KEY,
+            requested_after_move,
+            &Ticket::for_test(KEY, "In Review")
+        ));
         assert_eq!(statuses_everywhere(&app), ["In Review"; 4]);
     }
 
@@ -242,8 +224,8 @@ mod tests {
         app.finish_move(KEY, Ok(()));
 
         let stale = Cache {
-            my_tickets: vec![ticket(KEY, "Backlog")],
-            team_tickets: vec![ticket(KEY, "Backlog")],
+            my_tickets: vec![Ticket::for_test(KEY, "Backlog")],
+            team_tickets: vec![Ticket::for_test(KEY, "Backlog")],
             epics: Vec::new(),
             team_members: Vec::new(),
         };
@@ -258,13 +240,13 @@ mod tests {
     #[test]
     fn filter_only_ticket_gets_moved_and_enriched() {
         let mut app = App::new();
-        app.filter_results = vec![ticket(KEY, "Backlog")];
+        app.filter_results = vec![Ticket::for_test(KEY, "Backlog")];
 
         assert!(app.moves.start(KEY, "In Progress"));
         app.finish_move(KEY, Ok(()));
         assert_eq!(app.filter_results[0].status_name(), "In Progress");
 
-        let mut detail = ticket(KEY, "In Review");
+        let mut detail = Ticket::for_test(KEY, "In Review");
         detail.description = Some("From Jira".to_string());
         assert!(app.enrich_ticket(KEY, app.moves.now(), &detail));
         assert_eq!(app.filter_results[0].status_name(), "In Review");

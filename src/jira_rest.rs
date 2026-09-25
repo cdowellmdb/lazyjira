@@ -43,9 +43,7 @@ fn shared() -> Result<&'static JiraRest> {
 #[derive(Deserialize)]
 struct JiraCliConfig {
     server: String,
-    #[serde(default)]
     auth_type: Option<String>,
-    #[serde(default)]
     login: Option<String>,
 }
 
@@ -170,28 +168,16 @@ async fn successful_body(response: Response) -> Result<String> {
 }
 
 /// Readable text for a failed call: the HTTP status, then Jira's `errorMessages` and each entry
-/// of its `errors` map (field: message).
+/// of its `errors` map (field: message). A body that isn't JSON, like an HTML error page, is left out.
 fn error_text(status: StatusCode, body: &str) -> String {
     let mut lines = vec![format!("Jira answered {}.", status)];
-    match serde_json::from_str::<Value>(body) {
-        Ok(json) => {
-            let messages = json["errorMessages"].as_array().into_iter().flatten();
-            lines.extend(messages.filter_map(Value::as_str).map(str::to_string));
-            let errors = json["errors"].as_object().into_iter().flatten();
-            lines.extend(errors.map(|(field, message)| match message.as_str() {
-                Some(message) => format!("{}: {}", field, message),
-                None => format!("{}: {}", field, message),
-            }));
-        }
-        // Not JSON: show short plain text, but not an HTML error page.
-        Err(_) if !body.trim_start().starts_with('<') && body.trim().len() <= 300 => {
-            lines.extend(
-                Some(body.trim())
-                    .filter(|b| !b.is_empty())
-                    .map(str::to_string),
-            );
-        }
-        Err(_) => {}
+    if let Ok(json) = serde_json::from_str::<Value>(body) {
+        let messages = json["errorMessages"].as_array().into_iter().flatten();
+        lines.extend(messages.filter_map(Value::as_str).map(str::to_string));
+        let errors = json["errors"].as_object().into_iter().flatten();
+        lines.extend(
+            errors.filter_map(|(field, message)| Some(format!("{}: {}", field, message.as_str()?))),
+        );
     }
     if status == StatusCode::UNAUTHORIZED {
         lines.push("Check JIRA_API_TOKEN and the auth_type in jira-cli's config.".to_string());
@@ -285,10 +271,6 @@ mod tests {
             ),
             "Jira answered 401 Unauthorized.\n\
              Check JIRA_API_TOKEN and the auth_type in jira-cli's config."
-        );
-        assert_eq!(
-            error_text(StatusCode::BAD_GATEWAY, "upstream timed out"),
-            "Jira answered 502 Bad Gateway.\nupstream timed out"
         );
         assert_eq!(
             error_text(

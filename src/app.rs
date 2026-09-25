@@ -171,11 +171,9 @@ pub enum DetailMode {
     MoveLoading { request: u64 },
     /// Choosing one of the ticket's transitions.
     MovePicker(crate::move_picker::MovePicker),
-    /// Choosing the resolution to send with the picker's selected transition.
-    /// `None` in `choices` is "No resolution".
+    /// Choosing one of `picker.resolution_choices()` to send with the picker's selected transition.
     ResolutionPicker {
         picker: crate::move_picker::MovePicker,
-        choices: Vec<Option<crate::transitions::Resolution>>,
         selected: usize,
     },
     /// Showing the activity/history timeline with scroll offset.
@@ -1361,8 +1359,7 @@ impl App {
             return false;
         }
         self.update_ticket(key, |ticket| {
-            ticket.status = detail.status.clone();
-            ticket.jira_status = detail.jira_status.clone();
+            ticket.set_status(detail.status_name());
             if detail.assignee.is_some() {
                 ticket.assignee = detail.assignee.clone();
             }

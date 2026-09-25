@@ -653,19 +653,7 @@ async fn main() -> Result<()> {
                     result,
                 } => move_picker::receive(&mut app, &key, request, result),
                 BackgroundMessage::BulkTransitionsFetched { request, fetched } => {
-                    if let Some(BulkState::MoveLoading {
-                        targets,
-                        request: waiting,
-                    }) = &app.bulk_state
-                    {
-                        if *waiting == request {
-                            app.bulk_state = Some(BulkState::MoveStatusPicker {
-                                targets: targets.clone(),
-                                fetched,
-                                selected: 0,
-                            });
-                        }
-                    }
+                    receive_bulk_transitions(&mut app, request, fetched)
                 }
                 BackgroundMessage::TicketMoved { key, result } => {
                     let succeeded = result.is_ok();
@@ -1155,6 +1143,24 @@ fn begin_bulk_from_selection(app: &mut App) {
         targets,
         selected: 0,
     });
+}
+
+/// Offers the bulk move's destinations, unless the user has since closed the bulk modal or
+/// started another bulk action.
+fn receive_bulk_transitions(app: &mut App, request: u64, fetched: FetchedTransitions) {
+    if let Some(BulkState::MoveLoading {
+        targets,
+        request: waiting,
+    }) = &app.bulk_state
+    {
+        if *waiting == request {
+            app.bulk_state = Some(BulkState::MoveStatusPicker {
+                targets: targets.clone(),
+                fetched,
+                selected: 0,
+            });
+        }
+    }
 }
 
 fn handle_bulk_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
@@ -2420,6 +2426,34 @@ mod tests {
         assert_eq!(summary.succeeded, 0);
         assert_eq!(summary.failed, 0);
         assert_eq!(summary.skipped.len(), 2);
+    }
+
+    #[test]
+    fn bulk_transitions_for_an_old_request_are_dropped() {
+        let mut app = App::new();
+        let targets = vec!["DEMO-1".to_string()];
+        let fetched = || vec![("DEMO-1".to_string(), Ok(Vec::new()))];
+        app.bulk_state = Some(BulkState::MoveLoading {
+            targets: targets.clone(),
+            request: 2,
+        });
+
+        receive_bulk_transitions(&mut app, 1, fetched());
+        assert!(matches!(
+            app.bulk_state,
+            Some(BulkState::MoveLoading { request: 2, .. })
+        ));
+
+        receive_bulk_transitions(&mut app, 2, fetched());
+        assert!(matches!(
+            app.bulk_state,
+            Some(BulkState::MoveStatusPicker { .. })
+        ));
+
+        // Closed the modal while Jira was answering.
+        app.bulk_state = None;
+        receive_bulk_transitions(&mut app, 2, fetched());
+        assert!(app.bulk_state.is_none());
     }
 
     // No Tokio runtime: nothing here may reach Jira.

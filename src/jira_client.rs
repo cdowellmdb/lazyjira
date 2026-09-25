@@ -767,8 +767,7 @@ fn reconcile_epic_child_statuses(
     for epic in epics {
         for child in &mut epic.children {
             if let Some(latest) = latest_by_key.get(child.key.as_str()) {
-                child.status = latest.status.clone();
-                child.jira_status = latest.jira_status.clone();
+                child.set_status(latest.status_name());
             }
         }
     }

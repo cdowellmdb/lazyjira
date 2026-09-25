@@ -177,6 +177,31 @@ impl Ticket {
     }
 }
 
+#[cfg(test)]
+impl Ticket {
+    /// A bare ticket in the status Jira calls `status`.
+    pub fn for_test(key: &str, status: &str) -> Self {
+        let mut ticket = Ticket {
+            key: key.to_string(),
+            summary: key.to_string(),
+            status: Status::ToDo,
+            jira_status: None,
+            assignee: None,
+            assignee_email: None,
+            reporter: None,
+            description: None,
+            labels: Vec::new(),
+            epic_key: None,
+            epic_name: None,
+            detail_loaded: false,
+            url: format!("https://jira.example.com/browse/{}", key),
+            activity: Vec::new(),
+        };
+        ticket.set_status(status);
+        ticket
+    }
+}
+
 /// An epic with aggregated child ticket info.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Epic {

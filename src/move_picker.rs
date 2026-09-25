@@ -59,6 +59,12 @@ impl MovePicker {
     pub fn selected_transition(&self) -> Option<&Transition> {
         self.rows().get(self.selected).copied()
     }
+
+    /// The resolutions the selected transition accepts. `None` is "No resolution".
+    pub fn resolution_choices(&self) -> Vec<Option<Resolution>> {
+        self.selected_transition()
+            .map_or_else(Vec::new, |t| resolution_choices(&t.resolution))
+    }
 }
 
 /// Opens the picker for the ticket in the detail view: shows a loading state while Jira lists
@@ -102,11 +108,9 @@ pub fn handle_key(app: &mut App, key: KeyCode) -> Option<JiraCall> {
             None
         }
         DetailMode::MovePicker(picker) => picker_key(app, picker, key),
-        DetailMode::ResolutionPicker {
-            picker,
-            choices,
-            selected,
-        } => resolution_key(app, picker, choices, selected, key),
+        DetailMode::ResolutionPicker { picker, selected } => {
+            resolution_key(app, picker, selected, key)
+        }
         DetailMode::View | DetailMode::History { .. } => None,
     }
 }
@@ -179,26 +183,23 @@ fn shortcut(app: &mut App, mut picker: MovePicker, status: Status, now: bool) ->
 /// The user chose the selected transition. Ask for a resolution when its resolution field has
 /// values to choose from, else send it.
 fn choose(app: &mut App, picker: MovePicker) -> Option<JiraCall> {
-    let transition = picker.selected_transition()?.clone();
-    let choices = resolution_choices(&transition.resolution);
-    if choices.iter().any(Option::is_some) {
+    if picker.resolution_choices().iter().any(Option::is_some) {
         app.detail_mode = DetailMode::ResolutionPicker {
             picker,
-            choices,
             selected: 0,
         };
         return None;
     }
-    send(app, picker, &transition, None)
+    send(app, picker, None)
 }
 
 fn resolution_key(
     app: &mut App,
     picker: MovePicker,
-    choices: Vec<Option<Resolution>>,
     selected: usize,
     key: KeyCode,
 ) -> Option<JiraCall> {
+    let choices = picker.resolution_choices();
     let selected = match key {
         KeyCode::Esc => {
             app.detail_mode = DetailMode::MovePicker(MovePicker {
@@ -207,30 +208,20 @@ fn resolution_key(
             });
             return None;
         }
-        KeyCode::Enter => {
-            let transition = picker.selected_transition()?.clone();
-            return send(app, picker, &transition, choices.get(selected)?.as_ref());
-        }
+        KeyCode::Enter => return send(app, picker, choices.get(selected)?.as_ref()),
         KeyCode::Char('j') | KeyCode::Down => (selected + 1).min(choices.len().saturating_sub(1)),
         KeyCode::Char('k') | KeyCode::Up => selected.saturating_sub(1),
         _ => selected,
     };
-    app.detail_mode = DetailMode::ResolutionPicker {
-        picker,
-        choices,
-        selected,
-    };
+    app.detail_mode = DetailMode::ResolutionPicker { picker, selected };
     None
 }
 
-/// Registers the move and returns the call that sends it. Refuses when the transition needs a
-/// resolution it can't get, or when the ticket already has a move running.
-fn send(
-    app: &mut App,
-    picker: MovePicker,
-    transition: &Transition,
-    choice: Option<&Resolution>,
-) -> Option<JiraCall> {
+/// Registers a move through the selected transition and returns the call that sends it. Refuses
+/// when the transition needs a resolution it can't get, or when the ticket already has a move
+/// running.
+fn send(app: &mut App, picker: MovePicker, choice: Option<&Resolution>) -> Option<JiraCall> {
+    let transition = picker.selected_transition()?.clone();
     let resolution_id = match transition.resolution_to_send(choice) {
         Ok(resolution_id) => resolution_id,
         Err(reason) => {
@@ -279,26 +270,9 @@ mod tests {
     const KEY: &str = "DEMO-2478";
 
     fn app_with_detail(status: &str) -> App {
-        let mut ticket = Ticket {
-            key: KEY.to_string(),
-            summary: "Epic".to_string(),
-            status: Status::ToDo,
-            jira_status: None,
-            assignee: None,
-            assignee_email: None,
-            reporter: None,
-            description: None,
-            labels: Vec::new(),
-            epic_key: None,
-            epic_name: None,
-            detail_loaded: true,
-            url: format!("https://jira.example.com/browse/{}", KEY),
-            activity: Vec::new(),
-        };
-        ticket.set_status(status);
         let mut app = App::new();
         app.loading = false;
-        app.cache.my_tickets = vec![ticket];
+        app.cache.my_tickets = vec![Ticket::for_test(KEY, status)];
         app.open_detail(KEY.to_string());
         app
     }
@@ -470,12 +444,12 @@ mod tests {
         let mut app = picker_app("In Progress", vec![done]);
 
         assert_eq!(handle_key(&mut app, KeyCode::Char('C')), None);
-        let DetailMode::ResolutionPicker { choices, .. } = &app.detail_mode else {
+        let DetailMode::ResolutionPicker { picker, .. } = &app.detail_mode else {
             panic!("expected the resolution picker");
         };
         assert_eq!(
-            choices,
-            &[
+            picker.resolution_choices(),
+            [
                 None,
                 Some(resolution("101", "Fixed")),
                 Some(resolution("102", "Won't Fix"))

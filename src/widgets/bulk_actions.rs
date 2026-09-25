@@ -77,7 +77,7 @@ fn push_ticket_reasons(
     }
 }
 
-fn hint(text: String) -> Line<'static> {
+fn hint(text: &'static str) -> Line<'static> {
     Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
 }
 
@@ -149,7 +149,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                 targets.len()
             )));
             lines.push(Line::from(""));
-            lines.push(hint("[Esc] cancel".to_string()));
+            lines.push(hint("[Esc] cancel"));
         }
         BulkState::MoveStatusPicker {
             targets,
@@ -160,9 +160,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             lines.push(Line::from(""));
             let destinations = bulk_plan::destinations(fetched);
             if destinations.is_empty() {
-                lines.push(hint(
-                    "Jira offers no transitions for these tickets.".to_string(),
-                ));
+                lines.push(hint("Jira offers no transitions for these tickets."));
             }
             for (i, (destination, count)) in destinations.iter().enumerate() {
                 let label = format!("{} ({} of {} tickets)", destination, count, targets.len());
@@ -183,9 +181,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                 lines.extend(Text::styled(text, Style::default().fg(Color::Red)).lines);
             }
             lines.push(Line::from(""));
-            lines.push(hint(
-                "[j/k] choose status  [Enter] next  [Esc] cancel".to_string(),
-            ));
+            lines.push(hint("[j/k] choose status  [Enter] next  [Esc] cancel"));
         }
         BulkState::MoveResolutionPicker {
             targets,
@@ -202,11 +198,9 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             }
             lines.push(Line::from(""));
             lines.push(hint(
-                "Tickets that require a different resolution will be skipped.".to_string(),
+                "Tickets that require a different resolution will be skipped.",
             ));
-            lines.push(hint(
-                "[j/k] choose resolution  [Enter] next  [Esc] cancel".to_string(),
-            ));
+            lines.push(hint("[j/k] choose resolution  [Enter] next  [Esc] cancel"));
         }
         BulkState::AssignPicker { targets, selected } => {
             lines.push(Line::from(format!("Tickets: {}", targets.len())));

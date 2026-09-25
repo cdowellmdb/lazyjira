@@ -6,7 +6,6 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::app::{App, DetailMode};
 use crate::cache::Status;
 use crate::move_picker::MovePicker;
-use crate::transitions::Resolution;
 
 fn status_color(status: &Status) -> Color {
     match status {
@@ -230,11 +229,9 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                     "[Esc] cancel",
                 ),
                 DetailMode::MovePicker(picker) => render_move_picker(f, inner, ticket, picker),
-                DetailMode::ResolutionPicker {
-                    picker,
-                    choices,
-                    selected,
-                } => render_resolution_picker(f, inner, picker, choices, *selected),
+                DetailMode::ResolutionPicker { picker, selected } => {
+                    render_resolution_picker(f, inner, picker, *selected)
+                }
                 DetailMode::History { scroll } => {
                     crate::widgets::activity::render(f, inner, &ticket.activity, *scroll);
                 }
@@ -556,7 +553,6 @@ fn render_resolution_picker(
     f: &mut ratatui::Frame,
     area: Rect,
     picker: &MovePicker,
-    choices: &[Option<Resolution>],
     selected: usize,
 ) {
     let transition = picker
@@ -567,7 +563,7 @@ fn render_resolution_picker(
         heading(format!("{} — select a resolution:", transition)),
         Line::from(""),
     ];
-    for (i, choice) in choices.iter().enumerate() {
+    for (i, choice) in picker.resolution_choices().iter().enumerate() {
         let prefix = if i == selected { "> " } else { "  " };
         let name = choice.as_ref().map_or("No resolution", |r| r.name.as_str());
         lines.push(Line::from(Span::styled(
