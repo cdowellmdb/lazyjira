@@ -2,8 +2,8 @@
 """Fake `jira` CLI that serves made-up tickets for recording the README demo.
 
 Only covers the subcommands and output formats lazyjira calls in
-src/jira_client.rs. Writes (move, comment, assign, edit, create) succeed
-without changing anything.
+src/jira_client.rs. Writes (comment, assign, edit, create) succeed
+without changing anything. Moves go through Jira's REST API, not this CLI.
 """
 
 import json
@@ -199,7 +199,7 @@ def main(args):
         issue_view(args[2])
     elif args[:2] == ["issue", "create"]:
         print("Issue DEMO-500 created")
-    elif args[:2] in (["issue", "move"], ["issue", "assign"], ["issue", "edit"], ["issue", "comment"]):
+    elif args[:2] in (["issue", "assign"], ["issue", "edit"], ["issue", "comment"]):
         print("ok")
     else:
         sys.exit(f"demo jira: unsupported command: {' '.join(args)}")

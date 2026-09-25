@@ -163,18 +163,17 @@ pub struct FilterEditState {
 }
 
 /// What the detail overlay is showing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DetailMode {
     /// Showing ticket info.
     View,
-    /// Showing the status move picker, with selected index and optional pending confirmation.
-    MovePicker {
-        selected: usize,
-        confirm_target: Option<crate::cache::Status>,
-    },
-    /// Showing the resolution picker after selecting a terminal status.
+    /// Waiting for Jira to list the ticket's transitions. Only the answer to `request` is shown.
+    MoveLoading { request: u64 },
+    /// Choosing one of the ticket's transitions.
+    MovePicker(crate::move_picker::MovePicker),
+    /// Choosing one of `picker.resolution_choices()` to send with the picker's selected transition.
     ResolutionPicker {
-        target_status: crate::cache::Status,
+        picker: crate::move_picker::MovePicker,
         selected: usize,
     },
     /// Showing the activity/history timeline with scroll offset.
@@ -203,7 +202,9 @@ pub enum BulkAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BulkTarget {
     Move {
-        status: crate::cache::Status,
+        /// Name of the status to move to.
+        destination: String,
+        /// Name of the chosen resolution, if any.
         resolution: Option<String>,
     },
     Assign {
@@ -219,10 +220,11 @@ pub struct BulkSummary {
     pub total: usize,
     pub attempted: usize,
     pub succeeded: usize,
-    pub skipped: usize,
     pub failed: usize,
     pub successful_keys: Vec<String>,
     pub failed_details: Vec<(String, String)>,
+    /// Tickets that weren't sent, and why.
+    pub skipped: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -231,13 +233,19 @@ pub enum BulkState {
         targets: Vec<String>,
         selected: usize,
     },
+    /// Waiting for Jira to list each target's transitions. Only the answer to `request` is used.
+    MoveLoading { targets: Vec<String>, request: u64 },
+    /// Choosing a destination from `bulk_plan::destinations(&fetched)`.
     MoveStatusPicker {
         targets: Vec<String>,
+        fetched: crate::bulk_plan::FetchedTransitions,
         selected: usize,
     },
+    /// Choosing one resolution from `plan.resolution_choices()` for the whole move.
     MoveResolutionPicker {
         targets: Vec<String>,
-        status: crate::cache::Status,
+        destination: String,
+        plan: crate::bulk_plan::BulkPlan,
         selected: usize,
     },
     AssignPicker {
@@ -247,6 +255,7 @@ pub enum BulkState {
     Confirm {
         targets: Vec<String>,
         target: BulkTarget,
+        plan: crate::bulk_plan::BulkPlan,
     },
     Running {
         targets: Vec<String>,
@@ -310,6 +319,8 @@ pub struct App {
     detail_fetching: HashSet<String>,
     /// Single-ticket moves waiting on Jira, confirmed, or rejected.
     pub moves: crate::moves::MoveTracker,
+    /// Last id handed out by `next_request_id`.
+    last_request_id: u64,
     /// Monotonic generation used to invalidate derived visibility caches.
     view_generation: u64,
     /// Cached visible ticket keys for selection/counting in the active tab.
@@ -370,6 +381,7 @@ impl App {
             show_keybindings: false,
             detail_fetching: HashSet::new(),
             moves: crate::moves::MoveTracker::default(),
+            last_request_id: 0,
             view_generation: 0,
             visible_keys_cache: RefCell::new(VisibleKeysCache::default()),
             should_quit: false,
@@ -417,6 +429,12 @@ impl App {
         self.cache = cache;
         self.reapply_moves_since(requested_at);
         self.mark_cache_changed();
+    }
+
+    /// A new id for a background request, so its answer can be matched to what's on screen.
+    pub fn next_request_id(&mut self) -> u64 {
+        self.last_request_id += 1;
+        self.last_request_id
     }
 
     pub fn mark_cache_changed(&mut self) {
@@ -1341,7 +1359,7 @@ impl App {
             return false;
         }
         self.update_ticket(key, |ticket| {
-            ticket.status = detail.status.clone();
+            ticket.set_status(detail.status_name());
             if detail.assignee.is_some() {
                 ticket.assignee = detail.assignee.clone();
             }
@@ -1367,9 +1385,9 @@ impl App {
         true
     }
 
-    /// Set a ticket's status in the cache.
-    pub fn update_ticket_status(&mut self, key: &str, new_status: crate::cache::Status) {
-        self.update_ticket(key, |ticket| ticket.status = new_status.clone());
+    /// Set a ticket's status in the cache from Jira's name for it.
+    pub fn update_ticket_status(&mut self, key: &str, status_name: &str) {
+        self.update_ticket(key, |ticket| ticket.set_status(status_name));
     }
 
     /// Update a ticket's assignee in the cache.
@@ -1391,6 +1409,7 @@ mod tests {
             key: key.to_string(),
             summary: summary.to_string(),
             status: Status::ToDo,
+            jira_status: None,
             assignee: None,
             assignee_email: None,
             reporter: None,

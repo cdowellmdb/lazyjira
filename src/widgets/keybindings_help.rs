@@ -90,10 +90,11 @@ pub fn render(f: &mut ratatui::Frame) {
         Line::from("  a: assign/reassign ticket"),
         Line::from("  e: edit summary and labels"),
         Line::from("  h: view activity history"),
-        Line::from("  (in move picker) j/k or Up/Down: choose status"),
-        Line::from("  (in move picker) p/w/n/t/v/b/c: choose + confirm prompt"),
+        Line::from("  (in move picker) j/k or Up/Down: choose a transition"),
+        Line::from("  (in move picker) p/w/n/t/v/b/c: pick the transition to that status"),
         Line::from("  (in move picker) Shift+key: move immediately"),
         Line::from("  (in move picker) Enter or y: confirm pending move"),
+        Line::from("  (in Move failed popup) o: open the ticket in the browser"),
         Line::from(""),
         Line::from(Span::styled(
             "Filters Tab",

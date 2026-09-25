@@ -11,6 +11,11 @@ use crate::cache::{ActivityEntry, ActivityKind, Cache, Epic, Status, TeamMember,
 use crate::config::AppConfig;
 
 const JIRA_BASE_URL: &str = "https://jira.mongodb.org/browse";
+
+/// The ticket's page in the Jira web UI.
+pub fn browse_url(key: &str) -> String {
+    format!("{}/{}", JIRA_BASE_URL, key)
+}
 const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
 const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
 const FULL_CACHE_DIR_NAME: &str = "lazyjira";
@@ -107,12 +112,13 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
                 .join(" "),
         )
     };
-    let url = format!("{}/{}", JIRA_BASE_URL, key);
+    let url = browse_url(&key);
 
     Some(Ticket {
         key,
         summary,
         status: Status::from_str(status_str),
+        jira_status: Some(status_str.to_string()),
         assignee,
         assignee_email: None,
         reporter: None,
@@ -246,7 +252,7 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
     let fields = json.get("fields").context("No fields in response")?;
 
     let summary = fields["summary"].as_str().unwrap_or("").to_string();
-    let status = fields["status"]["name"].as_str().unwrap_or("To Do");
+    let status_name = fields["status"]["name"].as_str();
     let assignee = fields["assignee"]["displayName"]
         .as_str()
         .map(|s| s.to_string());
@@ -357,12 +363,13 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
     activity.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
     let ticket_key = json["key"].as_str().unwrap_or(key).to_string();
-    let url = format!("{}/{}", JIRA_BASE_URL, ticket_key);
+    let url = browse_url(&ticket_key);
 
     Ok(Ticket {
         key: ticket_key,
         summary,
-        status: Status::from_str(status),
+        status: Status::from_str(status_name.unwrap_or("To Do")),
+        jira_status: status_name.map(str::to_string),
         assignee,
         assignee_email,
         reporter,
@@ -751,19 +758,16 @@ fn reconcile_epic_child_statuses(
     my_tickets: &[Ticket],
     team_tickets: &[Ticket],
 ) {
-    let mut status_by_key: HashMap<&str, &Status> = HashMap::new();
+    let mut latest_by_key: HashMap<&str, &Ticket> = HashMap::new();
 
-    for ticket in team_tickets {
-        status_by_key.insert(ticket.key.as_str(), &ticket.status);
-    }
-    for ticket in my_tickets {
-        status_by_key.insert(ticket.key.as_str(), &ticket.status);
+    for ticket in team_tickets.iter().chain(my_tickets) {
+        latest_by_key.insert(ticket.key.as_str(), ticket);
     }
 
     for epic in epics {
         for child in &mut epic.children {
-            if let Some(status) = status_by_key.get(child.key.as_str()) {
-                child.status = (*status).clone();
+            if let Some(latest) = latest_by_key.get(child.key.as_str()) {
+                child.set_status(latest.status_name());
             }
         }
     }
@@ -926,15 +930,6 @@ pub async fn fetch_all(config: &AppConfig) -> Result<Cache> {
     fetch_with_scope(config, TicketFetchScope::ActiveAndRecentDone).await
 }
 
-/// Move a ticket to a new status via `jira issue move`.
-pub async fn move_ticket(key: &str, status: &str, resolution: Option<&str>) -> Result<()> {
-    match resolution {
-        Some(res) => run_cmd("jira", &["issue", "move", key, status, "-R", res]).await?,
-        None => run_cmd("jira", &["issue", "move", key, status]).await?,
-    };
-    Ok(())
-}
-
 /// Add a comment to a ticket via `jira issue comment add`.
 pub async fn add_comment(key: &str, body: &str) -> Result<()> {
     run_cmd(
@@ -1071,6 +1066,7 @@ mod tests {
             key: key.to_string(),
             summary: format!("Summary for {}", key),
             status,
+            jira_status: None,
             assignee: None,
             assignee_email: None,
             reporter: None,
@@ -1109,6 +1105,34 @@ mod tests {
     }
 
     #[test]
+    fn parse_ticket_line_keeps_the_real_status_name() {
+        let line = "DEMO-7\tResolved\tSam Doe\tShip it";
+        let ticket = parse_ticket_line(line).expect("ticket should parse");
+        assert_eq!(ticket.status, Status::Closed);
+        assert_eq!(ticket.status_name(), "Resolved");
+    }
+
+    #[test]
+    fn old_cache_files_without_the_status_name_still_load() {
+        let json = r#"{"saved_at_unix_secs": 1, "cache": {"my_tickets": [
+            {"key": "DEMO-1", "summary": "One", "status": "Closed", "assignee": null,
+             "assignee_email": null, "description": null, "labels": [], "epic_key": null,
+             "epic_name": null, "url": "https://jira.example.com/browse/DEMO-1"},
+            {"key": "DEMO-2", "summary": "Two", "status": {"Other": "Backlog"}, "assignee": null,
+             "assignee_email": null, "description": null, "labels": [], "epic_key": null,
+             "epic_name": null, "url": "https://jira.example.com/browse/DEMO-2"}
+          ], "team_tickets": [], "epics": [], "team_members": []}}"#;
+        let snapshot: CacheSnapshot = serde_json::from_str(json).expect("old cache should load");
+        let names: Vec<(Option<&str>, &str)> = snapshot
+            .cache
+            .my_tickets
+            .iter()
+            .map(|t| (t.jira_status.as_deref(), t.status_name()))
+            .collect();
+        assert_eq!(names, [(None, "Closed"), (None, "Backlog")]);
+    }
+
+    #[test]
     fn unassigned_query_filters_for_team_name_from_config() {
         let config = AppConfig {
             jira: JiraConfig {
@@ -1119,7 +1143,6 @@ mod tests {
             },
             team: BTreeMap::new(),
             statuses: StatusConfig::default(),
-            resolutions: crate::config::default_resolutions(),
             filters: vec![],
         };
         let query = unassigned_team_active_query(&config);
@@ -1134,12 +1157,15 @@ mod tests {
             summary: "Epic".to_string(),
             children: vec![test_ticket("AMP-1", Status::ToDo)],
         }];
-        let my_tickets = vec![test_ticket("AMP-1", Status::InProgress)];
+        let mut resolved = test_ticket("AMP-1", Status::ToDo);
+        resolved.set_status("Resolved");
+        let my_tickets = vec![resolved];
         let team_tickets = vec![test_ticket("AMP-2", Status::NeedsTriage)];
 
         reconcile_epic_child_statuses(&mut epics, &my_tickets, &team_tickets);
 
-        assert_eq!(epics[0].children[0].status, Status::InProgress);
+        assert_eq!(epics[0].children[0].status, Status::Closed);
+        assert_eq!(epics[0].children[0].status_name(), "Resolved");
     }
 
     #[test]

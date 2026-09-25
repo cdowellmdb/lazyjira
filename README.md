@@ -21,6 +21,7 @@ lazyjira runs on top of the [`jira` CLI](https://github.com/ankitpokhrel/jira-cl
 ## Requirements
 
 - The [`jira` CLI](https://github.com/ankitpokhrel/jira-cli) on your `PATH` and logged in (`jira init`). Running `jira me` should print your email.
+- `JIRA_API_TOKEN` set in your environment, as jira-cli normally uses it. Moves go through Jira's REST API with jira-cli's `server` and `auth_type` settings and this token.
 - macOS (Apple Silicon or Intel) or Linux x86_64. Windows is not supported.
 - A stable Rust toolchain, only if you build from source.
 
@@ -105,7 +106,6 @@ jql = "priority = P1 AND created >= -7d"
 | `jira.epics_i_care_about` | empty (all epics) | Limits the Epics tab to these epics, in this order. Must be in the `[jira]` section. |
 | `team` | you | Display name mapped to Jira email for everyone shown in the Team tab. |
 | `statuses.active`, `statuses.done` | shown above | Status names that count as active or done when loading tickets. |
-| `resolutions` | built-in list | Resolutions offered when you move a ticket to Closed. This is a top-level key, so put it above `[jira]`. |
 | `filters` | empty | Saved JQL filters for the Filters tab. |
 
 When you create, edit, or delete a saved filter in the app, lazyjira rewrites this file, and any comments you added are lost.
@@ -146,9 +146,15 @@ When you create, edit, or delete a saved filter in the app, lazyjira rewrites th
 | `e` | Edit summary + labels |
 | `h` | Activity history |
 
-In the move picker, press `p/w/n/t/v/b/c` (In Progress, Ready for Work, Needs Triage, To Do, In Review, Blocked, Closed) to pick a status, then `Enter` or `y` to confirm. Press the uppercase letter to move right away. Moving to Closed asks for a resolution.
+The move picker lists the transitions Jira offers for the ticket, as "transition → status" (for example `Resume Progress → In Progress`), so it only offers moves the ticket's workflow allows. Choose one with `j/k` and `Enter`, then press `Enter` or `y` to confirm.
 
-The ticket keeps its status until Jira confirms the move; the status bar shows the move as pending in the meantime. If Jira rejects the move, its error stays on screen until you press `Enter` or `Esc`. A ticket can have only one move running at a time.
+`p/w/n/t/v/b/c` pick a transition by the status it leads to: In Progress, Ready for Work, Needs Triage, To Do (also Open), In Review, Blocked, and Closed (also Done and Resolved). If exactly one transition matches, it is selected for you to confirm; the uppercase letter moves right away. If several match, the picker lists just those. If none does, nothing is sent and the status bar says so.
+
+A resolution is asked for only when the chosen transition has a resolution field, and the picker offers the values Jira allows for it, plus "No resolution" when the field is optional.
+
+The ticket keeps its status until Jira confirms the move; the status bar shows the move as pending in the meantime. If Jira rejects the move, its error stays on screen until you press `Enter` or `Esc`, and `o` opens the ticket in your browser. A ticket can have only one move running at a time.
+
+A bulk move loads every selected ticket's transitions, then offers the statuses they can reach, with how many tickets can reach each. Each ticket uses its own transition to the chosen status. Tickets without one, with several different ones, or already in that status are skipped, and the summary lists each with the reason. If any of the transitions has a resolution field, you pick one resolution for all of them: tickets whose transition allows it get it, tickets where it's optional are moved without it, and tickets that require a different one are skipped.
 
 ### Filters tab
 
@@ -193,7 +199,8 @@ The preview also warns about summaries that match an existing ticket or repeat w
 
 - Browser links (`o`) always point to `https://jira.mongodb.org/browse/…`, and they open with the macOS `open` command, so they may not work on Linux.
 - The Unassigned tab queries the `Assigned Teams` custom field. It doesn't work on Jira instances that don't have that field.
-- The move picker offers a fixed set of statuses: Needs Triage, Ready for Work, To Do, In Progress, In Review, Blocked, and Closed. `[statuses]` changes which tickets are loaded, not where you can move them.
+- A move sends one transition. Reaching a status that is several transitions away takes several moves, and transitions that require fields other than a resolution fail with Jira's error; press `o` to finish those in the browser.
+- Moves need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read.
 - New tickets, from the create form or a CSV, can only be `Task`, `Bug`, or `Story`.
 
 ## Development

@@ -79,11 +79,6 @@ impl Status {
             Status::Closed,
         ]
     }
-
-    /// All statuses except the given one (for the move picker).
-    pub fn others(&self) -> Vec<&'static Status> {
-        Status::all().iter().filter(|s| *s != self).collect()
-    }
 }
 
 /// Groups tickets by status in display order: canonical statuses in `Status::all()`
@@ -147,6 +142,11 @@ pub struct Ticket {
     pub key: String,
     pub summary: String,
     pub status: Status,
+    /// Jira's own name for the status, which `status` may collapse (Resolved becomes
+    /// `Status::Closed`). `None` in caches written before this field existed. Read it through
+    /// `status_name()`, and change both fields with `set_status()`.
+    #[serde(default)]
+    pub jira_status: Option<String>,
     pub assignee: Option<String>,
     pub assignee_email: Option<String>,
     #[serde(default)]
@@ -160,6 +160,46 @@ pub struct Ticket {
     pub url: String,
     #[serde(default)]
     pub activity: Vec<ActivityEntry>,
+}
+
+impl Ticket {
+    /// Jira's name for the ticket's status, e.g. "Resolved" rather than "Closed".
+    pub fn status_name(&self) -> &str {
+        self.jira_status
+            .as_deref()
+            .unwrap_or_else(|| self.status.as_str())
+    }
+
+    /// Sets the status from Jira's name for it.
+    pub fn set_status(&mut self, name: &str) {
+        self.status = Status::from_str(name);
+        self.jira_status = Some(name.to_string());
+    }
+}
+
+#[cfg(test)]
+impl Ticket {
+    /// A bare ticket in the status Jira calls `status`.
+    pub fn for_test(key: &str, status: &str) -> Self {
+        let mut ticket = Ticket {
+            key: key.to_string(),
+            summary: key.to_string(),
+            status: Status::ToDo,
+            jira_status: None,
+            assignee: None,
+            assignee_email: None,
+            reporter: None,
+            description: None,
+            labels: Vec::new(),
+            epic_key: None,
+            epic_name: None,
+            detail_loaded: false,
+            url: format!("https://jira.example.com/browse/{}", key),
+            activity: Vec::new(),
+        };
+        ticket.set_status(status);
+        ticket
+    }
 }
 
 /// An epic with aggregated child ticket info.
