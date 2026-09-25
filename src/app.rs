@@ -777,47 +777,10 @@ impl App {
         items
     }
 
-    fn filter_tickets_with_status<'a>(
-        &'a self,
-        status: &crate::cache::Status,
-    ) -> Vec<&'a crate::cache::Ticket> {
-        self.filter_results
-            .iter()
-            .filter(|ticket| &ticket.status == status)
-            .collect()
-    }
-
-    pub(crate) fn filters_visible_by_status<'a>(
-        &'a self,
-    ) -> Vec<(crate::cache::Status, Vec<&'a crate::cache::Ticket>)> {
-        let mut visible = Vec::new();
-        let canonical_statuses = crate::cache::Status::all();
-
-        for status in canonical_statuses {
-            let tickets = self.filter_tickets_with_status(status);
-            if !tickets.is_empty() {
-                visible.push((status.clone(), tickets));
-            }
-        }
-
-        let mut extra_statuses = Vec::new();
-        for ticket in &self.filter_results {
-            if canonical_statuses.contains(&ticket.status) {
-                continue;
-            }
-            if !extra_statuses.iter().any(|status| status == &ticket.status) {
-                extra_statuses.push(ticket.status.clone());
-            }
-        }
-
-        for status in extra_statuses {
-            let tickets = self.filter_tickets_with_status(&status);
-            if !tickets.is_empty() {
-                visible.push((status, tickets));
-            }
-        }
-
-        visible
+    pub(crate) fn filters_visible_by_status(
+        &self,
+    ) -> Vec<(crate::cache::Status, Vec<&crate::cache::Ticket>)> {
+        crate::cache::group_by_status(&self.filter_results)
     }
 
     fn filters_visible_items(&self) -> Vec<VisibleItem> {
@@ -834,44 +797,23 @@ impl App {
     }
 
     /// Status groups and visible tickets in the exact order used by the My Work tab.
-    pub(crate) fn my_work_visible_by_status<'a>(
-        &'a self,
-    ) -> Vec<(&'static crate::cache::Status, Vec<&'a crate::cache::Ticket>)> {
+    pub(crate) fn my_work_visible_by_status(
+        &self,
+    ) -> Vec<(crate::cache::Status, Vec<&crate::cache::Ticket>)> {
         let search = self.normalized_search();
-
-        crate::cache::Status::all()
-            .iter()
-            .filter_map(|status| {
-                if *status == crate::cache::Status::Closed {
-                    if !self.show_done {
-                        return None;
-                    }
-                } else if let Some(focus) = &self.status_focus {
-                    if *status != *focus {
-                        return None;
-                    }
-                }
-
-                let tickets: Vec<_> = self
-                    .cache
-                    .my_tickets
-                    .iter()
-                    .filter(|t| &t.status == status)
-                    .filter(|t| {
-                        if let Some(s) = &search {
-                            Self::ticket_matches_search(t, s)
-                        } else {
-                            true
-                        }
-                    })
-                    .collect();
-
-                if tickets.is_empty() {
-                    return None;
-                }
-                Some((status, tickets))
-            })
-            .collect()
+        crate::cache::group_by_status(self.cache.my_tickets.iter().filter(|ticket| {
+            let status_visible = match &ticket.status {
+                crate::cache::Status::Closed => self.show_done,
+                status => self
+                    .status_focus
+                    .as_ref()
+                    .is_none_or(|focus| focus == status),
+            };
+            status_visible
+                && search
+                    .as_deref()
+                    .is_none_or(|s| Self::ticket_matches_search(ticket, s))
+        }))
     }
 
     fn my_work_visible_items(&self) -> Vec<VisibleItem> {
@@ -1507,6 +1449,28 @@ mod tests {
         app
     }
 
+    /// My Work app built from `(key, Jira status name)` pairs, parsed like real fetches.
+    fn my_work_app(tickets: &[(&str, &str)]) -> App {
+        let mut app = App::new();
+        app.active_tab = Tab::MyWork;
+        app.loading = false;
+        app.cache.my_tickets = tickets
+            .iter()
+            .map(|(key, status)| Ticket {
+                status: Status::from_str(status),
+                ..ticket(key, key)
+            })
+            .collect();
+        app
+    }
+
+    fn my_work_group_names(app: &App) -> Vec<String> {
+        app.my_work_visible_by_status()
+            .iter()
+            .map(|(status, _)| status.as_str().to_string())
+            .collect()
+    }
+
     fn filters_app(tickets: Vec<Ticket>) -> App {
         let mut app = App::new();
         app.active_tab = Tab::Filters;
@@ -1628,6 +1592,66 @@ mod tests {
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
         assert_eq!(app.selected_ticket_key(), Some("AMP-1".to_string()));
+    }
+
+    #[test]
+    fn my_work_groups_workflow_statuses_after_canonical_ones() {
+        let mut app = my_work_app(&[
+            ("DSCI-2000", "Stalled"),
+            ("DSCI-2478", "Backlog"),
+            ("DSCI-3100", "In Progress"),
+            ("DSCI-3240", "On Deck"),
+            ("DSCI-3241", "On Deck"),
+            ("DSCI-3300", "Done"),
+        ]);
+
+        // Canonical groups first, then workflow statuses in first-seen (key) order.
+        assert_eq!(
+            my_work_group_names(&app),
+            ["In Progress", "Closed", "Stalled", "Backlog", "On Deck"]
+        );
+        // 5 headers + 6 tickets; the cursor reaches the last workflow-status row.
+        assert_eq!(app.item_count(), 11);
+        app.selected_index = 10;
+        assert_eq!(app.selected_ticket_key(), Some("DSCI-3241".to_string()));
+    }
+
+    #[test]
+    fn my_work_collapses_workflow_status_groups() {
+        let mut app = my_work_app(&[
+            ("DSCI-1", "In Progress"),
+            ("DSCI-2", "On Deck"),
+            ("DSCI-3", "On Deck"),
+        ]);
+
+        app.selected_index = 4; // T(DSCI-3)
+        app.toggle_group_collapse("On Deck");
+        assert_eq!(app.item_count(), 3);
+        assert_eq!(app.selected_header_group_id(), Some("On Deck".to_string()));
+
+        app.toggle_group_collapse("On Deck");
+        app.selected_index = 0;
+        app.toggle_all_groups_collapse();
+        assert!(app.collapsed_my_work.contains("On Deck"));
+        assert!(!app.collapsed_my_work.contains("In Progress"));
+    }
+
+    #[test]
+    fn my_work_focus_done_and_search_apply_to_workflow_statuses() {
+        let mut app = my_work_app(&[
+            ("DSCI-1", "In Progress"),
+            ("DSCI-2", "On Deck"),
+            ("DSCI-3", "Done"),
+        ]);
+
+        app.toggle_status_focus(Status::InProgress);
+        assert_eq!(my_work_group_names(&app), ["In Progress", "Closed"]);
+        app.toggle_show_done();
+        assert_eq!(my_work_group_names(&app), ["In Progress"]);
+        app.toggle_status_focus(Status::InProgress);
+        assert_eq!(my_work_group_names(&app), ["In Progress", "On Deck"]);
+        app.search = Some("dsci-2".to_string());
+        assert_eq!(my_work_group_names(&app), ["On Deck"]);
     }
 
     #[test]
