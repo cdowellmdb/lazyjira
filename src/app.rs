@@ -796,20 +796,25 @@ impl App {
         items
     }
 
+    /// Whether a status passes the My Work/Team toggles: `show_done` governs Closed,
+    /// and `status_focus` (when set) governs every other status.
+    fn status_visible(&self, status: &crate::cache::Status) -> bool {
+        match status {
+            crate::cache::Status::Closed => self.show_done,
+            _ => self
+                .status_focus
+                .as_ref()
+                .is_none_or(|focus| focus == status),
+        }
+    }
+
     /// Status groups and visible tickets in the exact order used by the My Work tab.
     pub(crate) fn my_work_visible_by_status(
         &self,
     ) -> Vec<(crate::cache::Status, Vec<&crate::cache::Ticket>)> {
         let search = self.normalized_search();
         crate::cache::group_by_status(self.cache.my_tickets.iter().filter(|ticket| {
-            let status_visible = match &ticket.status {
-                crate::cache::Status::Closed => self.show_done,
-                status => self
-                    .status_focus
-                    .as_ref()
-                    .is_none_or(|focus| focus == status),
-            };
-            status_visible
+            self.status_visible(&ticket.status)
                 && search
                     .as_deref()
                     .is_none_or(|s| Self::ticket_matches_search(ticket, s))
@@ -874,14 +879,11 @@ impl App {
                     continue;
                 }
                 any_match = true;
+                if !self.status_visible(&ticket.status) {
+                    continue;
+                }
                 if ticket.status == crate::cache::Status::Closed {
-                    if self.show_done {
-                        done.push(ticket);
-                    }
-                } else if let Some(focus) = &self.status_focus {
-                    if &ticket.status == focus {
-                        active.push(ticket);
-                    }
+                    done.push(ticket);
                 } else {
                     active.push(ticket);
                 }
@@ -1449,18 +1451,22 @@ mod tests {
         app
     }
 
-    /// My Work app built from `(key, Jira status name)` pairs, parsed like real fetches.
-    fn my_work_app(tickets: &[(&str, &str)]) -> App {
-        let mut app = App::new();
-        app.active_tab = Tab::MyWork;
-        app.loading = false;
-        app.cache.my_tickets = tickets
+    /// Tickets from `(key, Jira status name)` pairs, parsed like real fetches.
+    fn tickets_with_statuses(tickets: &[(&str, &str)]) -> Vec<Ticket> {
+        tickets
             .iter()
             .map(|(key, status)| Ticket {
                 status: Status::from_str(status),
                 ..ticket(key, key)
             })
-            .collect();
+            .collect()
+    }
+
+    fn my_work_app(tickets: &[(&str, &str)]) -> App {
+        let mut app = App::new();
+        app.active_tab = Tab::MyWork;
+        app.loading = false;
+        app.cache.my_tickets = tickets_with_statuses(tickets);
         app
     }
 
@@ -1675,6 +1681,35 @@ mod tests {
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
         assert_eq!(app.selected_ticket_key(), Some("AMP-2".to_string()));
+    }
+
+    #[test]
+    fn team_focus_and_done_toggles_treat_workflow_statuses_as_active() {
+        let mut app = App::new();
+        app.active_tab = Tab::Team;
+        app.loading = false;
+        app.cache.team_members = vec![crate::cache::TeamMember {
+            name: "Dev".to_string(),
+            email: "dev@example.com".to_string(),
+        }];
+        app.cache.team_tickets = tickets_with_statuses(&[
+            ("DSCI-1", "In Progress"),
+            ("DSCI-2", "On Deck"),
+            ("DSCI-3", "Done"),
+        ]);
+        for t in &mut app.cache.team_tickets {
+            t.assignee_email = Some("dev@example.com".to_string());
+        }
+
+        // H(dev) + 3 tickets
+        assert_eq!(app.item_count(), 4);
+        app.toggle_status_focus(Status::InProgress);
+        // Focus hides On Deck but not Done.
+        assert_eq!(app.item_count(), 3);
+        app.toggle_show_done();
+        assert_eq!(app.item_count(), 2);
+        app.selected_index = 1;
+        assert_eq!(app.selected_ticket_key(), Some("DSCI-1".to_string()));
     }
 
     #[test]
