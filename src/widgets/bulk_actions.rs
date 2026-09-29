@@ -2,7 +2,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::app::{App, BulkAction, BulkState, BulkSummary, BulkTarget};
+use crate::app::App;
+use crate::bulk_actions::{BulkAction, BulkState, BulkSummary, BulkTarget};
 use crate::bulk_plan;
 
 use super::form;
@@ -250,7 +251,9 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        BulkState::Running { targets, target } => {
+        BulkState::Running {
+            targets, target, ..
+        } => {
             lines.push(Line::from(Span::styled(
                 "Executing bulk action...",
                 Style::default()

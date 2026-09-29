@@ -1,4 +1,5 @@
 mod app;
+mod bulk_actions;
 mod bulk_plan;
 mod bulk_upload;
 mod cache;
@@ -27,12 +28,13 @@ use std::process::Command;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::bulk_actions::{BulkAction, BulkCall, BulkSummary, BulkTarget};
 use crate::bulk_plan::{BulkJob, BulkPlan, FetchedTransitions};
 use crate::config::AppConfig;
 use crate::move_picker::JiraCall;
 use app::{
-    App, BulkAction, BulkState, BulkSummary, BulkTarget, BulkUploadPreview, BulkUploadState,
-    BulkUploadSummary, DetailMode, FilterFocus, Tab, TicketSyncStage,
+    App, BulkUploadPreview, BulkUploadState, BulkUploadSummary, DetailMode, FilterFocus, Tab,
+    TicketSyncStage,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -84,7 +86,10 @@ enum BackgroundMessage {
         key: String,
         result: std::result::Result<(), String>,
     },
-    BulkCompleted(BulkSummary),
+    BulkCompleted {
+        request: u64,
+        summary: BulkSummary,
+    },
     BulkUploadPreviewReady(std::result::Result<BulkUploadPreview, String>),
     BulkUploadCompleted(BulkUploadSummary),
     FilterResults {
@@ -253,53 +258,6 @@ fn start_picker_call(tx: &UnboundedSender<BackgroundMessage>, call: Option<JiraC
     }
 }
 
-fn summarize_bulk_results(
-    action: BulkAction,
-    target: BulkTarget,
-    results: Vec<(String, std::result::Result<(), String>)>,
-    skipped: Vec<(String, String)>,
-) -> BulkSummary {
-    let attempted = results.len();
-    let mut successful_keys = Vec::new();
-    let mut failed_details = Vec::new();
-    for (key, result) in results {
-        match result {
-            Ok(()) => successful_keys.push(key),
-            Err(err) => failed_details.push((key, err)),
-        }
-    }
-    BulkSummary {
-        action,
-        target,
-        total: attempted + skipped.len(),
-        attempted,
-        succeeded: successful_keys.len(),
-        failed: failed_details.len(),
-        successful_keys,
-        failed_details,
-        skipped,
-    }
-}
-
-fn apply_bulk_successes(app: &mut App, summary: &BulkSummary) {
-    match &summary.target {
-        BulkTarget::Move { destination, .. } => {
-            for key in &summary.successful_keys {
-                app.record_move(key, destination);
-            }
-        }
-        BulkTarget::Assign {
-            member_email,
-            member_name,
-        } => {
-            for key in &summary.successful_keys {
-                app.update_ticket_assignee(key, member_name, member_email);
-            }
-        }
-    }
-    app.clamp_selection();
-}
-
 /// How many Jira calls a bulk action makes at once.
 const MAX_BULK_CONCURRENCY: usize = 6;
 
@@ -351,6 +309,7 @@ fn spawn_bulk_transitions_fetch(
 
 fn spawn_bulk_execution(
     tx: &UnboundedSender<BackgroundMessage>,
+    request: u64,
     target: BulkTarget,
     plan: BulkPlan,
 ) {
@@ -371,8 +330,8 @@ fn spawn_bulk_execution(
             (key, result.map_err(|e| format!("{:#}", e)))
         })
         .await;
-        let summary = summarize_bulk_results(action, target, results, plan.skipped);
-        let _ = tx.send(BackgroundMessage::BulkCompleted(summary));
+        let summary = bulk_actions::summarize(action, target, results, plan.skipped);
+        let _ = tx.send(BackgroundMessage::BulkCompleted { request, summary });
     });
 }
 
@@ -657,7 +616,7 @@ async fn main() -> Result<()> {
                     result,
                 } => move_picker::receive(&mut app, &key, request, result),
                 BackgroundMessage::BulkTransitionsFetched { request, fetched } => {
-                    receive_bulk_transitions(&mut app, request, fetched)
+                    bulk_actions::receive_transitions(&mut app, request, fetched)
                 }
                 BackgroundMessage::TicketMoved { key, result } => {
                     let succeeded = result.is_ok();
@@ -712,20 +671,8 @@ async fn main() -> Result<()> {
                         app.flash = Some(format!("Edit failed for {}: {}", key, e));
                     }
                 },
-                BackgroundMessage::BulkCompleted(summary) => {
-                    apply_bulk_successes(&mut app, &summary);
-                    let action_label = match summary.action {
-                        BulkAction::Move => "move",
-                        BulkAction::Assign => "assign",
-                    };
-                    app.flash = Some(format!(
-                        "Bulk {} complete: {} succeeded, {} failed, {} skipped",
-                        action_label,
-                        summary.succeeded,
-                        summary.failed,
-                        summary.skipped.len()
-                    ));
-                    app.bulk_state = Some(BulkState::Result { summary, scroll: 0 });
+                BackgroundMessage::BulkCompleted { request, summary } => {
+                    bulk_actions::complete(&mut app, request, summary);
                 }
                 BackgroundMessage::BulkUploadPreviewReady(result) => match result {
                     Ok(preview) => {
@@ -859,7 +806,19 @@ async fn handle_key(
     } else if app.is_edit_open() {
         handle_edit_keys(app, key.code, bg_tx);
     } else if app.is_bulk_open() {
-        handle_bulk_keys(app, key.code, bg_tx);
+        match bulk_actions::handle_key(app, key.code) {
+            Some(BulkCall::FetchTransitions { targets, request }) => {
+                spawn_bulk_transitions_fetch(bg_tx, targets, request);
+            }
+            Some(BulkCall::Execute {
+                request,
+                target,
+                plan,
+            }) => {
+                spawn_bulk_execution(bg_tx, request, target, plan);
+            }
+            None => {}
+        }
     } else if app.show_keybindings {
         handle_keybindings_keys(app, key.code);
     } else if app.is_detail_open() {
@@ -1117,241 +1076,6 @@ fn handle_move_failure_keys(app: &mut App, key: KeyCode) {
 
 fn open_in_browser(url: &str) {
     let _ = Command::new("open").arg(url).spawn();
-}
-
-/// The list row after `key`: j/Down moves down, k/Up moves up, other keys leave it.
-fn list_step(selected: usize, key: KeyCode, rows: usize) -> usize {
-    match key {
-        KeyCode::Char('j') | KeyCode::Down => (selected + 1).min(rows.saturating_sub(1)),
-        KeyCode::Char('k') | KeyCode::Up => selected.saturating_sub(1),
-        _ => selected,
-    }
-}
-
-fn begin_bulk_from_selection(app: &mut App) {
-    let mut targets = app.selected_visible_ticket_keys_in_order();
-    if targets.is_empty() {
-        if let Some(key) = app.selected_ticket_key() {
-            targets.push(key);
-        }
-    }
-    if targets.is_empty() {
-        app.flash = Some("No tickets selected".to_string());
-        return;
-    }
-    app.bulk_state = Some(BulkState::ActionPicker {
-        targets,
-        selected: 0,
-    });
-}
-
-/// Offers the bulk move's destinations, unless the user has since closed the bulk modal or
-/// started another bulk action.
-fn receive_bulk_transitions(app: &mut App, request: u64, fetched: FetchedTransitions) {
-    if let Some(BulkState::MoveLoading {
-        targets,
-        request: waiting,
-    }) = &app.bulk_state
-    {
-        if *waiting == request {
-            app.bulk_state = Some(BulkState::MoveStatusPicker {
-                targets: targets.clone(),
-                fetched,
-                selected: 0,
-            });
-        }
-    }
-}
-
-fn handle_bulk_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
-    let state = match app.bulk_state.clone() {
-        Some(state) => state,
-        None => return,
-    };
-    match state {
-        BulkState::ActionPicker { targets, selected } => match key {
-            KeyCode::Esc => app.bulk_state = None,
-            KeyCode::Char('j') | KeyCode::Down => {
-                let new_sel = (selected + 1).min(1);
-                app.bulk_state = Some(BulkState::ActionPicker {
-                    targets,
-                    selected: new_sel,
-                });
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                app.bulk_state = Some(BulkState::ActionPicker {
-                    targets,
-                    selected: selected.saturating_sub(1),
-                });
-            }
-            KeyCode::Enter if selected == 0 => {
-                let request = app.next_request_id();
-                spawn_bulk_transitions_fetch(bg_tx, targets.clone(), request);
-                app.bulk_state = Some(BulkState::MoveLoading { targets, request });
-            }
-            KeyCode::Enter => {
-                app.bulk_state = Some(BulkState::AssignPicker {
-                    targets,
-                    selected: 0,
-                });
-            }
-            _ => {}
-        },
-        BulkState::MoveLoading { .. } => {
-            if key == KeyCode::Esc {
-                app.bulk_state = None;
-            }
-        }
-        BulkState::MoveStatusPicker {
-            targets,
-            fetched,
-            selected,
-        } => {
-            let destinations = bulk_plan::destinations(&fetched);
-            match key {
-                KeyCode::Esc => app.bulk_state = None,
-                KeyCode::Enter => {
-                    let Some((destination, _)) = destinations.into_iter().nth(selected) else {
-                        return;
-                    };
-                    let plan = bulk_plan::plan_move(app, &fetched, &destination);
-                    app.bulk_state =
-                        Some(if plan.resolution_choices().iter().any(Option::is_some) {
-                            BulkState::MoveResolutionPicker {
-                                targets,
-                                destination,
-                                plan,
-                                selected: 0,
-                            }
-                        } else {
-                            BulkState::Confirm {
-                                targets,
-                                target: BulkTarget::Move {
-                                    destination,
-                                    resolution: None,
-                                },
-                                plan: plan.with_resolution(None),
-                            }
-                        });
-                }
-                _ => {
-                    app.bulk_state = Some(BulkState::MoveStatusPicker {
-                        targets,
-                        fetched,
-                        selected: list_step(selected, key, destinations.len()),
-                    });
-                }
-            }
-        }
-        BulkState::MoveResolutionPicker {
-            targets,
-            destination,
-            plan,
-            selected,
-        } => {
-            let choices = plan.resolution_choices();
-            match key {
-                KeyCode::Esc => app.bulk_state = None,
-                KeyCode::Enter => {
-                    let Some(choice) = choices.get(selected) else {
-                        return;
-                    };
-                    let target = BulkTarget::Move {
-                        destination,
-                        resolution: choice.as_ref().map(|r| r.name.clone()),
-                    };
-                    app.bulk_state = Some(BulkState::Confirm {
-                        targets,
-                        target,
-                        plan: plan.with_resolution(choice.as_ref()),
-                    });
-                }
-                _ => {
-                    app.bulk_state = Some(BulkState::MoveResolutionPicker {
-                        targets,
-                        destination,
-                        plan,
-                        selected: list_step(selected, key, choices.len()),
-                    });
-                }
-            }
-        }
-        BulkState::AssignPicker { targets, selected } => {
-            let max = app.cache.team_members.len().saturating_sub(1);
-            match key {
-                KeyCode::Esc => app.bulk_state = None,
-                KeyCode::Char('j') | KeyCode::Down => {
-                    app.bulk_state = Some(BulkState::AssignPicker {
-                        targets,
-                        selected: (selected + 1).min(max),
-                    });
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    app.bulk_state = Some(BulkState::AssignPicker {
-                        targets,
-                        selected: selected.saturating_sub(1),
-                    });
-                }
-                KeyCode::Enter => {
-                    let Some(member) = app.cache.team_members.get(selected) else {
-                        app.flash = Some("No team members configured".to_string());
-                        return;
-                    };
-                    let target = BulkTarget::Assign {
-                        member_email: member.email.clone(),
-                        member_name: member.name.clone(),
-                    };
-                    let plan = bulk_plan::plan_assign(app, &targets, &member.email);
-                    app.bulk_state = Some(BulkState::Confirm {
-                        targets,
-                        target,
-                        plan,
-                    });
-                }
-                _ => {}
-            }
-        }
-        BulkState::Confirm {
-            targets,
-            target,
-            plan,
-        } => match key {
-            KeyCode::Esc => app.bulk_state = None,
-            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                app.flash = Some(format!(
-                    "Running bulk action on {} tickets...",
-                    targets.len()
-                ));
-                app.bulk_state = Some(BulkState::Running {
-                    targets,
-                    target: target.clone(),
-                });
-                spawn_bulk_execution(bg_tx, target, plan);
-            }
-            _ => {}
-        },
-        BulkState::Running { .. } => {
-            if matches!(key, KeyCode::Esc) {
-                app.bulk_state = None;
-            }
-        }
-        BulkState::Result { summary, scroll } => match key {
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.bulk_state = None,
-            KeyCode::Char('j') | KeyCode::Down => {
-                app.bulk_state = Some(BulkState::Result {
-                    summary,
-                    scroll: scroll.saturating_add(1),
-                });
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                app.bulk_state = Some(BulkState::Result {
-                    summary,
-                    scroll: scroll.saturating_sub(1),
-                });
-            }
-            _ => {}
-        },
-    }
 }
 
 fn handle_detail_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
@@ -1825,27 +1549,7 @@ fn handle_assign_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backg
             let name = member.name.clone();
 
             // Optimistic cache update
-            for ticket in &mut app.cache.my_tickets {
-                if ticket.key == ticket_key {
-                    ticket.assignee = Some(name.clone());
-                    ticket.assignee_email = Some(email.clone());
-                }
-            }
-            for ticket in &mut app.cache.team_tickets {
-                if ticket.key == ticket_key {
-                    ticket.assignee = Some(name.clone());
-                    ticket.assignee_email = Some(email.clone());
-                }
-            }
-            for epic in &mut app.cache.epics {
-                for ticket in &mut epic.children {
-                    if ticket.key == ticket_key {
-                        ticket.assignee = Some(name.clone());
-                        ticket.assignee_email = Some(email.clone());
-                    }
-                }
-            }
-            app.mark_cache_changed();
+            app.update_ticket_assignee(&ticket_key, &name, &email);
 
             app.assign_state = None;
             app.flash = Some(format!("Assigning {} to {}...", ticket_key, name));
@@ -1898,27 +1602,7 @@ fn handle_edit_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backgro
                 .collect();
 
             // Optimistic cache update
-            for ticket in &mut app.cache.my_tickets {
-                if ticket.key == ticket_key {
-                    ticket.summary = new_summary.clone();
-                    ticket.labels = new_labels.clone();
-                }
-            }
-            for ticket in &mut app.cache.team_tickets {
-                if ticket.key == ticket_key {
-                    ticket.summary = new_summary.clone();
-                    ticket.labels = new_labels.clone();
-                }
-            }
-            for epic in &mut app.cache.epics {
-                for ticket in &mut epic.children {
-                    if ticket.key == ticket_key {
-                        ticket.summary = new_summary.clone();
-                        ticket.labels = new_labels.clone();
-                    }
-                }
-            }
-            app.mark_cache_changed();
+            app.update_ticket_fields(&ticket_key, &new_summary, &new_labels);
 
             app.edit_state = None;
             app.flash = Some(format!("Updating {}...", ticket_key));
@@ -2127,7 +1811,7 @@ fn handle_filter_keys(
         }
         KeyCode::Char('B') => {
             if app.filter_focus == FilterFocus::Results {
-                begin_bulk_from_selection(app);
+                bulk_actions::open(app);
             }
         }
         KeyCode::Char('z') => {
@@ -2234,7 +1918,7 @@ async fn handle_main_keys(
             app.clear_selected_tickets();
             app.flash = Some("Selection cleared".to_string());
         }
-        KeyCode::Char('B') => begin_bulk_from_selection(app),
+        KeyCode::Char('B') => bulk_actions::open(app),
         KeyCode::Char('/') => app.search = Some(String::new()),
         KeyCode::Char('?') => app.toggle_keybindings(),
         KeyCode::Char('d') => {
@@ -2308,6 +1992,7 @@ async fn handle_main_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bulk_actions::BulkState;
     use std::collections::BTreeMap;
 
     fn sample_config() -> AppConfig {
@@ -2340,159 +2025,6 @@ mod tests {
             url: format!("https://jira.mongodb.org/browse/{}", key),
             activity: Vec::new(),
         }
-    }
-
-    #[test]
-    fn summarize_bulk_results_all_success() {
-        let target = BulkTarget::Move {
-            destination: "In Progress".to_string(),
-            resolution: None,
-        };
-        let summary = summarize_bulk_results(
-            BulkAction::Move,
-            target.clone(),
-            vec![("AMP-1".to_string(), Ok(())), ("AMP-2".to_string(), Ok(()))],
-            Vec::new(),
-        );
-        assert_eq!(summary.target, target);
-        assert_eq!(summary.succeeded, 2);
-        assert_eq!(summary.failed, 0);
-        assert!(summary.skipped.is_empty());
-    }
-
-    #[test]
-    fn summarize_bulk_results_partial_failure_and_skips() {
-        let summary = summarize_bulk_results(
-            BulkAction::Assign,
-            BulkTarget::Assign {
-                member_email: "dev@example.com".to_string(),
-                member_name: "Dev".to_string(),
-            },
-            vec![
-                ("AMP-1".to_string(), Ok(())),
-                ("AMP-2".to_string(), Err("boom".to_string())),
-            ],
-            vec![("AMP-3".to_string(), "already assigned".to_string())],
-        );
-        assert_eq!(summary.total, 3);
-        assert_eq!(summary.attempted, 2);
-        assert_eq!(summary.succeeded, 1);
-        assert_eq!(summary.failed, 1);
-        assert_eq!(summary.failed_details.len(), 1);
-        assert_eq!(
-            summary.skipped,
-            [("AMP-3".to_string(), "already assigned".to_string())]
-        );
-    }
-
-    #[test]
-    fn summarize_bulk_results_empty_attempts() {
-        let summary = summarize_bulk_results(
-            BulkAction::Move,
-            BulkTarget::Move {
-                destination: "Closed".to_string(),
-                resolution: None,
-            },
-            vec![],
-            vec![
-                ("AMP-1".to_string(), "already Closed".to_string()),
-                (
-                    "AMP-2".to_string(),
-                    "no transition to Closed from Open".to_string(),
-                ),
-            ],
-        );
-        assert_eq!(summary.total, 2);
-        assert_eq!(summary.attempted, 0);
-        assert_eq!(summary.succeeded, 0);
-        assert_eq!(summary.failed, 0);
-        assert_eq!(summary.skipped.len(), 2);
-    }
-
-    #[test]
-    fn bulk_transitions_for_an_old_request_are_dropped() {
-        let mut app = App::new();
-        let targets = vec!["DEMO-1".to_string()];
-        let fetched = || vec![("DEMO-1".to_string(), Ok(Vec::new()))];
-        app.bulk_state = Some(BulkState::MoveLoading {
-            targets: targets.clone(),
-            request: 2,
-        });
-
-        receive_bulk_transitions(&mut app, 1, fetched());
-        assert!(matches!(
-            app.bulk_state,
-            Some(BulkState::MoveLoading { request: 2, .. })
-        ));
-
-        receive_bulk_transitions(&mut app, 2, fetched());
-        assert!(matches!(
-            app.bulk_state,
-            Some(BulkState::MoveStatusPicker { .. })
-        ));
-
-        // Closed the modal while Jira was answering.
-        app.bulk_state = None;
-        receive_bulk_transitions(&mut app, 2, fetched());
-        assert!(app.bulk_state.is_none());
-    }
-
-    // No Tokio runtime: nothing here may reach Jira.
-    #[test]
-    fn bulk_move_asks_once_for_a_resolution_then_confirms_the_plan() {
-        use crate::transitions::tests::{transition, with_resolution};
-
-        let mut app = App::new();
-        app.loading = false;
-        app.cache.my_tickets = vec![
-            ticket("DEMO-1", "A", "In Progress"),
-            ticket("DEMO-2", "B", "In Progress"),
-        ];
-        let done = transition("805", "Done", "Done");
-        app.bulk_state = Some(BulkState::MoveStatusPicker {
-            targets: vec!["DEMO-1".to_string(), "DEMO-2".to_string()],
-            fetched: vec![
-                (
-                    "DEMO-1".to_string(),
-                    Ok(vec![with_resolution(
-                        done.clone(),
-                        true,
-                        &[("101", "Fixed")],
-                    )]),
-                ),
-                (
-                    "DEMO-2".to_string(),
-                    Ok(vec![
-                        transition("803", "Stop Progress", "Open"),
-                        with_resolution(done, true, &[("102", "Won't Fix")]),
-                    ]),
-                ),
-            ],
-            selected: 0,
-        });
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-
-        // "Done" (2 tickets) sorts before "Open" (1 ticket).
-        handle_bulk_keys(&mut app, KeyCode::Enter, &tx);
-        assert!(matches!(
-            app.bulk_state,
-            Some(BulkState::MoveResolutionPicker { ref destination, .. }) if destination == "Done"
-        ));
-        handle_bulk_keys(&mut app, KeyCode::Enter, &tx);
-
-        let Some(BulkState::Confirm { target, plan, .. }) = &app.bulk_state else {
-            panic!("expected the confirm step");
-        };
-        assert_eq!(
-            target,
-            &BulkTarget::Move {
-                destination: "Done".to_string(),
-                resolution: Some("Fixed".to_string()),
-            }
-        );
-        assert_eq!(plan.jobs.len(), 1);
-        assert_eq!(plan.jobs[0].0, "DEMO-1");
-        assert_eq!(plan.skipped[0].0, "DEMO-2");
     }
 
     #[tokio::test]

@@ -1,3 +1,4 @@
+use crate::bulk_actions::BulkState;
 use crate::cache::Cache;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -14,6 +15,16 @@ pub const ISSUE_TYPES: &[&str] = &["Task", "Bug", "Story"];
 pub enum VisibleItem {
     GroupHeader(String),
     Ticket(String),
+}
+
+/// One displayed group. Row indices count occurrences, including repeated ticket keys.
+/// Header metadata and totals survive collapse; only expanded groups have ticket rows.
+pub(crate) struct VisibleGroup<'a, H> {
+    pub id: String,
+    pub header: H,
+    pub index: usize,
+    pub total: usize,
+    pub tickets: Option<Vec<(usize, &'a crate::cache::Ticket)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -191,81 +202,6 @@ pub enum GroupSelectionState {
     None,
     Partial,
     All,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BulkAction {
-    Move,
-    Assign,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BulkTarget {
-    Move {
-        /// Name of the status to move to.
-        destination: String,
-        /// Name of the chosen resolution, if any.
-        resolution: Option<String>,
-    },
-    Assign {
-        member_email: String,
-        member_name: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BulkSummary {
-    pub action: BulkAction,
-    pub target: BulkTarget,
-    pub total: usize,
-    pub attempted: usize,
-    pub succeeded: usize,
-    pub failed: usize,
-    pub successful_keys: Vec<String>,
-    pub failed_details: Vec<(String, String)>,
-    /// Tickets that weren't sent, and why.
-    pub skipped: Vec<(String, String)>,
-}
-
-#[derive(Debug, Clone)]
-pub enum BulkState {
-    ActionPicker {
-        targets: Vec<String>,
-        selected: usize,
-    },
-    /// Waiting for Jira to list each target's transitions. Only the answer to `request` is used.
-    MoveLoading { targets: Vec<String>, request: u64 },
-    /// Choosing a destination from `bulk_plan::destinations(&fetched)`.
-    MoveStatusPicker {
-        targets: Vec<String>,
-        fetched: crate::bulk_plan::FetchedTransitions,
-        selected: usize,
-    },
-    /// Choosing one resolution from `plan.resolution_choices()` for the whole move.
-    MoveResolutionPicker {
-        targets: Vec<String>,
-        destination: String,
-        plan: crate::bulk_plan::BulkPlan,
-        selected: usize,
-    },
-    AssignPicker {
-        targets: Vec<String>,
-        selected: usize,
-    },
-    Confirm {
-        targets: Vec<String>,
-        target: BulkTarget,
-        plan: crate::bulk_plan::BulkPlan,
-    },
-    Running {
-        targets: Vec<String>,
-        target: BulkTarget,
-    },
-    Result {
-        summary: BulkSummary,
-        /// Lines scrolled past, so every failure can be read.
-        scroll: u16,
-    },
 }
 
 /// A Team tab row group: the member, their active tickets, then their Done tickets.
@@ -557,12 +493,60 @@ impl App {
 
     fn compute_visible_items_for_tab(&self, tab: Tab) -> Vec<VisibleItem> {
         match tab {
-            Tab::MyWork => self.my_work_visible_items(),
-            Tab::Team => self.team_visible_items(),
-            Tab::Epics => self.epics_visible_items(),
-            Tab::Unassigned => self.unassigned_visible_items(),
-            Tab::Filters => self.filters_visible_items(),
+            Tab::MyWork => Self::group_items(self.my_work_visible_by_status()),
+            Tab::Team => Self::group_items(self.team_visible_tickets_by_member()),
+            Tab::Epics => Self::group_items(self.epics_visible_epics()),
+            Tab::Unassigned => Self::group_items(self.unassigned_visible_by_epic()),
+            Tab::Filters => Self::group_items(self.filters_visible_by_status()),
         }
+    }
+
+    fn index_groups<'a, H>(
+        &self,
+        tab: Tab,
+        groups: impl IntoIterator<Item = (String, H, Vec<&'a crate::cache::Ticket>)>,
+    ) -> Vec<VisibleGroup<'a, H>> {
+        let mut next_index = 0;
+        groups
+            .into_iter()
+            .map(|(id, header, tickets)| {
+                let index = next_index;
+                next_index += 1;
+                let total = tickets.len();
+                let tickets = (!self.is_collapsed(tab, &id)).then(|| {
+                    tickets
+                        .into_iter()
+                        .map(|ticket| {
+                            let index = next_index;
+                            next_index += 1;
+                            (index, ticket)
+                        })
+                        .collect()
+                });
+                VisibleGroup {
+                    id,
+                    header,
+                    index,
+                    total,
+                    tickets,
+                }
+            })
+            .collect()
+    }
+
+    fn group_items<H>(groups: Vec<VisibleGroup<'_, H>>) -> Vec<VisibleItem> {
+        groups
+            .into_iter()
+            .flat_map(|group| {
+                std::iter::once(VisibleItem::GroupHeader(group.id)).chain(
+                    group
+                        .tickets
+                        .into_iter()
+                        .flatten()
+                        .map(|(_, ticket)| VisibleItem::Ticket(ticket.key.clone())),
+                )
+            })
+            .collect()
     }
 
     fn ensure_visible_keys_cache(&self) {
@@ -669,9 +653,7 @@ impl App {
     }
 
     /// Epics and visible child rows in the exact order used by the Epics tab.
-    pub(crate) fn epics_visible_epics(
-        &self,
-    ) -> Vec<(&crate::cache::Epic, Vec<&crate::cache::Ticket>)> {
+    pub(crate) fn epics_visible_epics(&self) -> Vec<VisibleGroup<'_, &crate::cache::Epic>> {
         let search = self.normalized_search();
         let mut visible = Vec::new();
         let mut epics: Vec<_> = self
@@ -720,26 +702,16 @@ impl App {
             }
         }
 
-        visible
-    }
-
-    fn epics_visible_items(&self) -> Vec<VisibleItem> {
-        let mut items = Vec::new();
-        for (epic, children) in self.epics_visible_epics() {
-            items.push(VisibleItem::GroupHeader(epic.key.clone()));
-            if !self.collapsed_epics.contains(&epic.key) {
-                for ticket in children {
-                    items.push(VisibleItem::Ticket(ticket.key.clone()));
-                }
-            }
-        }
-        items
+        self.index_groups(
+            Tab::Epics,
+            visible
+                .into_iter()
+                .map(|(epic, tickets)| (epic.key.clone(), epic, tickets)),
+        )
     }
 
     /// Unassigned tickets grouped by epic.
-    pub(crate) fn unassigned_visible_by_epic(
-        &self,
-    ) -> Vec<(String, String, Vec<&crate::cache::Ticket>)> {
+    pub(crate) fn unassigned_visible_by_epic(&self) -> Vec<VisibleGroup<'_, (String, String)>> {
         let search = self.normalized_search();
         let mut grouped: HashMap<(String, String), Vec<&crate::cache::Ticket>> = HashMap::new();
 
@@ -800,37 +772,22 @@ impl App {
             }
         }
 
-        visible
+        self.index_groups(
+            Tab::Unassigned,
+            visible
+                .into_iter()
+                .map(|(key, summary, tickets)| (key.clone(), (key, summary), tickets)),
+        )
     }
 
-    fn unassigned_visible_items(&self) -> Vec<VisibleItem> {
-        let mut items = Vec::new();
-        for (epic_key, _, tickets) in self.unassigned_visible_by_epic() {
-            items.push(VisibleItem::GroupHeader(epic_key.clone()));
-            if !self.collapsed_unassigned.contains(&epic_key) {
-                for ticket in tickets {
-                    items.push(VisibleItem::Ticket(ticket.key.clone()));
-                }
-            }
-        }
-        items
-    }
-
-    pub(crate) fn filters_visible_by_status(&self) -> Vec<(String, Vec<&crate::cache::Ticket>)> {
-        self.status_rules.group(&self.filter_results)
-    }
-
-    fn filters_visible_items(&self) -> Vec<VisibleItem> {
-        let mut items = Vec::new();
-        for (status, tickets) in self.filters_visible_by_status() {
-            items.push(VisibleItem::GroupHeader(status.as_str().to_string()));
-            if !self.collapsed_filters.contains(status.as_str()) {
-                for ticket in tickets {
-                    items.push(VisibleItem::Ticket(ticket.key.clone()));
-                }
-            }
-        }
-        items
+    pub(crate) fn filters_visible_by_status(&self) -> Vec<VisibleGroup<'_, String>> {
+        self.index_groups(
+            Tab::Filters,
+            self.status_rules
+                .group(&self.filter_results)
+                .into_iter()
+                .map(|(status, tickets)| (status.clone(), status, tickets)),
+        )
     }
 
     /// Whether a status passes the My Work/Team toggles: `show_done` governs done statuses,
@@ -846,8 +803,13 @@ impl App {
     }
 
     /// Status groups and visible tickets in the exact order used by the My Work tab.
-    pub(crate) fn my_work_visible_by_status(&self) -> Vec<(String, Vec<&crate::cache::Ticket>)> {
-        self.my_work_by_status(|status| self.status_visible(status))
+    pub(crate) fn my_work_visible_by_status(&self) -> Vec<VisibleGroup<'_, String>> {
+        self.index_groups(
+            Tab::MyWork,
+            self.my_work_by_status(|status| self.status_visible(status))
+                .into_iter()
+                .map(|(status, tickets)| (status.clone(), status, tickets)),
+        )
     }
 
     /// My Work's status groups for the current search, keeping the statuses `shown` accepts.
@@ -865,23 +827,24 @@ impl App {
             }))
     }
 
-    fn my_work_visible_items(&self) -> Vec<VisibleItem> {
-        let mut items = Vec::new();
-        for (status, tickets) in self.my_work_visible_by_status() {
-            items.push(VisibleItem::GroupHeader(status.as_str().to_string()));
-            if !self.collapsed_my_work.contains(status.as_str()) {
-                for ticket in tickets {
-                    items.push(VisibleItem::Ticket(ticket.key.clone()));
-                }
-            }
-        }
-        items
-    }
-
     /// Team members and visible tickets in the exact order used by the Team tab.
     /// Returns active tickets first, then Done tickets as a secondary group.
-    pub(crate) fn team_visible_tickets_by_member(&self) -> Vec<TeamMemberTickets<'_>> {
-        self.team_tickets_by_member(|status| self.status_visible(status))
+    pub(crate) fn team_visible_tickets_by_member(
+        &self,
+    ) -> Vec<VisibleGroup<'_, (&crate::cache::TeamMember, usize)>> {
+        self.index_groups(
+            Tab::Team,
+            self.team_tickets_by_member(|status| self.status_visible(status))
+                .into_iter()
+                .map(|(member, active, done)| {
+                    let active_count = active.len();
+                    (
+                        member.email.clone(),
+                        (member, active_count),
+                        active.into_iter().chain(done).collect(),
+                    )
+                }),
+        )
     }
 
     /// The Team tab's members and tickets for the current search, keeping the statuses
@@ -941,22 +904,6 @@ impl App {
         }
 
         visible
-    }
-
-    fn team_visible_items(&self) -> Vec<VisibleItem> {
-        let mut items = Vec::new();
-        for (member, active, done) in self.team_visible_tickets_by_member() {
-            items.push(VisibleItem::GroupHeader(member.email.clone()));
-            if !self.collapsed_team.contains(&member.email) {
-                for ticket in active {
-                    items.push(VisibleItem::Ticket(ticket.key.clone()));
-                }
-                for ticket in done {
-                    items.push(VisibleItem::Ticket(ticket.key.clone()));
-                }
-            }
-        }
-        items
     }
 
     pub fn toggle_show_done(&mut self) {
@@ -1162,7 +1109,7 @@ impl App {
                 let ids: Vec<String> = self
                     .my_work_visible_by_status()
                     .iter()
-                    .map(|(s, _)| s.as_str().to_string())
+                    .map(|group| group.id.clone())
                     .collect();
                 (&mut self.collapsed_my_work, ids)
             }
@@ -1183,7 +1130,7 @@ impl App {
                 let ids: Vec<String> = self
                     .unassigned_visible_by_epic()
                     .iter()
-                    .map(|(k, _, _)| k.clone())
+                    .map(|group| group.id.clone())
                     .collect();
                 (&mut self.collapsed_unassigned, ids)
             }
@@ -1191,7 +1138,7 @@ impl App {
                 let ids: Vec<String> = self
                     .filters_visible_by_status()
                     .iter()
-                    .map(|(status, _)| status.as_str().to_string())
+                    .map(|group| group.header.clone())
                     .collect();
                 (&mut self.collapsed_filters, ids)
             }
@@ -1552,12 +1499,58 @@ impl App {
             ticket.assignee_email = Some(email.to_string());
         });
     }
+
+    /// Update the editable fields in every cached copy of a ticket.
+    pub fn update_ticket_fields(&mut self, key: &str, summary: &str, labels: &[String]) {
+        self.update_ticket(key, |ticket| {
+            ticket.summary = summary.to_string();
+            ticket.labels = labels.to_vec();
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{App, GroupSelectionState, Tab};
     use crate::cache::{Epic, Ticket};
+
+    #[test]
+    fn ticket_changes_reach_every_copy_and_refresh_visibility() {
+        for filter_only in [false, true] {
+            let mut app = App::new();
+            let ticket = Ticket::for_test("DEMO-1", "To Do");
+            app.filter_results = vec![ticket.clone()];
+            if !filter_only {
+                app.cache.my_tickets = vec![ticket.clone()];
+                app.cache.team_tickets = vec![ticket.clone()];
+                app.cache.epics = vec![Epic {
+                    key: "DEMO-100".into(),
+                    summary: "Epic".into(),
+                    children: vec![ticket],
+                }];
+            }
+            app.search = Some("updated".into());
+            assert_eq!(app.item_count(), 0);
+
+            app.update_ticket_assignee("DEMO-1", "Alex", "alex@example.com");
+            app.update_ticket_fields("DEMO-1", "Updated summary", &["updated-label".into()]);
+
+            assert_eq!(app.item_count(), if filter_only { 0 } else { 2 });
+            for ticket in app
+                .cache
+                .my_tickets
+                .iter()
+                .chain(&app.cache.team_tickets)
+                .chain(app.cache.epics.iter().flat_map(|epic| &epic.children))
+                .chain(&app.filter_results)
+            {
+                assert_eq!(ticket.assignee.as_deref(), Some("Alex"));
+                assert_eq!(ticket.assignee_email.as_deref(), Some("alex@example.com"));
+                assert_eq!(ticket.summary, "Updated summary");
+                assert_eq!(ticket.labels, ["updated-label"]);
+            }
+        }
+    }
 
     fn ticket(key: &str, summary: &str) -> Ticket {
         Ticket {
@@ -1673,7 +1666,7 @@ mod tests {
     fn my_work_group_names(app: &App) -> Vec<String> {
         app.my_work_visible_by_status()
             .iter()
-            .map(|(status, _)| status.as_str().to_string())
+            .map(|group| group.header.clone())
             .collect()
     }
 
@@ -1866,7 +1859,7 @@ mod tests {
         let filter_groups: Vec<_> = app
             .filters_visible_by_status()
             .iter()
-            .map(|(status, _)| status.as_str().to_string())
+            .map(|group| group.header.clone())
             .collect();
         assert_eq!(filter_groups, expected);
 
@@ -1876,8 +1869,9 @@ mod tests {
             children: tickets_with_statuses(&statuses),
         }]);
         app.set_status_rules(&dsci_statuses());
-        let (_, children) = &app.epics_visible_epics()[0];
-        let child_statuses: Vec<_> = children.iter().map(|t| t.status.as_str()).collect();
+        let groups = app.epics_visible_epics();
+        let children = groups[0].tickets.as_ref().unwrap();
+        let child_statuses: Vec<_> = children.iter().map(|(_, t)| t.status.as_str()).collect();
         assert_eq!(child_statuses, expected);
     }
 
@@ -2070,9 +2064,8 @@ mod tests {
             .collect();
         assert_eq!(members, ["Busy", "Wrapped Up"]);
         let by_member = app.team_visible_tickets_by_member();
-        let (_, active, done) = &by_member[1];
-        assert!(active.is_empty());
-        assert_eq!(done.len(), 3);
+        assert_eq!(by_member[1].header.1, 0);
+        assert_eq!(by_member[1].total, 3);
 
         // Epics: they count toward progress.
         let epic = Epic {
@@ -2207,7 +2200,7 @@ mod tests {
         let ordered_keys: Vec<_> = app
             .epics_visible_epics()
             .into_iter()
-            .map(|(epic, _)| epic.key.as_str())
+            .map(|group| group.header.key.as_str())
             .collect();
         assert_eq!(ordered_keys, vec!["AMP-300", "AMP-100", "AMP-200"]);
     }

@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::app::{App, Tab};
+use crate::app::App;
 use crate::views::common::{group_marker, status_color, truncate};
 
 fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
@@ -50,16 +50,17 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut item_idx: usize = 0;
     let mut selected_visual_line: Option<usize> = None;
 
-    for (member, active, done) in members {
-        let collapsed = app.is_collapsed(Tab::Team, &member.email);
+    for group in members {
+        let (member, active_count) = group.header;
+        let done_count = group.total - active_count;
+        let collapsed = group.tickets.is_none();
         let indicator = if collapsed { ">" } else { "v" };
         let marker = group_marker(app.group_selection_state(&member.email));
 
         // Member header
-        let is_header_selected = item_idx == app.selected_index;
+        let is_header_selected = group.index == app.selected_index;
         if is_header_selected {
             selected_visual_line = Some(lines.len());
         }
@@ -71,7 +72,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Style::default().add_modifier(Modifier::BOLD)
         };
 
-        if collapsed {
+        let Some(tickets) = &group.tickets else {
             let summary_style = if is_header_selected {
                 Style::default().fg(Color::Gray).bg(Color::DarkGray)
             } else {
@@ -83,20 +84,19 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     header_style,
                 ),
                 Span::styled(
-                    format!("  (active: {}  done: {})", active.len(), done.len()),
+                    format!("  (active: {}  done: {})", active_count, done_count),
                     summary_style,
                 ),
             ]));
-            item_idx += 1;
             lines.push(Line::from(""));
             continue;
-        }
+        };
+        let (active, done) = tickets.split_at(active_count);
 
         lines.push(Line::from(Span::styled(
             format!("{} {} {}", marker, indicator, member.name),
             header_style,
         )));
-        item_idx += 1;
 
         if active.is_empty() && done.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -116,8 +116,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 Span::styled(format!("{:<labels_w$}", "LABELS"), heading_style),
             ]));
 
-            for ticket in &active {
-                let is_selected = item_idx == app.selected_index;
+            for (index, ticket) in active {
+                let is_selected = *index == app.selected_index;
                 if is_selected {
                     selected_visual_line = Some(lines.len());
                 }
@@ -177,21 +177,19 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         },
                     ),
                 ]));
-
-                item_idx += 1;
             }
 
             if !done.is_empty() {
                 lines.push(Line::from(Span::styled(
-                    format!("    done ({})", done.len()),
+                    format!("    done ({})", done_count),
                     Style::default()
                         .fg(Color::DarkGray)
                         .add_modifier(Modifier::DIM),
                 )));
             }
 
-            for ticket in &done {
-                let is_selected = item_idx == app.selected_index;
+            for (index, ticket) in done {
+                let is_selected = *index == app.selected_index;
                 if is_selected {
                     selected_visual_line = Some(lines.len());
                 }
@@ -255,14 +253,12 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         },
                     ),
                 ]));
-
-                item_idx += 1;
             }
 
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
-                    format!("active: {}  done: {}", active.len(), done.len()),
+                    format!("active: {}  done: {}", active_count, done_count),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
