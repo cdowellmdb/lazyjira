@@ -20,6 +20,8 @@ Use `lazyjira --dev-release` for an optimized rebuild. Both rebuild from the che
 
 ## Architecture
 
+When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira transport, status interpretation, or move consistency, read the corresponding decision in [docs/adr/](docs/adr/).
+
 - **src/main.rs** — Entry point, terminal setup, event loop, key handling, `--dev` flags
 - **src/app.rs** — App state, tab management, selection tracking, cache mutations
 - **src/cache.rs** — Data types (Ticket, Epic, TeamMember, Status, Cache)
