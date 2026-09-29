@@ -1,5 +1,5 @@
 use crate::cache::Cache;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
@@ -304,6 +304,11 @@ pub struct App {
     pub detail_mode: DetailMode,
     /// Vertical scroll offset for the ticket detail body.
     pub detail_scroll: u16,
+    /// Largest useful `detail_scroll` and the body's height, as last rendered.
+    pub detail_scroll_max: Cell<u16>,
+    pub detail_page_height: Cell<u16>,
+    /// Whether the detail overlay fills the screen (`z`).
+    pub detail_fullscreen: bool,
     /// True while data is being fetched.
     pub loading: bool,
     /// Flash message (error or success), cleared on next keypress.
@@ -324,6 +329,8 @@ pub struct App {
     pub show_keybindings: bool,
     /// Ticket keys currently being fetched for rich detail.
     detail_fetching: HashSet<String>,
+    /// Why the last detail fetch failed, by ticket key.
+    detail_fetch_errors: HashMap<String, String>,
     /// Single-ticket moves waiting on Jira, confirmed, or rejected.
     pub moves: crate::moves::MoveTracker,
     /// Last id handed out by `next_request_id`.
@@ -379,6 +386,9 @@ impl App {
             detail_epic_key: None,
             detail_mode: DetailMode::View,
             detail_scroll: 0,
+            detail_scroll_max: Cell::new(0),
+            detail_page_height: Cell::new(1),
+            detail_fullscreen: false,
             loading: true,
             flash: None,
             search: None,
@@ -389,6 +399,7 @@ impl App {
             cache_stale_age_secs: None,
             show_keybindings: false,
             detail_fetching: HashSet::new(),
+            detail_fetch_errors: HashMap::new(),
             moves: crate::moves::MoveTracker::default(),
             last_request_id: 0,
             view_generation: 0,
@@ -1199,7 +1210,16 @@ impl App {
         self.clamp_selection();
     }
 
+    pub fn detail_fetch_error(&self, key: &str) -> Option<&str> {
+        self.detail_fetch_errors.get(key).map(String::as_str)
+    }
+
+    pub fn fail_detail_fetch(&mut self, key: &str, error: String) {
+        self.detail_fetch_errors.insert(key.to_string(), error);
+    }
+
     pub fn begin_detail_fetch(&mut self, key: &str) -> bool {
+        self.detail_fetch_errors.remove(key);
         self.detail_fetching.insert(key.to_string())
     }
 
@@ -1353,12 +1373,89 @@ impl App {
         }
     }
 
+    /// Scrolls the detail body by `lines`, keeping the last line at the bottom.
+    pub fn scroll_detail_by(&mut self, lines: i32) {
+        let max = i32::from(self.detail_scroll_max.get());
+        self.detail_scroll = (i32::from(self.detail_scroll) + lines).clamp(0, max) as u16;
+    }
+
     pub fn scroll_detail_down(&mut self) {
-        self.detail_scroll = self.detail_scroll.saturating_add(1);
+        self.scroll_detail_by(1);
     }
 
     pub fn scroll_detail_up(&mut self) {
-        self.detail_scroll = self.detail_scroll.saturating_sub(1);
+        self.scroll_detail_by(-1);
+    }
+
+    /// Scrolls by a page, keeping two lines of context.
+    pub fn scroll_detail_page(&mut self, down: bool) {
+        let page = i32::from(self.detail_page_height.get())
+            .saturating_sub(2)
+            .max(1);
+        self.scroll_detail_by(if down { page } else { -page });
+    }
+
+    pub fn scroll_detail_to(&mut self, bottom: bool) {
+        self.detail_scroll = if bottom {
+            self.detail_scroll_max.get()
+        } else {
+            0
+        };
+    }
+
+    /// The detail overlay's position among the items `step_detail` moves
+    /// through, as (1-based index, count).
+    pub fn detail_position(&self) -> Option<(usize, usize)> {
+        let keys = self.detail_step_keys();
+        let current = self
+            .detail_ticket_key
+            .as_ref()
+            .or(self.detail_epic_key.as_ref())?;
+        let index = keys.iter().position(|(_, k)| k == current)?;
+        Some((index + 1, keys.len()))
+    }
+
+    /// The list rows the detail overlay steps through, with their indexes:
+    /// tickets for a ticket detail, epic headers for an epic detail.
+    fn detail_step_keys(&self) -> Vec<(usize, String)> {
+        let epics = self.detail_epic_key.is_some();
+        if epics && self.active_tab != Tab::Epics {
+            return Vec::new();
+        }
+        self.ensure_visible_keys_cache();
+        self.visible_keys_cache
+            .borrow()
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| match item {
+                VisibleItem::Ticket(key) if !epics => Some((i, key.clone())),
+                VisibleItem::GroupHeader(id) if epics => Some((i, id.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Shows the next (or previous) ticket's detail, or epic's when an epic
+    /// is shown, and selects its row. Returns the ticket's key when its detail
+    /// still needs fetching.
+    pub fn step_detail(&mut self, forward: bool) -> Option<String> {
+        let keys = self.detail_step_keys();
+        let target = if forward {
+            keys.iter().find(|(i, _)| *i > self.selected_index)
+        } else {
+            keys.iter().rev().find(|(i, _)| *i < self.selected_index)
+        };
+        let (index, key) = target?.clone();
+        self.selected_index = index;
+        if self.detail_epic_key.is_some() {
+            self.open_epic_detail(key);
+            None
+        } else {
+            self.open_detail(key.clone());
+            let needs_fetch = !self.is_ticket_detail_loaded(&key) && self.begin_detail_fetch(&key);
+            needs_fetch.then_some(key)
+        }
     }
 
     /// Find a ticket by key across all cached data.
@@ -1505,6 +1602,72 @@ mod tests {
         app.loading = false;
         app.cache.my_tickets = tickets_with_statuses(tickets);
         app
+    }
+
+    #[test]
+    fn step_detail_moves_between_tickets_skipping_headers() {
+        let mut app = my_work_app(&[("DSCI-1", "In Progress"), ("DSCI-2", "Backlog")]);
+        fn row_of(app: &mut App, key: &str) -> usize {
+            (0..app.item_count())
+                .find(|&i| {
+                    app.selected_index = i;
+                    app.selected_ticket_key().as_deref() == Some(key)
+                })
+                .unwrap()
+        }
+        let first = row_of(&mut app, "DSCI-1");
+        let second = row_of(&mut app, "DSCI-2");
+        assert!(second > first + 1, "a status header sits between them");
+
+        app.selected_index = first;
+        app.open_detail("DSCI-1".to_string());
+        assert_eq!(app.detail_position(), Some((1, 2)));
+
+        // DSCI-2's detail isn't loaded, so it needs fetching.
+        assert_eq!(app.step_detail(true), Some("DSCI-2".to_string()));
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("DSCI-2"));
+        assert_eq!(app.selected_index, second);
+        assert_eq!(app.detail_position(), Some((2, 2)));
+
+        // Nothing after the last ticket.
+        assert_eq!(app.step_detail(true), None);
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("DSCI-2"));
+
+        assert_eq!(app.step_detail(false), Some("DSCI-1".to_string()));
+        assert_eq!(app.selected_index, first);
+        // Its fetch is already running.
+        app.step_detail(true);
+        assert_eq!(app.step_detail(false), None);
+    }
+
+    #[test]
+    fn detail_scroll_stops_at_the_last_line() {
+        let mut app = App::new();
+        app.detail_scroll_max.set(5);
+        app.detail_page_height.set(4);
+
+        app.scroll_detail_page(true);
+        assert_eq!(app.detail_scroll, 2);
+        for _ in 0..10 {
+            app.scroll_detail_down();
+        }
+        assert_eq!(app.detail_scroll, 5);
+        app.scroll_detail_to(false);
+        app.scroll_detail_up();
+        assert_eq!(app.detail_scroll, 0);
+        app.scroll_detail_to(true);
+        assert_eq!(app.detail_scroll, 5);
+    }
+
+    #[test]
+    fn detail_fetch_error_clears_on_retry() {
+        let mut app = App::new();
+        assert!(app.begin_detail_fetch("DSCI-1"));
+        app.end_detail_fetch("DSCI-1");
+        app.fail_detail_fetch("DSCI-1", "timed out".to_string());
+        assert_eq!(app.detail_fetch_error("DSCI-1"), Some("timed out"));
+        assert!(app.begin_detail_fetch("DSCI-1"));
+        assert_eq!(app.detail_fetch_error("DSCI-1"), None);
     }
 
     fn my_work_group_names(app: &App) -> Vec<String> {

@@ -1,12 +1,46 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Wrap,
+};
 
 use crate::app::{App, DetailMode};
-use crate::cache::{Status, StatusRules};
+use crate::cache::{ActivityKind, Epic, Status, StatusRules, Ticket};
 use crate::move_picker::MovePicker;
 use crate::views::common::status_color;
+use crate::widgets::activity::format_timestamp;
+use crate::widgets::markup;
+
+/// Width of the field names ("Assignee", ...) in the header.
+const FIELD_WIDTH: usize = 10;
+
+const VIEW_HINTS: &[(&str, &str)] = &[
+    ("↑↓", "scroll"),
+    ("[ ]", "prev/next"),
+    ("m", "move"),
+    ("C", "comment"),
+    ("a", "assign"),
+    ("e", "edit"),
+    ("h", "history"),
+    ("o", "browser"),
+    ("z", "zoom"),
+    ("Esc", "close"),
+];
+
+const EPIC_HINTS: &[(&str, &str)] = &[
+    ("↑↓", "scroll"),
+    ("[ ]", "prev/next"),
+    ("o", "browser"),
+    ("z", "zoom"),
+    ("Esc", "close"),
+];
+
+fn muted() -> Style {
+    Style::default().fg(Color::DarkGray)
+}
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
@@ -26,77 +60,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
-}
-
-fn parse_heading(line: &str) -> Option<(u8, &str)> {
-    let trimmed = line.trim_start();
-
-    for level in 1..=6u8 {
-        let jira_prefix = format!("h{}. ", level);
-        if let Some(rest) = trimmed.strip_prefix(&jira_prefix) {
-            return Some((level, rest.trim()));
-        }
-    }
-
-    for level in (1..=6u8).rev() {
-        let md_prefix = "#".repeat(level as usize) + " ";
-        if let Some(rest) = trimmed.strip_prefix(&md_prefix) {
-            return Some((level, rest.trim()));
-        }
-    }
-
-    for level in 1..=6u8 {
-        let open = format!("<h{}>", level);
-        let close = format!("</h{}>", level);
-        if trimmed.starts_with(&open) && trimmed.ends_with(&close) {
-            let content = trimmed
-                .trim_start_matches(&open)
-                .trim_end_matches(&close)
-                .trim();
-            return Some((level, content));
-        }
-    }
-
-    None
-}
-
-fn parse_bullet(line: &str) -> Option<(usize, String)> {
-    let trimmed = line.trim_start();
-    let ws = line.len().saturating_sub(trimmed.len());
-
-    let stars = trimmed.chars().take_while(|c| *c == '*').count();
-    if stars > 0
-        && trimmed
-            .chars()
-            .nth(stars)
-            .map(|c| c == ' ')
-            .unwrap_or(false)
-    {
-        let text = trimmed[stars + 1..].trim().to_string();
-        return Some((ws + (stars.saturating_sub(1) * 2), text));
-    }
-
-    let hashes = trimmed.chars().take_while(|c| *c == '#').count();
-    if hashes > 0
-        && trimmed
-            .chars()
-            .nth(hashes)
-            .map(|c| c == ' ')
-            .unwrap_or(false)
-    {
-        let text = trimmed[hashes + 1..].trim().to_string();
-        return Some((ws + (hashes.saturating_sub(1) * 2), format!("1. {}", text)));
-    }
-
-    if let Some(rest) = trimmed.strip_prefix("- ") {
-        return Some((ws, rest.trim().to_string()));
-    }
-
-    None
-}
-
-fn normalize_inline(s: &str) -> String {
-    s.replace("{{", "`").replace("}}", "`")
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -122,80 +85,40 @@ fn progress_bar(done: usize, total: usize, width: usize) -> String {
     )
 }
 
-fn push_description_lines(lines: &mut Vec<Line>, desc: &str) {
-    let mut in_code = false;
+/// Draws the overlay's frame for `key` and returns the area inside it.
+fn render_frame(f: &mut ratatui::Frame, app: &App, key: &str) -> (Rect, Rect) {
+    let area = if app.detail_fullscreen {
+        f.area()
+    } else {
+        centered_rect(80, 85, f.area())
+    };
+    f.render_widget(Clear, area);
 
-    for raw in desc.lines() {
-        let trimmed = raw.trim();
-
-        if trimmed == "{code}" || trimmed.starts_with("{code:") || trimmed == "```" {
-            in_code = !in_code;
-            lines.push(Line::from(Span::styled(
-                "---- code ----",
-                Style::default().fg(Color::DarkGray),
-            )));
-            continue;
-        }
-
-        if in_code {
-            lines.push(Line::from(Span::styled(
-                raw.to_string(),
-                Style::default().fg(Color::White),
-            )));
-            continue;
-        }
-
-        if let Some((level, text)) = parse_heading(raw) {
-            lines.push(Line::from(""));
-            let marker = match level {
-                1 => "H1",
-                2 => "H2",
-                3 => "H3",
-                _ => "H",
-            };
-            let heading_text = format!("{} {}", marker, normalize_inline(text));
-            lines.push(Line::from(Span::styled(
-                heading_text,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            continue;
-        }
-
-        if let Some((indent, item)) = parse_bullet(raw) {
-            let prefix = " ".repeat(indent);
-            lines.push(Line::from(Span::styled(
-                format!("{}• {}", prefix, normalize_inline(&item)),
-                Style::default().fg(Color::Gray),
-            )));
-            continue;
-        }
-
-        lines.push(Line::from(Span::styled(
-            normalize_inline(raw),
-            Style::default().fg(Color::Gray),
-        )));
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .padding(Padding::horizontal(1))
+        .title(Span::styled(
+            format!(" {} ", key),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ));
+    if let Some((index, count)) = app.detail_position() {
+        block = block.title(
+            Line::from(Span::styled(format!(" {} of {} ", index, count), muted())).right_aligned(),
+        );
     }
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    (area, inner)
 }
 
 pub fn render(f: &mut ratatui::Frame, app: &App) {
     if let Some(ticket_key) = app.detail_ticket_key.as_ref() {
         if let Some(ticket) = app.find_ticket(ticket_key) {
-            let area = centered_rect(60, 60, f.area());
-            f.render_widget(Clear, area);
-
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {} ", ticket_key));
-
-            let inner = block.inner(area);
-            f.render_widget(block, area);
-
+            let (area, inner) = render_frame(f, app, ticket_key);
             match &app.detail_mode {
-                DetailMode::View => {
-                    render_view(f, inner, ticket, app.status_rules(), app.detail_scroll)
-                }
+                DetailMode::View => render_view(f, area, inner, app, ticket),
                 DetailMode::MoveLoading { .. } => render_with_footer(
                     f,
                     inner,
@@ -203,7 +126,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                         format!("Loading {}'s transitions from Jira…", ticket_key),
                         Style::default().fg(Color::Yellow),
                     ))],
-                    "[Esc] cancel",
+                    &[("Esc", "cancel")],
                 ),
                 DetailMode::MovePicker(picker) => {
                     render_move_picker(f, inner, ticket, picker, app.status_rules())
@@ -227,230 +150,388 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         Some(e) => e,
         None => return,
     };
-
-    let area = centered_rect(70, 70, f.area());
-    f.render_widget(Clear, area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" {} ", epic.key));
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-    render_epic_view(f, inner, epic, app.status_rules(), app.detail_scroll);
+    let (area, inner) = render_frame(f, app, &epic.key);
+    render_epic_view(f, area, inner, app, epic);
 }
 
-fn render_view(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    ticket: &crate::cache::Ticket,
-    rules: &StatusRules,
-    scroll: u16,
-) {
-    // Split into body and footer
+/// Key hints, wrapped to `width` without splitting a hint.
+fn hint_lines(hints: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
+    let mut content = Vec::new();
+    for (i, (key, label)) in hints.iter().enumerate() {
+        if i > 0 {
+            content.push(Span::raw("  "));
+        }
+        content.push(Span::styled(
+            key.replace(' ', "\u{a0}"),
+            Style::default().fg(Color::Cyan),
+        ));
+        content.push(Span::styled(
+            format!("\u{a0}{}", label.replace(' ', "\u{a0}")),
+            muted(),
+        ));
+    }
+    markup::wrap(vec![], vec![], content, width as usize)
+}
+
+/// Draws `hints` at the bottom of `area`, after a blank line, and returns the
+/// area above them.
+fn render_footer(f: &mut ratatui::Frame, area: Rect, hints: &[(&str, &str)]) -> Rect {
+    let footer = hint_lines(hints, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(footer.len() as u16 + 1),
+        ])
         .split(area);
+    let footer_area = Rect {
+        y: chunks[1].y + 1,
+        height: chunks[1].height.saturating_sub(1),
+        ..chunks[1]
+    };
+    f.render_widget(Paragraph::new(footer), footer_area);
+    chunks[0]
+}
 
-    let body_area = chunks[0];
-    let footer_area = chunks[1];
+/// Draws `lines` in `body` at the overlay's scroll position, with a scrollbar
+/// on the overlay's right border when they don't fit, and records the scroll
+/// limits for the scroll keys.
+fn render_scrollable(
+    f: &mut ratatui::Frame,
+    app: &App,
+    frame: Rect,
+    body: Rect,
+    lines: Vec<Line<'static>>,
+) {
+    let max = lines
+        .len()
+        .saturating_sub(body.height as usize)
+        .min(u16::MAX as usize) as u16;
+    app.detail_scroll_max.set(max);
+    app.detail_page_height.set(body.height.max(1));
+    let scroll = app.detail_scroll.min(max);
 
-    // Build body lines
-    let mut lines: Vec<Line> = Vec::new();
+    f.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll, 0))
+            .wrap(Wrap { trim: false }),
+        body,
+    );
 
-    // Line 1: Summary (bold, white)
-    lines.push(Line::from(Span::styled(
-        ticket.summary.clone(),
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    )));
+    if max > 0 {
+        let mut state = ScrollbarState::new(max as usize).position(scroll as usize);
+        f.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .symbols(symbols::scrollbar::VERTICAL)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_style(muted())
+                .thumb_style(Style::default().fg(Color::Gray)),
+            frame.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut state,
+        );
+    }
+}
 
-    // Line 2: empty
-    lines.push(Line::from(""));
+fn rule(width: usize) -> Line<'static> {
+    Line::from(Span::styled("─".repeat(width), muted()))
+}
 
-    // Line 3: Status + Assignee
-    let assignee_str = ticket.assignee.as_deref().unwrap_or("Unassigned");
-    lines.push(Line::from(vec![
-        Span::raw("Status: "),
+/// A rule with `title` set into it: `── Comments (2) ─────`.
+fn section(title: &str, width: usize) -> Line<'static> {
+    let lead = "── ";
+    let used = lead.chars().count() + title.chars().count() + 1;
+    Line::from(vec![
+        Span::styled(lead, muted()),
         Span::styled(
-            ticket.status.as_str(),
-            Style::default().fg(status_color(&ticket.status, rules)),
+            title.to_string(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("    Assignee: "),
-        Span::styled(assignee_str, Style::default().fg(Color::White)),
-    ]));
-
-    // Line 4: Reporter (if loaded)
-    if let Some(ref reporter) = ticket.reporter {
-        lines.push(Line::from(vec![
-            Span::raw("Reporter: "),
-            Span::styled(reporter.as_str(), Style::default().fg(Color::White)),
-        ]));
-    }
-
-    // Line 4: Epic (if present)
-    if let (Some(ref epic_key), Some(ref epic_name)) = (&ticket.epic_key, &ticket.epic_name) {
-        lines.push(Line::from(vec![
-            Span::raw("Epic: "),
-            Span::styled(
-                format!("{} ({})", epic_key, epic_name),
-                Style::default().fg(Color::Magenta),
-            ),
-        ]));
-    } else if let Some(ref epic_key) = ticket.epic_key {
-        lines.push(Line::from(vec![
-            Span::raw("Epic: "),
-            Span::styled(epic_key.clone(), Style::default().fg(Color::Magenta)),
-        ]));
-    }
-
-    // Line 5: empty
-    lines.push(Line::from(""));
-
-    // Labels
-    if !ticket.labels.is_empty() {
-        lines.push(Line::from(vec![
-            Span::raw("Labels: "),
-            Span::styled(ticket.labels.join(", "), Style::default().fg(Color::Yellow)),
-        ]));
-        lines.push(Line::from(""));
-    }
-
-    // Line 6+: Description
-    let desc = ticket.description.as_deref().unwrap_or("(no description)");
-    push_description_lines(&mut lines, desc);
-
-    let body = Paragraph::new(lines)
-        .scroll((scroll, 0))
-        .wrap(Wrap { trim: false });
-    f.render_widget(body, body_area);
-
-    // Footer
-    let footer = Paragraph::new(Line::from(Span::styled(
-        "[↑/↓] scroll  [Esc] close  [o] browser  [m] move  [C] comment  [a] assign  [e] edit  [h] history",
-        Style::default().fg(Color::DarkGray),
-    )));
-    f.render_widget(footer, footer_area);
+        Span::styled(
+            format!(" {}", "─".repeat(width.saturating_sub(used))),
+            muted(),
+        ),
+    ])
 }
 
-fn render_epic_view(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    epic: &crate::cache::Epic,
-    rules: &StatusRules,
-    scroll: u16,
-) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
-        .split(area);
+/// A header row: the field name, then `value` wrapped under itself.
+fn push_field(lines: &mut Vec<Line<'static>>, name: &str, value: Vec<Span<'static>>, width: usize) {
+    lines.extend(markup::wrap(
+        vec![Span::styled(format!("{:<FIELD_WIDTH$}", name), muted())],
+        vec![Span::raw(" ".repeat(FIELD_WIDTH))],
+        value,
+        width,
+    ));
+}
 
-    let body_area = chunks[0];
-    let footer_area = chunks[1];
+fn title_lines(summary: &str, width: usize) -> Vec<Line<'static>> {
+    markup::wrap(
+        vec![],
+        vec![],
+        vec![Span::styled(
+            summary.to_string(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )],
+        width,
+    )
+}
 
-    let mut lines: Vec<Line> = Vec::new();
+fn indented(line: Line<'static>, indent: &str) -> Line<'static> {
+    let mut spans = vec![Span::raw(indent.to_string())];
+    spans.extend(line.spans);
+    Line::from(spans)
+}
 
-    lines.push(Line::from(Span::styled(
-        epic.summary.clone(),
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    )));
+fn header_lines(ticket: &Ticket, rules: &StatusRules, width: usize) -> Vec<Line<'static>> {
+    let mut lines = title_lines(&ticket.summary, width);
+    lines.push(Line::from(""));
+
+    let color = status_color(&ticket.status, rules);
+    push_field(
+        &mut lines,
+        "Status",
+        vec![Span::styled(
+            format!("● {}", ticket.status),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )],
+        width,
+    );
+
+    let assignee = match &ticket.assignee {
+        Some(name) => Span::styled(name.clone(), Style::default().fg(Color::White)),
+        None => Span::styled("Unassigned", muted().add_modifier(Modifier::ITALIC)),
+    };
+    push_field(&mut lines, "Assignee", vec![assignee], width);
+
+    if let Some(reporter) = &ticket.reporter {
+        push_field(
+            &mut lines,
+            "Reporter",
+            vec![Span::styled(
+                reporter.clone(),
+                Style::default().fg(Color::White),
+            )],
+            width,
+        );
+    }
+
+    if let Some(epic_key) = &ticket.epic_key {
+        let mut value = vec![Span::styled(
+            epic_key.clone(),
+            Style::default().fg(Color::Magenta),
+        )];
+        if let Some(name) = &ticket.epic_name {
+            value.push(Span::styled(
+                format!(" · {}", name),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+        push_field(&mut lines, "Epic", value, width);
+    }
+
+    if !ticket.labels.is_empty() {
+        let mut chips = Vec::new();
+        for (i, label) in ticket.labels.iter().enumerate() {
+            if i > 0 {
+                chips.push(Span::raw(" "));
+            }
+            chips.push(Span::styled(
+                format!("\u{a0}{}\u{a0}", label),
+                Style::default().fg(Color::Yellow).bg(Color::DarkGray),
+            ));
+        }
+        push_field(&mut lines, "Labels", chips, width);
+    }
+
+    lines
+}
+
+fn description_lines(app: &App, ticket: &Ticket, width: usize) -> Vec<Line<'static>> {
+    if ticket.detail_loaded {
+        return match ticket.description.as_deref() {
+            Some(desc) if !desc.trim().is_empty() => markup::render(desc, width as u16),
+            _ => vec![Line::from(Span::styled(
+                "No description.",
+                muted().add_modifier(Modifier::ITALIC),
+            ))],
+        };
+    }
+    match app.detail_fetch_error(&ticket.key) {
+        Some(error) => {
+            let mut lines = markup::wrap(
+                vec![],
+                vec![],
+                vec![Span::styled(
+                    format!("Couldn't load details: {}", error.trim()),
+                    Style::default().fg(Color::Red),
+                )],
+                width,
+            );
+            lines.push(Line::from(Span::styled(
+                "Close and reopen the ticket to try again.",
+                muted(),
+            )));
+            lines
+        }
+        None => vec![Line::from(Span::styled(
+            "Loading details…",
+            Style::default().fg(Color::Yellow),
+        ))],
+    }
+}
+
+/// The ticket's comments, oldest first.
+fn comment_lines(ticket: &Ticket, width: usize) -> Vec<Line<'static>> {
+    // Activity is newest first.
+    let comments: Vec<_> = ticket
+        .activity
+        .iter()
+        .rev()
+        .filter_map(|entry| match &entry.kind {
+            ActivityKind::Comment { body } => Some((entry, body)),
+            _ => None,
+        })
+        .collect();
+
+    let title = match comments.len() {
+        0 => "Comments".to_string(),
+        n => format!("Comments ({})", n),
+    };
+    let mut lines = vec![Line::from(""), section(&title, width)];
+    if comments.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No comments yet. Press C to add one.",
+            muted().add_modifier(Modifier::ITALIC),
+        )));
+        return lines;
+    }
+
+    let indent = "  ";
+    for (entry, body) in comments {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                entry.author.clone(),
+                Style::default()
+                    .fg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("  {}", format_timestamp(&entry.timestamp)), muted()),
+        ]));
+        let body_width = width.saturating_sub(indent.len()) as u16;
+        lines.extend(
+            markup::render(body, body_width)
+                .into_iter()
+                .map(|line| indented(line, indent)),
+        );
+    }
+    lines
+}
+
+fn render_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, ticket: &Ticket) {
+    let body = render_footer(f, area, VIEW_HINTS);
+    let width = body.width as usize;
+
+    let mut lines = header_lines(ticket, app.status_rules(), width);
+    lines.push(Line::from(""));
+    lines.push(rule(width));
+    lines.push(Line::from(""));
+    lines.extend(description_lines(app, ticket, width));
+    if ticket.detail_loaded {
+        lines.extend(comment_lines(ticket, width));
+    }
+
+    render_scrollable(f, app, frame, body, lines);
+}
+
+fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, epic: &Epic) {
+    let body = render_footer(f, area, EPIC_HINTS);
+    let width = body.width as usize;
+    let rules = app.status_rules();
+
+    let mut lines = title_lines(&epic.summary, width);
     lines.push(Line::from(""));
 
     let total = epic.total();
     let done = epic.done_count(rules);
-    let pct = epic.progress_pct(rules);
-    lines.push(Line::from(vec![
-        Span::raw("Progress: "),
-        Span::styled(
+    push_field(
+        &mut lines,
+        "Progress",
+        vec![Span::styled(
             format!(
-                "{}  {} / {} ({:.1}%)",
+                "{}\u{a0}\u{a0}{}\u{a0}/\u{a0}{}\u{a0}({:.1}%)",
                 progress_bar(done, total, 24),
                 done,
                 total,
-                pct
+                epic.progress_pct(rules)
             ),
             Style::default().fg(Color::Green),
-        ),
-    ]));
+        )],
+        width,
+    );
 
-    let mut parts: Vec<String> = rules
-        .group(&epic.children)
-        .iter()
-        .map(|(status, tickets)| format!("{}: {}", status.as_str(), tickets.len()))
-        .collect();
-    if parts.is_empty() {
-        parts.push("No related tickets".to_string());
+    let mut counts = Vec::new();
+    for (status, tickets) in rules.group(&epic.children) {
+        if !counts.is_empty() {
+            counts.push(Span::raw("  "));
+        }
+        counts.push(Span::styled(
+            format!("{}:\u{a0}{}", status.as_str(), tickets.len()).replace(' ', "\u{a0}"),
+            Style::default().fg(status_color(status.as_str(), rules)),
+        ));
     }
-    lines.push(Line::from(vec![
-        Span::raw("Status: "),
-        Span::styled(parts.join("  "), Style::default().fg(Color::Gray)),
-    ]));
+    if counts.is_empty() {
+        counts.push(Span::styled("No related tickets", muted()));
+    }
+    push_field(&mut lines, "Status", counts, width);
+
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Related Tickets",
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )));
+    lines.push(section(&format!("Related tickets ({})", total), width));
     lines.push(Line::from(""));
 
     let mut children: Vec<_> = epic.children.iter().collect();
     rules.sort_tickets(&mut children);
     if children.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "(no related tickets)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        for ticket in children {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{:<12}", ticket.key),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(
-                    format!("{:<15}", ticket.status.as_str()),
-                    Style::default().fg(status_color(&ticket.status, rules)),
-                ),
-                Span::raw("  "),
-                Span::styled(
-                    truncate(&ticket.summary, 78),
-                    Style::default().fg(Color::Gray),
-                ),
-            ]));
-        }
+        lines.push(Line::from(Span::styled("(no related tickets)", muted())));
+    }
+    let summary_width = width.saturating_sub(12 + 15 + 2).max(10);
+    for ticket in children {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:<12}", ticket.key),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(
+                format!("{:<15}", truncate(&ticket.status, 14)),
+                Style::default().fg(status_color(&ticket.status, rules)),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                truncate(&ticket.summary, summary_width),
+                Style::default().fg(Color::Gray),
+            ),
+        ]));
     }
 
-    let body = Paragraph::new(lines)
-        .scroll((scroll, 0))
-        .wrap(Wrap { trim: false });
-    f.render_widget(body, body_area);
-
-    let footer = Paragraph::new(Line::from(Span::styled(
-        "[↑/↓] scroll  [Esc] close  [o] browser",
-        Style::default().fg(Color::DarkGray),
-    )));
-    f.render_widget(footer, footer_area);
+    render_scrollable(f, app, frame, body, lines);
 }
 
-/// Renders `lines` with `footer` pinned to the last row.
-fn render_with_footer(f: &mut ratatui::Frame, area: Rect, lines: Vec<Line>, footer: &str) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
-        .split(area);
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), chunks[0]);
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            footer.to_string(),
-            Style::default().fg(Color::DarkGray),
-        ))),
-        chunks[1],
-    );
+/// Renders `lines` above the key `hints`.
+fn render_with_footer(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    lines: Vec<Line>,
+    hints: &[(&str, &str)],
+) {
+    let body = render_footer(f, area, hints);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 }
 
 fn heading(text: String) -> Line<'static> {
@@ -536,7 +617,13 @@ fn render_move_picker(
         f,
         area,
         lines,
-        "[j/k/↑/↓] choose   [Enter] select   [p/w/n/t/v/b/c] pick by status   [Shift+key] move now   [Esc] cancel",
+        &[
+            ("j/k", "choose"),
+            ("Enter", "select"),
+            ("p/w/n/t/v/b/c", "pick by status"),
+            ("Shift+key", "move now"),
+            ("Esc", "cancel"),
+        ],
     );
 }
 
@@ -566,6 +653,127 @@ fn render_resolution_picker(
         f,
         area,
         lines,
-        "[j/k/↑/↓] choose   [Enter] move   [Esc] back",
+        &[("j/k", "choose"), ("Enter", "move"), ("Esc", "back")],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::ActivityEntry;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn ticket() -> Ticket {
+        Ticket {
+            key: "DSCI-3228".to_string(),
+            summary: "MAGE: MongoDB Agent Grading & Evaluation benchmark".to_string(),
+            status: "In Progress".to_string(),
+            assignee: Some("Christian Dowell".to_string()),
+            assignee_email: None,
+            reporter: Some("Christian Dowell".to_string()),
+            description: Some(
+                "*Stakeholders:* Christian Dowell (owner)\n\nh2. Goals\n# Replay the changes\n# Grade the result"
+                    .to_string(),
+            ),
+            labels: vec!["DSCI".to_string(), "data-science".to_string()],
+            epic_key: None,
+            epic_name: None,
+            detail_loaded: true,
+            url: String::new(),
+            activity: vec![
+                comment("2026-09-02T10:00:00.000+0000", "Eliza Spang", "Second *reply*"),
+                comment("2026-09-01T09:30:00.000+0000", "Christian Dowell", "First"),
+            ],
+        }
+    }
+
+    fn comment(timestamp: &str, author: &str, body: &str) -> ActivityEntry {
+        ActivityEntry {
+            timestamp: timestamp.to_string(),
+            author: author.to_string(),
+            author_email: None,
+            kind: ActivityKind::Comment {
+                body: body.to_string(),
+            },
+        }
+    }
+
+    fn app_showing(ticket: Ticket) -> App {
+        let mut app = App::new();
+        app.loading = false;
+        app.open_detail(ticket.key.clone());
+        app.cache.my_tickets = vec![ticket];
+        app
+    }
+
+    fn draw(app: &App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().replace('\u{a0}', " "))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn row(lines: &[String], text: &str) -> usize {
+        lines
+            .iter()
+            .position(|l| l.contains(text))
+            .unwrap_or_else(|| panic!("{:?} not drawn:\n{}", text, lines.join("\n")))
+    }
+
+    #[test]
+    fn narrow_footer_wraps_instead_of_cutting_hints_off() {
+        let lines = draw(&app_showing(ticket()), 70, 34);
+        assert!(row(&lines, "↑↓ scroll") < row(&lines, "Esc close"));
+    }
+
+    #[test]
+    fn header_fields_and_comments_oldest_first() {
+        let lines = draw(&app_showing(ticket()), 70, 34);
+        assert!(lines[row(&lines, "Status")].contains("● In Progress"));
+        assert!(lines[row(&lines, "Labels")].contains(" DSCI   data-science "));
+        assert!(lines[row(&lines, "── Comments (2) ─")].contains('─'));
+        assert!(row(&lines, "Christian Dowell  2026-09-01 09:30") < row(&lines, "Eliza Spang"));
+        assert!(lines[row(&lines, "Second reply")].contains("   Second reply"));
+    }
+
+    #[test]
+    fn long_detail_scrolls_only_to_its_last_line() {
+        let mut t = ticket();
+        t.description = Some((1..=60).map(|n| format!("line {}\n", n)).collect());
+        let mut app = app_showing(t);
+        draw(&app, 70, 30);
+        assert!(app.detail_scroll_max.get() > 0);
+
+        app.detail_scroll = u16::MAX;
+        let lines = draw(&app, 70, 30);
+        let last = row(&lines, "Second reply");
+        assert_eq!(
+            row(&lines, "↑↓ scroll"),
+            last + 2,
+            "last line sits above the footer"
+        );
+        // The scrollbar replaces the right border, thumb at the bottom.
+        assert!(lines[last].trim_end().ends_with('█'));
+    }
+
+    #[test]
+    fn unloaded_detail_says_loading_or_why_it_failed() {
+        let mut t = ticket();
+        t.detail_loaded = false;
+        let mut app = app_showing(t);
+        let lines = draw(&app, 70, 34);
+        row(&lines, "Loading details…");
+        assert!(!lines.iter().any(|l| l.contains("Comments")));
+
+        app.fail_detail_fetch("DSCI-3228", "jira: timed out".to_string());
+        let lines = draw(&app, 70, 34);
+        row(&lines, "Couldn't load details: jira: timed out");
+    }
 }

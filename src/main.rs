@@ -638,13 +638,17 @@ async fn main() -> Result<()> {
                     result,
                 } => {
                     app.end_detail_fetch(&key);
-                    if let Ok(detail) = result {
-                        if app.enrich_ticket(&key, requested_at, &detail)
-                            && detail_cache_tx.send(detail).is_err()
-                        {
-                            app.flash =
-                                Some("Detail cache writer unavailable; skipping write".to_string());
+                    match result {
+                        Ok(detail) => {
+                            if app.enrich_ticket(&key, requested_at, &detail)
+                                && detail_cache_tx.send(detail).is_err()
+                            {
+                                app.flash = Some(
+                                    "Detail cache writer unavailable; skipping write".to_string(),
+                                );
+                            }
                         }
+                        Err(e) => app.fail_detail_fetch(&key, e),
                     }
                 }
                 BackgroundMessage::TransitionsFetched {
@@ -1360,8 +1364,18 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backg
 
             match key {
                 KeyCode::Esc => app.close_detail(),
-                KeyCode::Up => app.scroll_detail_up(),
-                KeyCode::Down => app.scroll_detail_down(),
+                KeyCode::Up | KeyCode::Char('k') => app.scroll_detail_up(),
+                KeyCode::Down | KeyCode::Char('j') => app.scroll_detail_down(),
+                KeyCode::PageUp => app.scroll_detail_page(false),
+                KeyCode::PageDown | KeyCode::Char(' ') => app.scroll_detail_page(true),
+                KeyCode::Home | KeyCode::Char('g') => app.scroll_detail_to(false),
+                KeyCode::End | KeyCode::Char('G') => app.scroll_detail_to(true),
+                KeyCode::Char('z') => app.detail_fullscreen = !app.detail_fullscreen,
+                KeyCode::Char('[') | KeyCode::Char(']') => {
+                    if let Some(key) = app.step_detail(key == KeyCode::Char(']')) {
+                        spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
+                    }
+                }
                 KeyCode::Char('o') => {
                     if let Some(key) = ticket_detail_key.as_ref() {
                         if let Some(ticket) = app.find_ticket(key) {
