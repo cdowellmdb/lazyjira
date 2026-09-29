@@ -1825,27 +1825,7 @@ fn handle_assign_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backg
             let name = member.name.clone();
 
             // Optimistic cache update
-            for ticket in &mut app.cache.my_tickets {
-                if ticket.key == ticket_key {
-                    ticket.assignee = Some(name.clone());
-                    ticket.assignee_email = Some(email.clone());
-                }
-            }
-            for ticket in &mut app.cache.team_tickets {
-                if ticket.key == ticket_key {
-                    ticket.assignee = Some(name.clone());
-                    ticket.assignee_email = Some(email.clone());
-                }
-            }
-            for epic in &mut app.cache.epics {
-                for ticket in &mut epic.children {
-                    if ticket.key == ticket_key {
-                        ticket.assignee = Some(name.clone());
-                        ticket.assignee_email = Some(email.clone());
-                    }
-                }
-            }
-            app.mark_cache_changed();
+            app.update_ticket_assignee(&ticket_key, &name, &email);
 
             app.assign_state = None;
             app.flash = Some(format!("Assigning {} to {}...", ticket_key, name));
@@ -1898,27 +1878,7 @@ fn handle_edit_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backgro
                 .collect();
 
             // Optimistic cache update
-            for ticket in &mut app.cache.my_tickets {
-                if ticket.key == ticket_key {
-                    ticket.summary = new_summary.clone();
-                    ticket.labels = new_labels.clone();
-                }
-            }
-            for ticket in &mut app.cache.team_tickets {
-                if ticket.key == ticket_key {
-                    ticket.summary = new_summary.clone();
-                    ticket.labels = new_labels.clone();
-                }
-            }
-            for epic in &mut app.cache.epics {
-                for ticket in &mut epic.children {
-                    if ticket.key == ticket_key {
-                        ticket.summary = new_summary.clone();
-                        ticket.labels = new_labels.clone();
-                    }
-                }
-            }
-            app.mark_cache_changed();
+            app.update_ticket_fields(&ticket_key, &new_summary, &new_labels);
 
             app.edit_state = None;
             app.flash = Some(format!("Updating {}...", ticket_key));

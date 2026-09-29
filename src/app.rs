@@ -1552,12 +1552,58 @@ impl App {
             ticket.assignee_email = Some(email.to_string());
         });
     }
+
+    /// Update the editable fields in every cached copy of a ticket.
+    pub fn update_ticket_fields(&mut self, key: &str, summary: &str, labels: &[String]) {
+        self.update_ticket(key, |ticket| {
+            ticket.summary = summary.to_string();
+            ticket.labels = labels.to_vec();
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{App, GroupSelectionState, Tab};
     use crate::cache::{Epic, Ticket};
+
+    #[test]
+    fn ticket_changes_reach_every_copy_and_refresh_visibility() {
+        for filter_only in [false, true] {
+            let mut app = App::new();
+            let ticket = Ticket::for_test("DEMO-1", "To Do");
+            app.filter_results = vec![ticket.clone()];
+            if !filter_only {
+                app.cache.my_tickets = vec![ticket.clone()];
+                app.cache.team_tickets = vec![ticket.clone()];
+                app.cache.epics = vec![Epic {
+                    key: "DEMO-100".into(),
+                    summary: "Epic".into(),
+                    children: vec![ticket],
+                }];
+            }
+            app.search = Some("updated".into());
+            assert_eq!(app.item_count(), 0);
+
+            app.update_ticket_assignee("DEMO-1", "Alex", "alex@example.com");
+            app.update_ticket_fields("DEMO-1", "Updated summary", &["updated-label".into()]);
+
+            assert_eq!(app.item_count(), if filter_only { 0 } else { 2 });
+            for ticket in app
+                .cache
+                .my_tickets
+                .iter()
+                .chain(&app.cache.team_tickets)
+                .chain(app.cache.epics.iter().flat_map(|epic| &epic.children))
+                .chain(&app.filter_results)
+            {
+                assert_eq!(ticket.assignee.as_deref(), Some("Alex"));
+                assert_eq!(ticket.assignee_email.as_deref(), Some("alex@example.com"));
+                assert_eq!(ticket.summary, "Updated summary");
+                assert_eq!(ticket.labels, ["updated-label"]);
+            }
+        }
+    }
 
     fn ticket(key: &str, summary: &str) -> Ticket {
         Ticket {
