@@ -75,7 +75,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
         ]));
         lines.push(Line::from(Span::styled(
-            format!("{}", "-".repeat(header_w)),
+            "-".repeat(header_w),
             Style::default().fg(Color::DarkGray),
         )));
         lines.push(Line::from(""));

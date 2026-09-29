@@ -631,7 +631,7 @@ impl App {
         }
     }
 
-    fn sort_epic_children<'a>(tickets: &mut Vec<&'a crate::cache::Ticket>) {
+    fn sort_epic_children(tickets: &mut Vec<&crate::cache::Ticket>) {
         tickets.sort_by(|a, b| {
             Self::epic_status_rank(&a.status)
                 .cmp(&Self::epic_status_rank(&b.status))
@@ -655,9 +655,9 @@ impl App {
     }
 
     /// Epics and visible child rows in the exact order used by the Epics tab.
-    pub(crate) fn epics_visible_epics<'a>(
-        &'a self,
-    ) -> Vec<(&'a crate::cache::Epic, Vec<&'a crate::cache::Ticket>)> {
+    pub(crate) fn epics_visible_epics(
+        &self,
+    ) -> Vec<(&crate::cache::Epic, Vec<&crate::cache::Ticket>)> {
         let search = self.normalized_search();
         let mut visible = Vec::new();
         let mut epics: Vec<_> = self
@@ -723,9 +723,9 @@ impl App {
     }
 
     /// Unassigned tickets grouped by epic.
-    pub(crate) fn unassigned_visible_by_epic<'a>(
-        &'a self,
-    ) -> Vec<(String, String, Vec<&'a crate::cache::Ticket>)> {
+    pub(crate) fn unassigned_visible_by_epic(
+        &self,
+    ) -> Vec<(String, String, Vec<&crate::cache::Ticket>)> {
         let search = self.normalized_search();
         let mut grouped: HashMap<(String, String), Vec<&crate::cache::Ticket>> = HashMap::new();
 
@@ -861,12 +861,12 @@ impl App {
 
     /// Team members and visible tickets in the exact order used by the Team tab.
     /// Returns active tickets first, then Done tickets as a secondary group.
-    pub(crate) fn team_visible_tickets_by_member<'a>(
-        &'a self,
+    pub(crate) fn team_visible_tickets_by_member(
+        &self,
     ) -> Vec<(
-        &'a crate::cache::TeamMember,
-        Vec<&'a crate::cache::Ticket>,
-        Vec<&'a crate::cache::Ticket>,
+        &crate::cache::TeamMember,
+        Vec<&crate::cache::Ticket>,
+        Vec<&crate::cache::Ticket>,
     )> {
         let search = self.normalized_search();
         let search = search.as_deref();
@@ -888,7 +888,7 @@ impl App {
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
 
-            let member_match = search.map_or(false, |s| {
+            let member_match = search.is_some_and(|s| {
                 Self::contains_case_insensitive(&member.name, s)
                     || Self::contains_case_insensitive(&member.email, s)
             });

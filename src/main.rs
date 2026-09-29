@@ -2070,21 +2070,21 @@ fn handle_filter_keys(
             }
         }
         KeyCode::Char('x') => {
-            if app.filter_focus == FilterFocus::Sidebar && !config.filters.is_empty() {
-                if app.filter_sidebar_idx < config.filters.len() {
-                    let removed_name = config.filters.remove(app.filter_sidebar_idx).name;
-                    match crate::config::save_config(config) {
-                        Ok(()) => {
-                            app.flash = Some(format!("Deleted filter '{}'", removed_name));
-                            if app.filter_sidebar_idx > 0
-                                && app.filter_sidebar_idx >= config.filters.len()
-                            {
-                                app.filter_sidebar_idx = config.filters.len().saturating_sub(1);
-                            }
+            if app.filter_focus == FilterFocus::Sidebar
+                && app.filter_sidebar_idx < config.filters.len()
+            {
+                let removed_name = config.filters.remove(app.filter_sidebar_idx).name;
+                match crate::config::save_config(config) {
+                    Ok(()) => {
+                        app.flash = Some(format!("Deleted filter '{}'", removed_name));
+                        if app.filter_sidebar_idx > 0
+                            && app.filter_sidebar_idx >= config.filters.len()
+                        {
+                            app.filter_sidebar_idx = config.filters.len().saturating_sub(1);
                         }
-                        Err(e) => {
-                            app.flash = Some(format!("Failed to delete filter: {}", e));
-                        }
+                    }
+                    Err(e) => {
+                        app.flash = Some(format!("Failed to delete filter: {}", e));
                     }
                 }
             }

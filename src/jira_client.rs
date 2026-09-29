@@ -678,10 +678,7 @@ fn load_epics_cache(project: &str) -> Vec<Epic> {
         Err(_) => return Vec::new(),
     };
 
-    match serde_json::from_str::<Vec<Epic>>(&content) {
-        Ok(epics) => epics,
-        Err(_) => Vec::new(),
-    }
+    serde_json::from_str::<Vec<Epic>>(&content).unwrap_or_default()
 }
 
 fn save_epics_cache(project: &str, epics: &[Epic]) -> Result<()> {
