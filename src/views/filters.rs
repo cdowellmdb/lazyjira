@@ -133,12 +133,12 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             let marker = group_marker(app.group_selection_state(status.as_str()));
             let header_style = if is_header_selected {
                 Style::default()
-                    .fg(status_color(&status))
+                    .fg(status_color(&status, app.status_rules()))
                     .add_modifier(Modifier::BOLD)
                     .bg(Color::DarkGray)
             } else {
                 Style::default()
-                    .fg(status_color(&status))
+                    .fg(status_color(&status, app.status_rules()))
                     .add_modifier(Modifier::BOLD)
             };
 
@@ -179,10 +179,10 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
                 let status_style = if is_selected {
                     Style::default()
-                        .fg(status_color(&ticket.status))
+                        .fg(status_color(&ticket.status, app.status_rules()))
                         .bg(Color::DarkGray)
                 } else {
-                    Style::default().fg(status_color(&ticket.status))
+                    Style::default().fg(status_color(&ticket.status, app.status_rules()))
                 };
 
                 lines.push(Line::from(vec![

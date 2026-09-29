@@ -256,7 +256,7 @@ fn detail_status_name(app: &App) -> String {
     app.detail_ticket_key
         .as_deref()
         .and_then(|key| app.find_ticket(key))
-        .map(|ticket| ticket.status_name().to_string())
+        .map(|ticket| ticket.status.as_str().to_string())
         .unwrap_or_default()
 }
 

@@ -1,10 +1,15 @@
 use ratatui::style::Color;
 
 use crate::app::GroupSelectionState;
-use crate::cache::Status;
+use crate::cache::{Status, StatusRules};
 
-pub fn status_color(status: &Status) -> Color {
-    match status {
+/// Color for a status name: green when it's done, otherwise by the built-in status it
+/// reads as, and magenta for workflow statuses the app doesn't know.
+pub fn status_color(status: &str, rules: &StatusRules) -> Color {
+    if rules.is_done(status) {
+        return Color::Green;
+    }
+    match Status::from_str(status) {
         Status::NeedsTriage => Color::White,
         Status::ReadyForWork => Color::Blue,
         Status::InProgress => Color::Yellow,

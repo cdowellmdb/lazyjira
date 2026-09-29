@@ -486,7 +486,7 @@ async fn main() -> Result<()> {
 
     let mut app = App::new();
     app.set_epics_i_care_about(config.epics_i_care_about_ordered());
-    app.set_status_order(&config.statuses);
+    app.set_status_rules(&config.statuses);
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
     let detail_cache_tx = jira_client::spawn_detail_cache_writer(&config.jira.project);
 
@@ -1014,11 +1014,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
                 .cache_stale_age_secs
                 .map(|age| format!("stale {}", format_age_minutes(age)))
                 .unwrap_or_else(|| "fresh".to_string());
-            let focus_state = app
-                .status_focus
-                .as_ref()
-                .map(|s| s.as_str())
-                .unwrap_or("all");
+            let focus_state = app.status_focus.as_deref().unwrap_or("all");
             Span::styled(
                 format!(
                     " Tab: switch  j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  sel:{}  Enter: detail  z: fold  d: done({})  f/F: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
@@ -2298,7 +2294,6 @@ async fn handle_main_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::Status;
     use std::collections::BTreeMap;
 
     fn sample_config() -> AppConfig {
@@ -2315,12 +2310,11 @@ mod tests {
         }
     }
 
-    fn ticket(key: &str, summary: &str, status: Status) -> crate::cache::Ticket {
+    fn ticket(key: &str, summary: &str, status: &str) -> crate::cache::Ticket {
         crate::cache::Ticket {
             key: key.to_string(),
             summary: summary.to_string(),
-            status,
-            jira_status: None,
+            status: status.to_string(),
             assignee: None,
             assignee_email: None,
             reporter: None,
@@ -2437,8 +2431,8 @@ mod tests {
         let mut app = App::new();
         app.loading = false;
         app.cache.my_tickets = vec![
-            ticket("DEMO-1", "A", Status::InProgress),
-            ticket("DEMO-2", "B", Status::InProgress),
+            ticket("DEMO-1", "A", "In Progress"),
+            ticket("DEMO-2", "B", "In Progress"),
         ];
         let done = transition("805", "Done", "Done");
         app.bulk_state = Some(BulkState::MoveStatusPicker {
@@ -2492,7 +2486,7 @@ mod tests {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::MyWork;
-        app.cache.my_tickets = vec![ticket("AMP-1", "A", Status::InProgress)];
+        app.cache.my_tickets = vec![ticket("AMP-1", "A", "In Progress")];
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         handle_main_keys(
             &mut app,
@@ -2555,7 +2549,7 @@ mod tests {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::MyWork;
-        app.cache.my_tickets = vec![ticket("AMP-1", "A", Status::InProgress)];
+        app.cache.my_tickets = vec![ticket("AMP-1", "A", "In Progress")];
         app.selected_index = 1; // current ticket row
 
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2664,8 +2658,8 @@ mod tests {
         app.active_tab = Tab::Filters;
         app.filter_focus = FilterFocus::Results;
         app.filter_results = vec![
-            ticket("AMP-70", "Grouped", Status::InProgress),
-            ticket("AMP-71", "Grouped too", Status::InProgress),
+            ticket("AMP-70", "Grouped", "In Progress"),
+            ticket("AMP-71", "Grouped too", "In Progress"),
         ];
         app.mark_cache_changed();
         app.selected_index = 1;
@@ -2674,7 +2668,7 @@ mod tests {
         let mut config = sample_config();
         handle_filter_keys(&mut app, KeyCode::Char('z'), &tx, &mut config);
 
-        assert!(app.collapsed_filters.contains(Status::InProgress.as_str()));
+        assert!(app.collapsed_filters.contains("In Progress"));
         assert_eq!(app.selected_index, 0);
     }
 
@@ -2685,8 +2679,8 @@ mod tests {
         app.active_tab = Tab::Filters;
         app.filter_focus = FilterFocus::Results;
         app.filter_results = vec![
-            ticket("AMP-72", "In progress", Status::InProgress),
-            ticket("AMP-73", "Ready", Status::ReadyForWork),
+            ticket("AMP-72", "In progress", "In Progress"),
+            ticket("AMP-73", "Ready", "Ready for Work"),
         ];
         app.mark_cache_changed();
 
@@ -2694,10 +2688,8 @@ mod tests {
         let mut config = sample_config();
         handle_filter_keys(&mut app, KeyCode::Char('Z'), &tx, &mut config);
 
-        assert!(app
-            .collapsed_filters
-            .contains(Status::ReadyForWork.as_str()));
-        assert!(!app.collapsed_filters.contains(Status::InProgress.as_str()));
+        assert!(app.collapsed_filters.contains("Ready for Work"));
+        assert!(!app.collapsed_filters.contains("In Progress"));
 
         handle_filter_keys(&mut app, KeyCode::Char('Z'), &tx, &mut config);
         assert!(app.collapsed_filters.is_empty());
@@ -2709,9 +2701,8 @@ mod tests {
         app.loading = false;
         app.active_tab = Tab::Filters;
         app.filter_focus = FilterFocus::Results;
-        app.filter_results = vec![ticket("AMP-74", "Grouped", Status::InProgress)];
-        app.collapsed_filters
-            .insert(Status::InProgress.as_str().to_string());
+        app.filter_results = vec![ticket("AMP-74", "Grouped", "In Progress")];
+        app.collapsed_filters.insert("In Progress".to_string());
         app.mark_cache_changed();
         app.selected_index = 0;
 
@@ -2719,7 +2710,7 @@ mod tests {
         let mut config = sample_config();
         handle_filter_keys(&mut app, KeyCode::Enter, &tx, &mut config);
 
-        assert!(!app.collapsed_filters.contains(Status::InProgress.as_str()));
+        assert!(!app.collapsed_filters.contains("In Progress"));
         assert!(app.detail_ticket_key.is_none());
     }
 
@@ -2729,7 +2720,7 @@ mod tests {
         app.loading = false;
         app.active_tab = Tab::Filters;
         app.filter_focus = FilterFocus::Results;
-        let mut ticket = ticket("AMP-75", "Ticket detail", Status::InProgress);
+        let mut ticket = ticket("AMP-75", "Ticket detail", "In Progress");
         ticket.detail_loaded = true;
         app.filter_results = vec![ticket];
         app.mark_cache_changed();
@@ -2746,7 +2737,7 @@ mod tests {
     async fn move_failure_stays_on_screen_until_dismissed() {
         let mut app = App::new();
         app.loading = false;
-        app.cache.my_tickets = vec![ticket("DSCI-2478", "Epic", Status::from_str("Backlog"))];
+        app.cache.my_tickets = vec![ticket("DSCI-2478", "Epic", "Backlog")];
         app.open_detail("DSCI-2478".to_string());
         assert!(app.moves.start("DSCI-2478", "Done"));
         app.finish_move(
@@ -2767,7 +2758,7 @@ mod tests {
         handle_key(&mut app, KeyEvent::from(KeyCode::Esc), &tx, &mut config).await;
         assert!(app.moves.failures().is_empty());
         assert!(app.is_detail_open());
-        assert_eq!(app.cache.my_tickets[0].status, Status::from_str("Backlog"));
+        assert_eq!(app.cache.my_tickets[0].status, "Backlog");
     }
 
     #[test]

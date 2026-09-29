@@ -47,8 +47,7 @@ pub fn plan_assign(app: &App, targets: &[String], email: &str) -> BulkPlan {
 pub fn plan_move(app: &App, fetched: &FetchedTransitions, destination: &str) -> BulkPlan {
     let per_ticket = fetched.iter().map(|(key, result)| (key, result));
     plan(app, per_ticket, |ticket, transitions| {
-        // The real status name, so a Resolved ticket can still be moved to Closed.
-        if ticket.status_name() == destination {
+        if ticket.status == destination {
             return Err(format!("already {}", destination));
         }
         let transitions = transitions
@@ -62,7 +61,7 @@ pub fn plan_move(app: &App, fetched: &FetchedTransitions, destination: &str) -> 
             [] => Err(format!(
                 "no transition to {} from {}",
                 destination,
-                ticket.status_name()
+                ticket.status.as_str()
             )),
             [only] => Ok(BulkJob::Move {
                 transition: (*only).clone(),

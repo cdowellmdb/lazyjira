@@ -128,7 +128,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::{Cache, Epic, Status, Ticket};
+    use crate::cache::{Cache, Epic, Ticket};
 
     const KEY: &str = "DSCI-2478";
 
@@ -156,7 +156,7 @@ mod tests {
             .chain(app.cache.epics.iter().flat_map(|e| &e.children))
             .chain(&app.filter_results)
             .filter(|t| t.key == KEY)
-            .map(|t| t.status_name())
+            .map(|t| t.status.as_str())
             .collect()
     }
 
@@ -181,13 +181,12 @@ mod tests {
     }
 
     #[test]
-    fn successful_move_sets_the_real_status_name_and_the_status() {
+    fn successful_move_sets_the_real_status_name() {
         let mut app = app_with_ticket_everywhere();
         assert!(app.moves.start(KEY, "Resolved"));
         app.finish_move(KEY, Ok(()));
 
         assert_eq!(statuses_everywhere(&app), ["Resolved"; 4]);
-        assert_eq!(app.cache.my_tickets[0].status, Status::Closed);
         assert_eq!(app.flash.as_deref(), Some("Moved DSCI-2478 to Resolved"));
     }
 
@@ -244,12 +243,12 @@ mod tests {
 
         assert!(app.moves.start(KEY, "In Progress"));
         app.finish_move(KEY, Ok(()));
-        assert_eq!(app.filter_results[0].status_name(), "In Progress");
+        assert_eq!(app.filter_results[0].status.as_str(), "In Progress");
 
         let mut detail = Ticket::for_test(KEY, "In Review");
         detail.description = Some("From Jira".to_string());
         assert!(app.enrich_ticket(KEY, app.moves.now(), &detail));
-        assert_eq!(app.filter_results[0].status_name(), "In Review");
+        assert_eq!(app.filter_results[0].status.as_str(), "In Review");
         assert_eq!(
             app.filter_results[0].description.as_deref(),
             Some("From Jira")

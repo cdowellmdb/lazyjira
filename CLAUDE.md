@@ -44,9 +44,11 @@ The `jira` CLI (`ankitpokhrel/jira-cli`) uses tab-padding for visual alignment i
 List queries use `--plain --no-headers --columns key,status,assignee,summary` for speed. Rich ticket detail (description, labels, assignee, status, epic linkage) comes from `jira issue view KEY --raw`, is cached locally, and is hydrated on startup for fast detail open. Missing details are prefetched in the background.
 
 ### Statuses
-`Status::from_str` maps workflow status names onto the canonical `Status` variants (`Done`/`Closed`/`Resolved` all become `Status::Closed`). Unknown names become `Status::Other`. The `[statuses]` config controls which statuses the JQL queries load, and its order is the one display order for status groups and epic children: `cache::StatusOrder` ranks `active` in config order, then unlisted statuses (first-seen order), then `done`, with `Status::Closed` always last. Get it from `app.status_order()`; don't sort statuses anywhere else.
+`Ticket::status` is Jira's own status name ("Resolved", "On Deck"). Views group, label and compare by it. `cache::StatusRules`, built from the `[statuses]` config, decides everything else about a status: the one display order (`active` in config order, then unlisted statuses in first-seen order, then `done`) and whether it's done (`is_done`: `d` hides it, epic progress counts it, Team puts it in the done split and leaves it out of active counts). Get it from `app.status_rules()`; don't sort statuses or test for done anywhere else. Names match case-insensitively. A name the config doesn't list takes the place of a listed name that `Status::from_str` reads the same way (so "Resolved" follows "Done"); failing that, Closed-like names are done and anything else is active.
 
-`Ticket::jira_status` keeps Jira's real status name next to the enum (issue #19 will make it the only one). Read it with `Ticket::status_name()`, which falls back to the enum for caches written before the field existed, and change a status with `Ticket::set_status(name)` so both stay in step. Views still group by the enum.
+The `Status` enum is only Jira-independent knowledge: move shortcut keys, default colors (`views::common::status_color`), and that fallback. `Status::from_str` reads Done/Closed/Resolved as `Status::Closed` and unknown names as `Status::Other`.
+
+The `[statuses]` config also controls which statuses the JQL queries load.
 
 ### Moves use Jira's transitions
 Each issue type has its own workflow, and a transition's name can differ from the status it leads to, so moves never send status names. The picker lists the ticket's transitions from `GET /rest/api/2/issue/{key}/transitions?expand=transitions.fields` and sends the chosen one by id (`jira_rest`). Shortcuts match a transition's destination through `Status::from_str`. Transitions that differ only by id are merged when parsed. A resolution is asked for only when the transition has a resolution field, from that field's allowed values. Tests can't reach Jira: `jira_rest` refuses to build its client under `cfg(test)`, and the picker returns a `JiraCall` for `main.rs` to start.
@@ -73,7 +75,7 @@ The team view sorts members by active ticket count (most active first). Any code
 - **Unassigned tab:** queries the `Assigned Teams` custom field using `jira.team_name`.
 - **Legacy roster:** `~/.claude/skills/jira/team.yml` is only read once, during first-run setup, to seed `[team]`.
 - **Auth:** Via existing `jira` CLI authentication (`~/.config/.jira/.config.yml`, or `$JIRA_CONFIG_FILE`). Moves call Jira's REST API with that file's `server`, `auth_type` and `login`, and `JIRA_API_TOKEN`.
-- **Caches:** full snapshot in `~/.cache/lazyjira/`; epics and ticket-detail caches in the system temp dir. All are per project.
+- **Caches:** full snapshot in `~/.cache/lazyjira/`; epics and ticket-detail caches in the system temp dir. All are per project. A cache that fails to parse is ignored and refetched, which is how format changes are handled: tickets store their status as `status_name`, so caches from before real status names are refetched once.
 
 ## Dependencies
 

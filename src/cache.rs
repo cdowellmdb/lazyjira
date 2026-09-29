@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Represents a Jira ticket status.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// The statuses the app knows about: move shortcut keys, default colors, and the fallback
+/// for names the `[statuses]` config doesn't list. Tickets keep Jira's own status name
+/// (`Ticket::status`); `Status::from_str` only interprets it, so Done, Closed and Resolved
+/// all read as `Status::Closed`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Status {
     NeedsTriage,
     ReadyForWork,
@@ -68,60 +71,116 @@ impl Status {
     }
 }
 
-/// The order status groups are shown in, taken from the `[statuses]` config: active
-/// statuses in config order, then statuses the config doesn't list (in first-seen order),
-/// then done statuses. `Status::Closed` always ranks with the done statuses.
+/// How the `[statuses]` config places each status name: the display order of status groups
+/// and epic children, and whether a status is done. Names match case-insensitively.
+///
+/// Order: active statuses in config order, then statuses the config doesn't list (in
+/// first-seen order), then done statuses. A name in both lists counts as done.
+///
+/// A name the config doesn't list takes the place of a listed name `Status::from_str` reads
+/// the same way, so with the default config "Open" sits with To Do and "Resolved" with Done.
+/// Failing that, a name that reads as `Status::Closed` is done and goes last, and anything
+/// else is active.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StatusOrder {
-    /// Rank of each listed status, keyed by `order_key`.
-    ranks: HashMap<String, usize>,
-    /// Rank of statuses the config doesn't list: after the active ones, before the done ones.
+pub struct StatusRules {
+    /// Each configured name, by `name_key`.
+    listed: HashMap<String, Placement>,
+    /// For each built-in status, the first configured name that reads as it.
+    built_in: HashMap<Status, Placement>,
+    /// Where names the config doesn't list go: after the active ones, before the done ones.
     unlisted: usize,
+    /// Where an unlisted done name goes: after every configured one.
+    last: usize,
 }
 
-impl StatusOrder {
-    /// Orders statuses by the configured `active` and `done` lists. Names are matched
-    /// through `Status::from_str`, so "Open" places To Do and "Resolved" places Closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Placement {
+    rank: usize,
+    done: bool,
+}
+
+impl StatusRules {
     pub fn new(active: &[String], done: &[String]) -> Self {
-        let mut ranks = HashMap::new();
-        for status in Self::parse(active) {
-            // Closed is done wherever the config lists it.
-            if status != Status::Closed {
-                let rank = ranks.len();
-                ranks.entry(order_key(&status)).or_insert(rank);
+        let mut listed = HashMap::new();
+        for name in Self::names(active) {
+            let rank = listed.len();
+            listed
+                .entry(name_key(name))
+                .or_insert(Placement { rank, done: false });
+        }
+        let unlisted = listed.len();
+        let mut next = unlisted + 1;
+        for name in Self::names(done) {
+            let key = name_key(name);
+            if !listed.get(&key).is_some_and(|p: &Placement| p.done) {
+                listed.insert(
+                    key,
+                    Placement {
+                        rank: next,
+                        done: true,
+                    },
+                );
+                next += 1;
             }
         }
-        let unlisted = ranks.len();
-        for status in Self::parse(done).chain([Status::Closed]) {
-            let rank = ranks.len() + 1;
-            ranks.entry(order_key(&status)).or_insert(rank);
+
+        let mut built_in = HashMap::new();
+        for name in Self::names(active).chain(Self::names(done)) {
+            let status = Status::from_str(name);
+            if !matches!(status, Status::Other(_)) {
+                built_in.entry(status).or_insert(listed[&name_key(name)]);
+            }
         }
-        Self { ranks, unlisted }
+        Self {
+            listed,
+            built_in,
+            unlisted,
+            last: next,
+        }
     }
 
-    fn parse(names: &[String]) -> impl Iterator<Item = Status> + '_ {
+    fn names(names: &[String]) -> impl Iterator<Item = &str> {
         names
             .iter()
             .map(|name| name.trim())
             .filter(|name| !name.is_empty())
-            .map(Status::from_str)
     }
 
-    /// Position of `status` in display order; lower comes first.
-    pub fn rank(&self, status: &Status) -> usize {
-        self.ranks
-            .get(&order_key(status))
-            .copied()
-            .unwrap_or(self.unlisted)
+    fn place(&self, name: &str) -> Placement {
+        if let Some(placement) = self.listed.get(&name_key(name)) {
+            return *placement;
+        }
+        let status = Status::from_str(name.trim());
+        if let Some(placement) = self.built_in.get(&status) {
+            return *placement;
+        }
+        Placement {
+            rank: if status == Status::Closed {
+                self.last
+            } else {
+                self.unlisted
+            },
+            done: status == Status::Closed,
+        }
     }
 
-    /// Groups tickets by status in display order. Tickets keep their order within a group,
-    /// and unlisted statuses keep their first-seen order.
+    /// Position of the status named `name` in display order; lower comes first.
+    pub fn rank(&self, name: &str) -> usize {
+        self.place(name).rank
+    }
+
+    /// Whether the status named `name` is done (hidden by `d`, counted as epic progress).
+    pub fn is_done(&self, name: &str) -> bool {
+        self.place(name).done
+    }
+
+    /// Groups tickets by status name in display order. Tickets keep their order within a
+    /// group, and unlisted statuses keep their first-seen order.
     pub fn group<'a>(
         &self,
         tickets: impl IntoIterator<Item = &'a Ticket>,
-    ) -> Vec<(Status, Vec<&'a Ticket>)> {
-        let mut groups: Vec<(Status, Vec<&Ticket>)> = Vec::new();
+    ) -> Vec<(String, Vec<&'a Ticket>)> {
+        let mut groups: Vec<(String, Vec<&Ticket>)> = Vec::new();
         for ticket in tickets {
             match groups
                 .iter_mut()
@@ -146,16 +205,16 @@ impl StatusOrder {
     }
 }
 
-impl Default for StatusOrder {
+impl Default for StatusRules {
     fn default() -> Self {
         let statuses = crate::config::StatusConfig::default();
         Self::new(&statuses.active, &statuses.done)
     }
 }
 
-/// Statuses match case-insensitively: Jira and the config may capitalize a name differently.
-fn order_key(status: &Status) -> String {
-    status.as_str().to_lowercase()
+/// Jira and the config may capitalize a status name differently.
+fn name_key(name: &str) -> String {
+    name.trim().to_lowercase()
 }
 
 /// A single entry in a ticket's activity history (changelog or comment).
@@ -193,12 +252,11 @@ pub enum ActivityKind {
 pub struct Ticket {
     pub key: String,
     pub summary: String,
-    pub status: Status,
-    /// Jira's own name for the status, which `status` may collapse (Resolved becomes
-    /// `Status::Closed`). `None` in caches written before this field existed. Read it through
-    /// `status_name()`, and change both fields with `set_status()`.
-    #[serde(default)]
-    pub jira_status: Option<String>,
+    /// Jira's name for the status, e.g. "Resolved". `StatusRules` decides its order and
+    /// whether it's done. Stored as `status_name`: caches from before it, whose `status` held
+    /// a collapsed `Status`, then fail to load and are fetched again.
+    #[serde(rename = "status_name")]
+    pub status: String,
     pub assignee: Option<String>,
     pub assignee_email: Option<String>,
     #[serde(default)]
@@ -214,30 +272,14 @@ pub struct Ticket {
     pub activity: Vec<ActivityEntry>,
 }
 
-impl Ticket {
-    /// Jira's name for the ticket's status, e.g. "Resolved" rather than "Closed".
-    pub fn status_name(&self) -> &str {
-        self.jira_status
-            .as_deref()
-            .unwrap_or_else(|| self.status.as_str())
-    }
-
-    /// Sets the status from Jira's name for it.
-    pub fn set_status(&mut self, name: &str) {
-        self.status = Status::from_str(name);
-        self.jira_status = Some(name.to_string());
-    }
-}
-
 #[cfg(test)]
 impl Ticket {
     /// A bare ticket in the status Jira calls `status`.
     pub fn for_test(key: &str, status: &str) -> Self {
-        let mut ticket = Ticket {
+        Ticket {
             key: key.to_string(),
             summary: key.to_string(),
-            status: Status::ToDo,
-            jira_status: None,
+            status: status.to_string(),
             assignee: None,
             assignee_email: None,
             reporter: None,
@@ -248,9 +290,7 @@ impl Ticket {
             detail_loaded: false,
             url: format!("https://jira.example.com/browse/{}", key),
             activity: Vec::new(),
-        };
-        ticket.set_status(status);
-        ticket
+        }
     }
 }
 
@@ -267,26 +307,25 @@ impl Epic {
         self.children.len()
     }
 
-    pub fn done_count(&self) -> usize {
+    pub fn done_count(&self, rules: &StatusRules) -> usize {
         self.children
             .iter()
-            .filter(|t| t.status == Status::Closed)
+            .filter(|t| rules.is_done(&t.status))
             .count()
     }
 
-    pub fn count_by_status(&self) -> HashMap<&Status, usize> {
-        let mut counts = HashMap::new();
-        for ticket in &self.children {
-            *counts.entry(&ticket.status).or_insert(0) += 1;
-        }
-        counts
+    pub fn blocked_count(&self) -> usize {
+        self.children
+            .iter()
+            .filter(|t| Status::from_str(&t.status) == Status::Blocked)
+            .count()
     }
 
-    pub fn progress_pct(&self) -> f64 {
+    pub fn progress_pct(&self, rules: &StatusRules) -> f64 {
         if self.total() == 0 {
             return 0.0;
         }
-        self.done_count() as f64 / self.total() as f64 * 100.0
+        self.done_count(rules) as f64 / self.total() as f64 * 100.0
     }
 }
 
@@ -319,54 +358,27 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::{Status, StatusOrder, Ticket};
+    use super::{StatusRules, Ticket};
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
     }
 
-    fn group_names(order: &StatusOrder, statuses: &[&str]) -> Vec<String> {
+    fn group_names(rules: &StatusRules, statuses: &[&str]) -> Vec<String> {
         let tickets: Vec<Ticket> = statuses
             .iter()
             .enumerate()
             .map(|(i, status)| Ticket::for_test(&format!("DSCI-{}", i), status))
             .collect();
-        order
+        rules
             .group(&tickets)
-            .iter()
-            .map(|(status, _)| status.as_str().to_string())
+            .into_iter()
+            .map(|(status, _)| status)
             .collect()
     }
 
-    #[test]
-    fn default_order_starts_with_in_progress_and_ends_with_closed() {
-        let order = StatusOrder::default();
-        assert_eq!(
-            group_names(
-                &order,
-                &[
-                    "Done",
-                    "On Deck",
-                    "Blocked",
-                    "To Do",
-                    "In Progress",
-                    "Stalled"
-                ]
-            ),
-            [
-                "In Progress",
-                "To Do",
-                "Blocked",
-                "On Deck",
-                "Stalled",
-                "Closed"
-            ]
-        );
-    }
-
-    #[test]
-    fn configured_order_places_workflow_statuses_and_matches_names_loosely() {
-        let order = StatusOrder::new(
+    fn dsci() -> StatusRules {
+        StatusRules::new(
             &names(&[
                 "Backlog",
                 "Open",
@@ -374,45 +386,99 @@ mod tests {
                 "In Progress",
                 "In Team Review",
             ]),
-            &names(&["Done", "Closed", "Cancelled"]),
-        );
+            &names(&["Done", "Closed", "Cancelled", "Won't Do"]),
+        )
+    }
+
+    #[test]
+    fn default_order_starts_with_in_progress_and_ends_with_done() {
+        let rules = StatusRules::default();
         assert_eq!(
             group_names(
-                &order,
+                &rules,
                 &[
                     "Resolved",
-                    "in team review",
+                    "Done",
+                    "On Deck",
+                    "Blocked",
+                    "Open",
+                    "In Progress",
+                    "Stalled"
+                ]
+            ),
+            // Open takes To Do's place and Resolved Done's, as Status::from_str reads them.
+            [
+                "In Progress",
+                "Open",
+                "Blocked",
+                "On Deck",
+                "Stalled",
+                "Resolved",
+                "Done"
+            ]
+        );
+        assert!(rules.is_done("Resolved"));
+        assert!(rules.is_done("closed"));
+        assert!(!rules.is_done("On Deck"));
+    }
+
+    #[test]
+    fn configured_names_keep_their_own_groups_in_config_order() {
+        let rules = dsci();
+        assert_eq!(
+            group_names(
+                &rules,
+                &[
+                    "Won't Do",
+                    "Resolved",
+                    "In Team Review",
                     "Stalled",
                     "To Do",
                     "On Deck",
-                    "Cancelled",
-                    "BACKLOG"
+                    "Closed",
+                    "Backlog"
                 ]
             ),
-            // "Open" places To Do and "Done" places Closed. Stalled isn't listed, so it
-            // goes after the active statuses and before the done ones.
+            // Stalled isn't listed, so it follows the active statuses. To Do isn't either, so
+            // it takes Open's place; Resolved takes Done's.
             [
-                "BACKLOG",
+                "Backlog",
                 "To Do",
                 "On Deck",
-                "in team review",
+                "In Team Review",
                 "Stalled",
+                "Resolved",
                 "Closed",
-                "Cancelled"
+                "Won't Do"
             ]
         );
     }
 
     #[test]
-    fn closed_ranks_last_even_when_the_config_omits_it_or_lists_it_as_active() {
-        let order = StatusOrder::new(&names(&["Done", "In Progress", ""]), &[]);
-        assert!(order.rank(&Status::Closed) > order.rank(&Status::Other("Stalled".into())));
-        assert!(order.rank(&Status::InProgress) < order.rank(&Status::Other("Stalled".into())));
+    fn done_comes_from_config_with_closed_like_names_as_the_fallback() {
+        let rules = dsci();
+        for done in ["Cancelled", "won't do", "Done", "Resolved"] {
+            assert!(rules.is_done(done), "{done} should be done");
+        }
+        for active in ["Backlog", "Stalled", "In Progress", "Denied"] {
+            assert!(!rules.is_done(active), "{active} should be active");
+        }
+
+        // Config wins over the built-in reading, and a name in both lists is done.
+        let rules = StatusRules::new(&names(&["Done", "Denied"]), &names(&["Denied"]));
+        assert!(!rules.is_done("Done"));
+        assert!(rules.is_done("Denied"));
+        assert!(rules.rank("Denied") > rules.rank("Stalled"));
+
+        // Nothing configured reads as Closed, so Resolved is done and goes last.
+        let rules = StatusRules::new(&names(&["Backlog"]), &names(&["Denied"]));
+        assert!(rules.is_done("Resolved"));
+        assert!(rules.rank("Resolved") > rules.rank("Denied"));
     }
 
     #[test]
     fn sort_tickets_orders_by_status_then_key() {
-        let order = StatusOrder::default();
+        let rules = StatusRules::default();
         let tickets = [
             Ticket::for_test("DSCI-3", "Closed"),
             Ticket::for_test("DSCI-2", "In Progress"),
@@ -420,7 +486,7 @@ mod tests {
             Ticket::for_test("DSCI-1", "In Progress"),
         ];
         let mut refs: Vec<&Ticket> = tickets.iter().collect();
-        order.sort_tickets(&mut refs);
+        rules.sort_tickets(&mut refs);
         let keys: Vec<&str> = refs.iter().map(|t| t.key.as_str()).collect();
         assert_eq!(keys, ["DSCI-1", "DSCI-2", "DSCI-9", "DSCI-3"]);
     }

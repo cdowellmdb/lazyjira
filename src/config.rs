@@ -41,7 +41,7 @@ pub struct StatusConfig {
     pub done: Vec<String>,
 }
 
-/// Also the display order of status groups (see `cache::StatusOrder`).
+/// Also the display order of status groups (see `cache::StatusRules`).
 fn default_active_statuses() -> Vec<String> {
     vec![
         "In Progress".to_string(),
