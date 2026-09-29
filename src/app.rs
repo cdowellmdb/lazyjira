@@ -268,6 +268,13 @@ pub enum BulkState {
     },
 }
 
+/// A Team tab row group: the member, their active tickets, then their Done tickets.
+pub(crate) type TeamMemberTickets<'a> = (
+    &'a crate::cache::TeamMember,
+    Vec<&'a crate::cache::Ticket>,
+    Vec<&'a crate::cache::Ticket>,
+);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VisibleKeysState {
     active_tab: Tab,
@@ -833,10 +840,18 @@ impl App {
     pub(crate) fn my_work_visible_by_status(
         &self,
     ) -> Vec<(crate::cache::Status, Vec<&crate::cache::Ticket>)> {
+        self.my_work_by_status(|status| self.status_visible(status))
+    }
+
+    /// My Work's status groups for the current search, keeping the statuses `shown` accepts.
+    fn my_work_by_status(
+        &self,
+        shown: impl Fn(&crate::cache::Status) -> bool,
+    ) -> Vec<(crate::cache::Status, Vec<&crate::cache::Ticket>)> {
         let search = self.normalized_search();
         self.status_order
             .group(self.cache.my_tickets.iter().filter(|ticket| {
-                self.status_visible(&ticket.status)
+                shown(&ticket.status)
                     && search
                         .as_deref()
                         .is_none_or(|s| Self::ticket_matches_search(ticket, s))
@@ -858,13 +873,16 @@ impl App {
 
     /// Team members and visible tickets in the exact order used by the Team tab.
     /// Returns active tickets first, then Done tickets as a secondary group.
-    pub(crate) fn team_visible_tickets_by_member(
+    pub(crate) fn team_visible_tickets_by_member(&self) -> Vec<TeamMemberTickets<'_>> {
+        self.team_tickets_by_member(|status| self.status_visible(status))
+    }
+
+    /// The Team tab's members and tickets for the current search, keeping the statuses
+    /// `shown` accepts.
+    fn team_tickets_by_member(
         &self,
-    ) -> Vec<(
-        &crate::cache::TeamMember,
-        Vec<&crate::cache::Ticket>,
-        Vec<&crate::cache::Ticket>,
-    )> {
+        shown: impl Fn(&crate::cache::Status) -> bool,
+    ) -> Vec<TeamMemberTickets<'_>> {
         let search = self.normalized_search();
         let search = search.as_deref();
         let has_search = search.is_some();
@@ -901,7 +919,7 @@ impl App {
                     continue;
                 }
                 any_match = true;
-                if !self.status_visible(&ticket.status) {
+                if !shown(&ticket.status) {
                     continue;
                 }
                 if ticket.status == crate::cache::Status::Closed {
@@ -1213,13 +1231,63 @@ impl App {
         keys
     }
 
-    pub fn toggle_status_focus(&mut self, status: crate::cache::Status) {
-        if self.status_focus.as_ref() == Some(&status) {
-            self.status_focus = None;
-        } else {
-            self.status_focus = Some(status);
-        }
+    /// The statuses `cycle_status_focus` steps through: every status with tickets in the
+    /// My Work or Team tab for the current search, whatever the focus, in display order.
+    /// Closed is left out because `d` shows and hides it. Other tabs have none.
+    pub fn focusable_statuses(&self) -> Vec<crate::cache::Status> {
+        let groups = match self.active_tab {
+            Tab::MyWork => self.my_work_by_status(|_| true),
+            Tab::Team => {
+                let members = self.team_tickets_by_member(|_| true);
+                self.status_order.group(
+                    members
+                        .iter()
+                        .flat_map(|(_, active, done)| active.iter().chain(done).copied()),
+                )
+            }
+            _ => Vec::new(),
+        };
+        groups
+            .into_iter()
+            .map(|(status, _)| status)
+            .filter(|status| *status != crate::cache::Status::Closed)
+            .collect()
+    }
+
+    /// Focuses the next focusable status (`forward`) or the previous one. Stepping past
+    /// either end clears the focus, so the cycle includes "all".
+    pub fn cycle_status_focus(&mut self, forward: bool) {
+        let statuses = self.focusable_statuses();
+        let current = self
+            .status_focus
+            .as_ref()
+            .and_then(|focus| statuses.iter().position(|status| status == focus));
+        let next = match (current, forward) {
+            (None, true) => statuses.first(),
+            (None, false) => statuses.last(),
+            (Some(i), true) => statuses.get(i + 1),
+            (Some(i), false) => i.checked_sub(1).and_then(|i| statuses.get(i)),
+        };
+        self.status_focus = next.cloned();
         self.clamp_selection();
+    }
+
+    /// Describes the focus for the status bar flash, e.g. "Focus: On Deck (2 of 5)".
+    pub fn status_focus_message(&self) -> String {
+        let statuses = self.focusable_statuses();
+        match &self.status_focus {
+            Some(focus) => match statuses.iter().position(|status| status == focus) {
+                Some(i) => format!(
+                    "Focus: {} ({} of {})",
+                    focus.as_str(),
+                    i + 1,
+                    statuses.len()
+                ),
+                None => format!("Focus: {}", focus.as_str()),
+            },
+            None if statuses.is_empty() => "Focus: all (no statuses to focus)".to_string(),
+            None => "Focus: all".to_string(),
+        }
     }
 
     /// Get the currently selected item (header or ticket).
@@ -1686,14 +1754,123 @@ mod tests {
             ("DSCI-3", "Done"),
         ]);
 
-        app.toggle_status_focus(Status::InProgress);
+        app.cycle_status_focus(true);
+        assert_eq!(app.status_focus, Some(Status::InProgress));
         assert_eq!(my_work_group_names(&app), ["In Progress", "Closed"]);
         app.toggle_show_done();
         assert_eq!(my_work_group_names(&app), ["In Progress"]);
-        app.toggle_status_focus(Status::InProgress);
+        app.cycle_status_focus(false);
+        assert_eq!(app.status_focus, None);
         assert_eq!(my_work_group_names(&app), ["In Progress", "On Deck"]);
         app.search = Some("dsci-2".to_string());
         assert_eq!(my_work_group_names(&app), ["On Deck"]);
+    }
+
+    #[test]
+    fn focus_cycles_through_the_workflow_statuses_shown_then_back_to_all() {
+        let mut app = my_work_app(&[
+            ("DSCI-1", "In Team Review"),
+            ("DSCI-2", "On Deck"),
+            ("DSCI-3", "Done"),
+            ("DSCI-4", "Backlog"),
+            ("DSCI-5", "On Deck"),
+        ]);
+        app.set_status_order(&dsci_statuses());
+
+        // Only statuses the tickets are in, in display order, and never Closed.
+        assert_eq!(
+            app.focusable_statuses(),
+            [
+                Status::Other("Backlog".into()),
+                Status::Other("On Deck".into()),
+                Status::Other("In Team Review".into()),
+            ]
+        );
+
+        app.cycle_status_focus(true);
+        app.cycle_status_focus(true);
+        assert_eq!(app.status_focus_message(), "Focus: On Deck (2 of 3)");
+        assert_eq!(my_work_group_names(&app), ["On Deck", "Closed"]);
+        app.selected_index = 2;
+        assert_eq!(app.selected_ticket_key(), Some("DSCI-5".to_string()));
+
+        app.cycle_status_focus(true);
+        assert_eq!(
+            app.status_focus,
+            Some(Status::Other("In Team Review".into()))
+        );
+        app.cycle_status_focus(true);
+        assert_eq!(app.status_focus, None);
+        assert_eq!(app.status_focus_message(), "Focus: all");
+
+        app.cycle_status_focus(false);
+        assert_eq!(
+            app.status_focus,
+            Some(Status::Other("In Team Review".into()))
+        );
+    }
+
+    #[test]
+    fn focus_skips_statuses_hidden_by_search_and_restarts_from_a_stale_focus() {
+        let mut app = my_work_app(&[("DSCI-1", "In Progress"), ("DSCI-2", "On Deck")]);
+        app.search = Some("dsci-2".to_string());
+        assert_eq!(app.focusable_statuses(), [Status::Other("On Deck".into())]);
+
+        // A focused status that is no longer shown (moved away, say) restarts the cycle.
+        app.status_focus = Some(Status::ReadyForWork);
+        app.cycle_status_focus(true);
+        assert_eq!(app.status_focus, Some(Status::Other("On Deck".into())));
+
+        app.search = Some("nothing matches".to_string());
+        app.cycle_status_focus(true);
+        assert_eq!(app.status_focus, None);
+        assert_eq!(
+            app.status_focus_message(),
+            "Focus: all (no statuses to focus)"
+        );
+    }
+
+    #[test]
+    fn team_focus_offers_every_member_status_and_other_tabs_offer_none() {
+        let mut app = App::new();
+        app.active_tab = Tab::Team;
+        app.loading = false;
+        app.cache.team_members = vec![
+            crate::cache::TeamMember {
+                name: "Dev".to_string(),
+                email: "dev@example.com".to_string(),
+            },
+            crate::cache::TeamMember {
+                name: "Ops".to_string(),
+                email: "ops@example.com".to_string(),
+            },
+        ];
+        app.cache.team_tickets = tickets_with_statuses(&[
+            ("DSCI-1", "Stalled"),
+            ("DSCI-2", "On Deck"),
+            ("DSCI-3", "Closed"),
+        ]);
+        app.cache.team_tickets[0].assignee_email = Some("dev@example.com".to_string());
+        app.cache.team_tickets[1].assignee_email = Some("ops@example.com".to_string());
+        app.cache.team_tickets[2].assignee_email = Some("ops@example.com".to_string());
+        app.set_status_order(&dsci_statuses());
+
+        assert_eq!(
+            app.focusable_statuses(),
+            [
+                Status::Other("On Deck".into()),
+                Status::Other("Stalled".into())
+            ]
+        );
+        app.cycle_status_focus(true);
+        // H(dev) + H(ops) + On Deck + Closed
+        assert_eq!(app.item_count(), 4);
+        assert_eq!(app.selected_ticket_key(), None);
+        app.selected_index = 2;
+        assert_eq!(app.selected_ticket_key(), Some("DSCI-2".to_string()));
+
+        app.active_tab = Tab::Epics;
+        assert!(app.focusable_statuses().is_empty());
     }
 
     #[test]
@@ -1739,7 +1916,8 @@ mod tests {
 
         // H(dev) + 3 tickets
         assert_eq!(app.item_count(), 4);
-        app.toggle_status_focus(Status::InProgress);
+        app.cycle_status_focus(true);
+        assert_eq!(app.status_focus, Some(Status::InProgress));
         // Focus hides On Deck but not Done.
         assert_eq!(app.item_count(), 3);
         app.toggle_show_done();
