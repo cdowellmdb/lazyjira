@@ -4,7 +4,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::{App, Tab};
-use crate::cache::Status;
 use crate::views::common::{group_marker, status_color, truncate};
 
 fn child_column_widths(area: Rect) -> (usize, usize, usize) {
@@ -92,10 +91,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         }
 
         let total = epic.total();
-        let done = epic.done_count();
-        let pct = epic.progress_pct();
-        let counts = epic.count_by_status();
-        let blocked = counts.get(&Status::Blocked).copied().unwrap_or(0);
+        let done = epic.done_count(app.status_rules());
+        let pct = epic.progress_pct(app.status_rules());
+        let blocked = epic.blocked_count();
         let bar_width = 18usize;
         let progress = progress_bar(done, total, bar_width);
         let meta = if blocked > 0 {
@@ -171,10 +169,10 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 };
                 let status_style = if is_selected {
                     Style::default()
-                        .fg(status_color(&ticket.status))
+                        .fg(status_color(&ticket.status, app.status_rules()))
                         .bg(Color::DarkGray)
                 } else {
-                    Style::default().fg(status_color(&ticket.status))
+                    Style::default().fg(status_color(&ticket.status, app.status_rules()))
                 };
                 let marker = if app.is_ticket_selected(&ticket.key) {
                     "[x]"

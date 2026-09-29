@@ -280,7 +280,7 @@ struct VisibleKeysState {
     active_tab: Tab,
     search: Option<String>,
     show_done: bool,
-    status_focus: Option<crate::cache::Status>,
+    status_focus: Option<String>,
     view_generation: u64,
 }
 
@@ -312,8 +312,8 @@ pub struct App {
     pub search: Option<String>,
     /// Whether Done tickets are visible in My Work and Team tabs.
     pub show_done: bool,
-    /// Optional focused active status filter for My Work and Team.
-    pub status_focus: Option<crate::cache::Status>,
+    /// Optional focused active status name for My Work and Team.
+    pub status_focus: Option<String>,
     /// True while full epic relationships are being refreshed in background.
     pub epics_refreshing: bool,
     /// Ticket sync stage for background cache refresh.
@@ -365,8 +365,8 @@ pub struct App {
     pub collapsed_filters: HashSet<String>,
     /// Optional epic focus order used by the Epics tab; empty means show all epics.
     epics_i_care_about_rank: HashMap<String, usize>,
-    /// Display order of status groups and epic children, from the `[statuses]` config.
-    status_order: crate::cache::StatusOrder,
+    /// Status order and done/active, from the `[statuses]` config.
+    status_rules: crate::cache::StatusRules,
 }
 
 impl App {
@@ -412,22 +412,22 @@ impl App {
             collapsed_unassigned: HashSet::new(),
             collapsed_filters: HashSet::new(),
             epics_i_care_about_rank: HashMap::new(),
-            status_order: crate::cache::StatusOrder::default(),
+            status_rules: crate::cache::StatusRules::default(),
         }
     }
 
-    /// Orders statuses everywhere by the configured `active` then `done` lists.
-    pub fn set_status_order(&mut self, statuses: &crate::config::StatusConfig) {
-        let order = crate::cache::StatusOrder::new(&statuses.active, &statuses.done);
-        if self.status_order != order {
-            self.status_order = order;
+    /// Orders statuses and decides which are done from the configured `active` and `done` lists.
+    pub fn set_status_rules(&mut self, statuses: &crate::config::StatusConfig) {
+        let rules = crate::cache::StatusRules::new(&statuses.active, &statuses.done);
+        if self.status_rules != rules {
+            self.status_rules = rules;
             self.mark_cache_changed();
             self.clamp_selection();
         }
     }
 
-    pub fn status_order(&self) -> &crate::cache::StatusOrder {
-        &self.status_order
+    pub fn status_rules(&self) -> &crate::cache::StatusRules {
+        &self.status_rules
     }
 
     pub fn set_epics_i_care_about(&mut self, epics: Vec<String>) {
@@ -511,7 +511,7 @@ impl App {
     pub fn sorted_team_members(&self) -> Vec<&crate::cache::TeamMember> {
         let mut active_counts_by_email: HashMap<&str, usize> = HashMap::new();
         for ticket in &self.cache.team_tickets {
-            if ticket.status == crate::cache::Status::Closed {
+            if self.status_rules.is_done(&ticket.status) {
                 continue;
             }
             if let Some(email) = ticket.assignee_email.as_deref() {
@@ -685,7 +685,7 @@ impl App {
                         || Self::contains_case_insensitive(&epic.summary, s);
                     if epic_matches {
                         let mut children: Vec<_> = epic.children.iter().collect();
-                        self.status_order.sort_tickets(&mut children);
+                        self.status_rules.sort_tickets(&mut children);
                         visible.push((epic, children));
                         continue;
                     }
@@ -695,7 +695,7 @@ impl App {
                         .iter()
                         .filter(|t| Self::ticket_matches_search(t, s))
                         .collect();
-                    self.status_order.sort_tickets(&mut matching_children);
+                    self.status_rules.sort_tickets(&mut matching_children);
 
                     if !matching_children.is_empty() {
                         visible.push((epic, matching_children));
@@ -703,7 +703,7 @@ impl App {
                 }
                 None => {
                     let mut children: Vec<_> = epic.children.iter().collect();
-                    self.status_order.sort_tickets(&mut children);
+                    self.status_rules.sort_tickets(&mut children);
                     visible.push((epic, children));
                 }
             }
@@ -754,7 +754,7 @@ impl App {
         let mut groups: Vec<_> = grouped
             .into_iter()
             .map(|((epic_key, epic_summary), mut tickets)| {
-                self.status_order.sort_tickets(&mut tickets);
+                self.status_rules.sort_tickets(&mut tickets);
                 (epic_key, epic_summary, tickets)
             })
             .collect();
@@ -805,10 +805,8 @@ impl App {
         items
     }
 
-    pub(crate) fn filters_visible_by_status(
-        &self,
-    ) -> Vec<(crate::cache::Status, Vec<&crate::cache::Ticket>)> {
-        self.status_order.group(&self.filter_results)
+    pub(crate) fn filters_visible_by_status(&self) -> Vec<(String, Vec<&crate::cache::Ticket>)> {
+        self.status_rules.group(&self.filter_results)
     }
 
     fn filters_visible_items(&self) -> Vec<VisibleItem> {
@@ -824,32 +822,30 @@ impl App {
         items
     }
 
-    /// Whether a status passes the My Work/Team toggles: `show_done` governs Closed,
+    /// Whether a status passes the My Work/Team toggles: `show_done` governs done statuses,
     /// and `status_focus` (when set) governs every other status.
-    fn status_visible(&self, status: &crate::cache::Status) -> bool {
-        match status {
-            crate::cache::Status::Closed => self.show_done,
-            _ => self
-                .status_focus
-                .as_ref()
-                .is_none_or(|focus| focus == status),
+    fn status_visible(&self, status: &str) -> bool {
+        if self.status_rules.is_done(status) {
+            self.show_done
+        } else {
+            self.status_focus
+                .as_deref()
+                .is_none_or(|focus| focus == status)
         }
     }
 
     /// Status groups and visible tickets in the exact order used by the My Work tab.
-    pub(crate) fn my_work_visible_by_status(
-        &self,
-    ) -> Vec<(crate::cache::Status, Vec<&crate::cache::Ticket>)> {
+    pub(crate) fn my_work_visible_by_status(&self) -> Vec<(String, Vec<&crate::cache::Ticket>)> {
         self.my_work_by_status(|status| self.status_visible(status))
     }
 
     /// My Work's status groups for the current search, keeping the statuses `shown` accepts.
     fn my_work_by_status(
         &self,
-        shown: impl Fn(&crate::cache::Status) -> bool,
-    ) -> Vec<(crate::cache::Status, Vec<&crate::cache::Ticket>)> {
+        shown: impl Fn(&str) -> bool,
+    ) -> Vec<(String, Vec<&crate::cache::Ticket>)> {
         let search = self.normalized_search();
-        self.status_order
+        self.status_rules
             .group(self.cache.my_tickets.iter().filter(|ticket| {
                 shown(&ticket.status)
                     && search
@@ -879,10 +875,7 @@ impl App {
 
     /// The Team tab's members and tickets for the current search, keeping the statuses
     /// `shown` accepts.
-    fn team_tickets_by_member(
-        &self,
-        shown: impl Fn(&crate::cache::Status) -> bool,
-    ) -> Vec<TeamMemberTickets<'_>> {
+    fn team_tickets_by_member(&self, shown: impl Fn(&str) -> bool) -> Vec<TeamMemberTickets<'_>> {
         let search = self.normalized_search();
         let search = search.as_deref();
         let has_search = search.is_some();
@@ -922,7 +915,7 @@ impl App {
                 if !shown(&ticket.status) {
                     continue;
                 }
-                if ticket.status == crate::cache::Status::Closed {
+                if self.status_rules.is_done(&ticket.status) {
                     done.push(ticket);
                 } else {
                     active.push(ticket);
@@ -1233,13 +1226,13 @@ impl App {
 
     /// The statuses `cycle_status_focus` steps through: every status with tickets in the
     /// My Work or Team tab for the current search, whatever the focus, in display order.
-    /// Closed is left out because `d` shows and hides it. Other tabs have none.
-    pub fn focusable_statuses(&self) -> Vec<crate::cache::Status> {
+    /// Done statuses are left out because `d` shows and hides them. Other tabs have none.
+    pub fn focusable_statuses(&self) -> Vec<String> {
         let groups = match self.active_tab {
             Tab::MyWork => self.my_work_by_status(|_| true),
             Tab::Team => {
                 let members = self.team_tickets_by_member(|_| true);
-                self.status_order.group(
+                self.status_rules.group(
                     members
                         .iter()
                         .flat_map(|(_, active, done)| active.iter().chain(done).copied()),
@@ -1250,7 +1243,7 @@ impl App {
         groups
             .into_iter()
             .map(|(status, _)| status)
-            .filter(|status| *status != crate::cache::Status::Closed)
+            .filter(|status| !self.status_rules.is_done(status))
             .collect()
     }
 
@@ -1424,7 +1417,7 @@ impl App {
             return false;
         }
         self.update_ticket(key, |ticket| {
-            ticket.set_status(detail.status_name());
+            ticket.status = detail.status.clone();
             if detail.assignee.is_some() {
                 ticket.assignee = detail.assignee.clone();
             }
@@ -1452,7 +1445,7 @@ impl App {
 
     /// Set a ticket's status in the cache from Jira's name for it.
     pub fn update_ticket_status(&mut self, key: &str, status_name: &str) {
-        self.update_ticket(key, |ticket| ticket.set_status(status_name));
+        self.update_ticket(key, |ticket| ticket.status = status_name.to_string());
     }
 
     /// Update a ticket's assignee in the cache.
@@ -1467,14 +1460,13 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{App, GroupSelectionState, Tab};
-    use crate::cache::{Epic, Status, Ticket};
+    use crate::cache::{Epic, Ticket};
 
     fn ticket(key: &str, summary: &str) -> Ticket {
         Ticket {
             key: key.to_string(),
             summary: summary.to_string(),
-            status: Status::ToDo,
-            jira_status: None,
+            status: "To Do".to_string(),
             assignee: None,
             assignee_email: None,
             reporter: None,
@@ -1501,7 +1493,7 @@ mod tests {
         tickets
             .iter()
             .map(|(key, status)| Ticket {
-                status: Status::from_str(status),
+                status: status.to_string(),
                 ..ticket(key, key)
             })
             .collect()
@@ -1634,7 +1626,7 @@ mod tests {
         app.loading = false;
 
         let mut t = ticket("AMP-1", "Refactor parser");
-        t.status = Status::InProgress;
+        t.status = "In Progress".to_string();
         t.labels = vec!["metis".to_string(), "backend".to_string()];
         app.cache.my_tickets = vec![t];
 
@@ -1646,7 +1638,7 @@ mod tests {
     }
 
     #[test]
-    fn my_work_groups_workflow_statuses_before_closed() {
+    fn my_work_groups_workflow_statuses_before_done() {
         let mut app = my_work_app(&[
             ("DSCI-2000", "Stalled"),
             ("DSCI-2478", "Backlog"),
@@ -1656,12 +1648,12 @@ mod tests {
             ("DSCI-3300", "Done"),
         ]);
 
-        // Configured statuses first, then unlisted ones in first-seen (key) order, then Closed.
+        // Configured statuses first, then unlisted ones in first-seen (key) order, then done.
         assert_eq!(
             my_work_group_names(&app),
-            ["In Progress", "Stalled", "Backlog", "On Deck", "Closed"]
+            ["In Progress", "Stalled", "Backlog", "On Deck", "Done"]
         );
-        // 5 headers + 6 tickets; the last workflow-status row sits just above Closed.
+        // 5 headers + 6 tickets; the last workflow-status row sits just above Done.
         assert_eq!(app.item_count(), 11);
         app.selected_index = 8;
         assert_eq!(app.selected_ticket_key(), Some("DSCI-3241".to_string()));
@@ -1699,15 +1691,15 @@ mod tests {
             "In Team Review",
             "Stalled",
             "Blocked",
-            "Closed",
+            "Resolved",
         ];
 
         let mut app = my_work_app(&statuses);
-        app.set_status_order(&dsci_statuses());
+        app.set_status_rules(&dsci_statuses());
         assert_eq!(my_work_group_names(&app), expected);
 
         let mut app = filters_app(tickets_with_statuses(&statuses));
-        app.set_status_order(&dsci_statuses());
+        app.set_status_rules(&dsci_statuses());
         let filter_groups: Vec<_> = app
             .filters_visible_by_status()
             .iter()
@@ -1720,7 +1712,7 @@ mod tests {
             summary: "Epic".to_string(),
             children: tickets_with_statuses(&statuses),
         }]);
-        app.set_status_order(&dsci_statuses());
+        app.set_status_rules(&dsci_statuses());
         let (_, children) = &app.epics_visible_epics()[0];
         let child_statuses: Vec<_> = children.iter().map(|t| t.status.as_str()).collect();
         assert_eq!(child_statuses, expected);
@@ -1755,8 +1747,8 @@ mod tests {
         ]);
 
         app.cycle_status_focus(true);
-        assert_eq!(app.status_focus, Some(Status::InProgress));
-        assert_eq!(my_work_group_names(&app), ["In Progress", "Closed"]);
+        assert_eq!(app.status_focus, Some("In Progress".to_string()));
+        assert_eq!(my_work_group_names(&app), ["In Progress", "Done"]);
         app.toggle_show_done();
         assert_eq!(my_work_group_names(&app), ["In Progress"]);
         app.cycle_status_focus(false);
@@ -1775,51 +1767,41 @@ mod tests {
             ("DSCI-4", "Backlog"),
             ("DSCI-5", "On Deck"),
         ]);
-        app.set_status_order(&dsci_statuses());
+        app.set_status_rules(&dsci_statuses());
 
-        // Only statuses the tickets are in, in display order, and never Closed.
+        // Only statuses the tickets are in, in display order, and never a done one.
         assert_eq!(
             app.focusable_statuses(),
-            [
-                Status::Other("Backlog".into()),
-                Status::Other("On Deck".into()),
-                Status::Other("In Team Review".into()),
-            ]
+            ["Backlog", "On Deck", "In Team Review",]
         );
 
         app.cycle_status_focus(true);
         app.cycle_status_focus(true);
         assert_eq!(app.status_focus_message(), "Focus: On Deck (2 of 3)");
-        assert_eq!(my_work_group_names(&app), ["On Deck", "Closed"]);
+        assert_eq!(my_work_group_names(&app), ["On Deck", "Done"]);
         app.selected_index = 2;
         assert_eq!(app.selected_ticket_key(), Some("DSCI-5".to_string()));
 
         app.cycle_status_focus(true);
-        assert_eq!(
-            app.status_focus,
-            Some(Status::Other("In Team Review".into()))
-        );
+        assert_eq!(app.status_focus, Some("In Team Review".to_string()));
         app.cycle_status_focus(true);
         assert_eq!(app.status_focus, None);
         assert_eq!(app.status_focus_message(), "Focus: all");
 
         app.cycle_status_focus(false);
-        assert_eq!(
-            app.status_focus,
-            Some(Status::Other("In Team Review".into()))
-        );
+        assert_eq!(app.status_focus, Some("In Team Review".to_string()));
     }
 
     #[test]
     fn focus_skips_statuses_hidden_by_search_and_restarts_from_a_stale_focus() {
         let mut app = my_work_app(&[("DSCI-1", "In Progress"), ("DSCI-2", "On Deck")]);
         app.search = Some("dsci-2".to_string());
-        assert_eq!(app.focusable_statuses(), [Status::Other("On Deck".into())]);
+        assert_eq!(app.focusable_statuses(), ["On Deck"]);
 
         // A focused status that is no longer shown (moved away, say) restarts the cycle.
-        app.status_focus = Some(Status::ReadyForWork);
+        app.status_focus = Some("Ready for Work".to_string());
         app.cycle_status_focus(true);
-        assert_eq!(app.status_focus, Some(Status::Other("On Deck".into())));
+        assert_eq!(app.status_focus, Some("On Deck".to_string()));
 
         app.search = Some("nothing matches".to_string());
         app.cycle_status_focus(true);
@@ -1853,17 +1835,11 @@ mod tests {
         app.cache.team_tickets[0].assignee_email = Some("dev@example.com".to_string());
         app.cache.team_tickets[1].assignee_email = Some("ops@example.com".to_string());
         app.cache.team_tickets[2].assignee_email = Some("ops@example.com".to_string());
-        app.set_status_order(&dsci_statuses());
+        app.set_status_rules(&dsci_statuses());
 
-        assert_eq!(
-            app.focusable_statuses(),
-            [
-                Status::Other("On Deck".into()),
-                Status::Other("Stalled".into())
-            ]
-        );
+        assert_eq!(app.focusable_statuses(), ["On Deck", "Stalled"]);
         app.cycle_status_focus(true);
-        // H(dev) + H(ops) + On Deck + Closed
+        // H(dev) + H(ops) + On Deck + the done Closed ticket
         assert_eq!(app.item_count(), 4);
         assert_eq!(app.selected_ticket_key(), None);
         app.selected_index = 2;
@@ -1871,6 +1847,77 @@ mod tests {
 
         app.active_tab = Tab::Epics;
         assert!(app.focusable_statuses().is_empty());
+    }
+
+    #[test]
+    fn configured_done_statuses_are_done_everywhere() {
+        let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect();
+        let statuses = crate::config::StatusConfig {
+            active: names(&["On Deck", "In Progress"]),
+            done: names(&["Done", "Cancelled", "Won't Do", "Denied"]),
+        };
+        let tickets = [
+            ("DSCI-1", "In Progress"),
+            ("DSCI-2", "Cancelled"),
+            ("DSCI-3", "Won't Do"),
+            ("DSCI-4", "Denied"),
+            ("DSCI-5", "On Deck"),
+        ];
+
+        // My Work: done groups come last, `d` hides them, and focus skips them.
+        let mut app = my_work_app(&tickets);
+        app.set_status_rules(&statuses);
+        assert_eq!(
+            my_work_group_names(&app),
+            ["On Deck", "In Progress", "Cancelled", "Won't Do", "Denied"]
+        );
+        assert_eq!(app.focusable_statuses(), ["On Deck", "In Progress"]);
+        app.toggle_show_done();
+        assert_eq!(my_work_group_names(&app), ["On Deck", "In Progress"]);
+
+        // Team: they're in the done split and don't count as active work.
+        let mut app = App::new();
+        app.active_tab = Tab::Team;
+        app.loading = false;
+        app.set_status_rules(&statuses);
+        app.cache.team_members = vec![
+            crate::cache::TeamMember {
+                name: "Busy".to_string(),
+                email: "busy@example.com".to_string(),
+            },
+            crate::cache::TeamMember {
+                name: "Wrapped Up".to_string(),
+                email: "done@example.com".to_string(),
+            },
+        ];
+        app.cache.team_tickets = tickets_with_statuses(&tickets);
+        for (i, t) in app.cache.team_tickets.iter_mut().enumerate() {
+            let email = if i == 0 {
+                "busy@example.com"
+            } else {
+                "done@example.com"
+            };
+            t.assignee_email = Some(email.to_string());
+        }
+        app.cache.team_tickets[4].assignee_email = Some("busy@example.com".to_string());
+        let members: Vec<_> = app
+            .sorted_team_members()
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        assert_eq!(members, ["Busy", "Wrapped Up"]);
+        let by_member = app.team_visible_tickets_by_member();
+        let (_, active, done) = &by_member[1];
+        assert!(active.is_empty());
+        assert_eq!(done.len(), 3);
+
+        // Epics: they count toward progress.
+        let epic = Epic {
+            key: "DSCI-100".to_string(),
+            summary: "Epic".to_string(),
+            children: tickets_with_statuses(&tickets),
+        };
+        assert_eq!(epic.done_count(app.status_rules()), 3);
     }
 
     #[test]
@@ -1884,7 +1931,7 @@ mod tests {
         }];
 
         let mut t = ticket("AMP-2", "Triage regression");
-        t.status = Status::NeedsTriage;
+        t.status = "Needs Triage".to_string();
         t.labels = vec!["infra".to_string()];
         t.assignee_email = Some("dev@example.com".to_string());
         app.cache.team_tickets = vec![t];
@@ -1917,7 +1964,7 @@ mod tests {
         // H(dev) + 3 tickets
         assert_eq!(app.item_count(), 4);
         app.cycle_status_focus(true);
-        assert_eq!(app.status_focus, Some(Status::InProgress));
+        assert_eq!(app.status_focus, Some("In Progress".to_string()));
         // Focus hides On Deck but not Done.
         assert_eq!(app.item_count(), 3);
         app.toggle_show_done();
@@ -2082,7 +2129,7 @@ mod tests {
         app.active_tab = Tab::MyWork;
         app.loading = false;
         let mut t = ticket("AMP-10", "Parser migration");
-        t.status = Status::InProgress;
+        t.status = "In Progress".to_string();
         app.cache.my_tickets = vec![t];
 
         // H(In Progress), T(AMP-10)
@@ -2100,9 +2147,9 @@ mod tests {
         app.loading = false;
 
         let mut t1 = ticket("AMP-11", "A");
-        t1.status = Status::InProgress;
+        t1.status = "In Progress".to_string();
         let mut t2 = ticket("AMP-12", "B");
-        t2.status = Status::InProgress;
+        t2.status = "In Progress".to_string();
         app.cache.my_tickets = vec![t1, t2];
 
         app.selected_index = 0; // In Progress header
@@ -2110,7 +2157,7 @@ mod tests {
         assert!(app.is_ticket_selected("AMP-11"));
         assert!(app.is_ticket_selected("AMP-12"));
         assert_eq!(
-            app.group_selection_state(Status::InProgress.as_str()),
+            app.group_selection_state("In Progress"),
             GroupSelectionState::All
         );
 
@@ -2118,7 +2165,7 @@ mod tests {
         assert!(!app.is_ticket_selected("AMP-11"));
         assert!(!app.is_ticket_selected("AMP-12"));
         assert_eq!(
-            app.group_selection_state(Status::InProgress.as_str()),
+            app.group_selection_state("In Progress"),
             GroupSelectionState::None
         );
     }
@@ -2129,14 +2176,14 @@ mod tests {
         app.active_tab = Tab::MyWork;
         app.loading = false;
         let mut t1 = ticket("AMP-13", "A");
-        t1.status = Status::InProgress;
+        t1.status = "In Progress".to_string();
         let mut t2 = ticket("AMP-14", "B");
-        t2.status = Status::InProgress;
+        t2.status = "In Progress".to_string();
         app.cache.my_tickets = vec![t1, t2];
 
         app.selected_ticket_keys.insert("AMP-13".to_string());
         assert_eq!(
-            app.group_selection_state(Status::InProgress.as_str()),
+            app.group_selection_state("In Progress"),
             GroupSelectionState::Partial
         );
     }
@@ -2144,9 +2191,9 @@ mod tests {
     #[test]
     fn filters_item_count_includes_status_headers() {
         let mut in_progress = ticket("AMP-40", "Grouped");
-        in_progress.status = Status::InProgress;
+        in_progress.status = "In Progress".to_string();
         let mut ready = ticket("AMP-41", "Queued");
-        ready.status = Status::ReadyForWork;
+        ready.status = "Ready for Work".to_string();
 
         let app = filters_app(vec![in_progress, ready]);
 
@@ -2156,9 +2203,9 @@ mod tests {
     #[test]
     fn filters_selected_ticket_key_skips_status_headers() {
         let mut in_progress = ticket("AMP-42", "Grouped");
-        in_progress.status = Status::InProgress;
+        in_progress.status = "In Progress".to_string();
         let mut ready = ticket("AMP-43", "Queued");
-        ready.status = Status::ReadyForWork;
+        ready.status = "Ready for Work".to_string();
 
         let mut app = filters_app(vec![in_progress, ready]);
 
@@ -2172,9 +2219,9 @@ mod tests {
     #[test]
     fn filters_header_toggle_selects_and_clears_group_tickets() {
         let mut first = ticket("AMP-44", "First");
-        first.status = Status::InProgress;
+        first.status = "In Progress".to_string();
         let mut second = ticket("AMP-45", "Second");
-        second.status = Status::InProgress;
+        second.status = "In Progress".to_string();
 
         let mut app = filters_app(vec![first, second]);
 
@@ -2183,7 +2230,7 @@ mod tests {
         assert!(app.is_ticket_selected("AMP-44"));
         assert!(app.is_ticket_selected("AMP-45"));
         assert_eq!(
-            app.group_selection_state(Status::InProgress.as_str()),
+            app.group_selection_state("In Progress"),
             GroupSelectionState::All
         );
 
@@ -2191,7 +2238,7 @@ mod tests {
         assert!(!app.is_ticket_selected("AMP-44"));
         assert!(!app.is_ticket_selected("AMP-45"));
         assert_eq!(
-            app.group_selection_state(Status::InProgress.as_str()),
+            app.group_selection_state("In Progress"),
             GroupSelectionState::None
         );
     }
@@ -2202,9 +2249,9 @@ mod tests {
         app.active_tab = Tab::MyWork;
         app.loading = false;
         let mut t1 = ticket("AMP-21", "A");
-        t1.status = Status::InProgress;
+        t1.status = "In Progress".to_string();
         let mut t2 = ticket("AMP-22", "B");
-        t2.status = Status::ReadyForWork;
+        t2.status = "Ready for Work".to_string();
         app.cache.my_tickets = vec![t1, t2];
 
         app.select_all_visible_tickets();
@@ -2242,9 +2289,9 @@ mod tests {
         app.active_tab = Tab::MyWork;
         app.loading = false;
         let mut active = ticket("AMP-31", "Active");
-        active.status = Status::InProgress;
+        active.status = "In Progress".to_string();
         let mut done = ticket("AMP-32", "Done");
-        done.status = Status::Closed;
+        done.status = "Closed".to_string();
         app.cache.my_tickets = vec![active, done];
 
         app.selected_ticket_keys.insert("AMP-31".to_string());

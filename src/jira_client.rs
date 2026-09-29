@@ -7,7 +7,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use crate::cache::{ActivityEntry, ActivityKind, Cache, Epic, Status, TeamMember, Ticket};
+use crate::cache::{ActivityEntry, ActivityKind, Cache, Epic, TeamMember, Ticket};
 use crate::config::AppConfig;
 
 const JIRA_BASE_URL: &str = "https://jira.mongodb.org/browse";
@@ -117,8 +117,7 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
     Some(Ticket {
         key,
         summary,
-        status: Status::from_str(status_str),
-        jira_status: Some(status_str.to_string()),
+        status: status_str.to_string(),
         assignee,
         assignee_email: None,
         reporter: None,
@@ -368,8 +367,7 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
     Ok(Ticket {
         key: ticket_key,
         summary,
-        status: Status::from_str(status_name.unwrap_or("To Do")),
-        jira_status: status_name.map(str::to_string),
+        status: status_name.unwrap_or("To Do").to_string(),
         assignee,
         assignee_email,
         reporter,
@@ -764,7 +762,7 @@ fn reconcile_epic_child_statuses(
     for epic in epics {
         for child in &mut epic.children {
             if let Some(latest) = latest_by_key.get(child.key.as_str()) {
-                child.set_status(latest.status_name());
+                child.status = latest.status.clone();
             }
         }
     }
@@ -1058,12 +1056,11 @@ mod tests {
     use crate::config::{JiraConfig, StatusConfig};
     use std::collections::BTreeMap;
 
-    fn test_ticket(key: &str, status: Status) -> Ticket {
+    fn test_ticket(key: &str, status: &str) -> Ticket {
         Ticket {
             key: key.to_string(),
             summary: format!("Summary for {}", key),
-            status,
-            jira_status: None,
+            status: status.to_string(),
             assignee: None,
             assignee_email: None,
             reporter: None,
@@ -1105,28 +1102,36 @@ mod tests {
     fn parse_ticket_line_keeps_the_real_status_name() {
         let line = "DEMO-7\tResolved\tSam Doe\tShip it";
         let ticket = parse_ticket_line(line).expect("ticket should parse");
-        assert_eq!(ticket.status, Status::Closed);
-        assert_eq!(ticket.status_name(), "Resolved");
+        assert_eq!(ticket.status, "Resolved");
     }
 
     #[test]
-    fn old_cache_files_without_the_status_name_still_load() {
+    fn caches_from_before_real_status_names_are_refetched() {
+        // Written before #19: `status` held the collapsed enum, and `jira_status` the name
+        // only when known. Loading it fails, so the app fetches from Jira instead of
+        // showing Resolved tickets as Closed.
         let json = r#"{"saved_at_unix_secs": 1, "cache": {"my_tickets": [
-            {"key": "DEMO-1", "summary": "One", "status": "Closed", "assignee": null,
-             "assignee_email": null, "description": null, "labels": [], "epic_key": null,
-             "epic_name": null, "url": "https://jira.example.com/browse/DEMO-1"},
-            {"key": "DEMO-2", "summary": "Two", "status": {"Other": "Backlog"}, "assignee": null,
-             "assignee_email": null, "description": null, "labels": [], "epic_key": null,
-             "epic_name": null, "url": "https://jira.example.com/browse/DEMO-2"}
+            {"key": "DEMO-1", "summary": "One", "status": "Closed", "jira_status": "Resolved",
+             "assignee": null, "assignee_email": null, "description": null, "labels": [],
+             "epic_key": null, "epic_name": null, "url": "https://jira.example.com/browse/DEMO-1"}
           ], "team_tickets": [], "epics": [], "team_members": []}}"#;
-        let snapshot: CacheSnapshot = serde_json::from_str(json).expect("old cache should load");
-        let names: Vec<(Option<&str>, &str)> = snapshot
-            .cache
-            .my_tickets
-            .iter()
-            .map(|t| (t.jira_status.as_deref(), t.status_name()))
-            .collect();
-        assert_eq!(names, [(None, "Closed"), (None, "Backlog")]);
+        assert!(serde_json::from_str::<CacheSnapshot>(json).is_err());
+        let details = r#"{"DEMO-1": {"key": "DEMO-1", "summary": "One", "status": {"Other": "Backlog"},
+            "assignee": null, "assignee_email": null, "description": null, "labels": [],
+            "epic_key": null, "epic_name": null, "url": "https://jira.example.com/browse/DEMO-1"}}"#;
+        assert!(serde_json::from_str::<HashMap<String, Ticket>>(details).is_err());
+
+        let cache = Cache {
+            my_tickets: vec![test_ticket("DEMO-1", "Resolved")],
+            ..Cache::empty()
+        };
+        let snapshot = CacheSnapshot {
+            saved_at_unix_secs: 1,
+            cache,
+        };
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let loaded: CacheSnapshot = serde_json::from_str(&json).expect("new cache should load");
+        assert_eq!(loaded.cache.my_tickets[0].status, "Resolved");
     }
 
     #[test]
@@ -1152,17 +1157,16 @@ mod tests {
         let mut epics = vec![Epic {
             key: "AMP-100".to_string(),
             summary: "Epic".to_string(),
-            children: vec![test_ticket("AMP-1", Status::ToDo)],
+            children: vec![test_ticket("AMP-1", "To Do")],
         }];
-        let mut resolved = test_ticket("AMP-1", Status::ToDo);
-        resolved.set_status("Resolved");
+        let mut resolved = test_ticket("AMP-1", "To Do");
+        resolved.status = "Resolved".to_string();
         let my_tickets = vec![resolved];
-        let team_tickets = vec![test_ticket("AMP-2", Status::NeedsTriage)];
+        let team_tickets = vec![test_ticket("AMP-2", "Needs Triage")];
 
         reconcile_epic_child_statuses(&mut epics, &my_tickets, &team_tickets);
 
-        assert_eq!(epics[0].children[0].status, Status::Closed);
-        assert_eq!(epics[0].children[0].status_name(), "Resolved");
+        assert_eq!(epics[0].children[0].status, "Resolved");
     }
 
     #[test]
@@ -1170,11 +1174,11 @@ mod tests {
         let mut epics = vec![Epic {
             key: "AMP-100".to_string(),
             summary: "Epic".to_string(),
-            children: vec![test_ticket("AMP-1", Status::ToDo)],
+            children: vec![test_ticket("AMP-1", "To Do")],
         }];
 
         reconcile_epic_child_statuses(&mut epics, &[], &[]);
 
-        assert_eq!(epics[0].children[0].status, Status::ToDo);
+        assert_eq!(epics[0].children[0].status, "To Do");
     }
 }

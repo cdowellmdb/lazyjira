@@ -98,12 +98,12 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         );
         let header_style = if is_header_selected {
             Style::default()
-                .fg(status_color(status))
+                .fg(status_color(status, app.status_rules()))
                 .add_modifier(Modifier::BOLD)
                 .bg(Color::DarkGray)
         } else {
             Style::default()
-                .fg(status_color(status))
+                .fg(status_color(status, app.status_rules()))
                 .add_modifier(Modifier::BOLD)
         };
         lines.push(Line::from(Span::styled(header, header_style)));

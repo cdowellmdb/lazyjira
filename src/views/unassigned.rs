@@ -116,10 +116,10 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             };
             let status_style = if is_selected {
                 Style::default()
-                    .fg(status_color(&ticket.status))
+                    .fg(status_color(&ticket.status, app.status_rules()))
                     .bg(Color::DarkGray)
             } else {
-                Style::default().fg(status_color(&ticket.status))
+                Style::default().fg(status_color(&ticket.status, app.status_rules()))
             };
             let marker = if app.is_ticket_selected(&ticket.key) {
                 "[x]"

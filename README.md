@@ -105,7 +105,7 @@ jql = "priority = P1 AND created >= -7d"
 | `jira.done_window_days` | `14` | How many days of recently finished tickets to load. |
 | `jira.epics_i_care_about` | empty (all epics) | Limits the Epics tab to these epics, in this order. Must be in the `[jira]` section. |
 | `team` | you | Display name mapped to Jira email for everyone shown in the Team tab. |
-| `statuses.active`, `statuses.done` | shown above | Status names that count as active or done when loading tickets. Their order is also the order status groups are shown in My Work, Filters and Epics: active statuses first, then statuses not listed, then done. |
+| `statuses.active`, `statuses.done` | shown above | Which statuses are loaded, and which count as done: `d` hides done tickets, epic progress counts them, and Team lists them after active work. So adding e.g. `"Cancelled"` or `"Won't Do"` to `done` treats them as finished. The order is also the order status groups are shown in My Work, Filters and Epics: active statuses first, then statuses not listed, then done. Tickets show Jira's own status name (Resolved stays Resolved). A status not listed follows a listed one it's a synonym of (Resolved follows Done, Open follows To Do); otherwise Done/Closed/Resolved-like names count as done and the rest as active. |
 | `filters` | empty | Saved JQL filters for the Filters tab. |
 
 When you create, edit, or delete a saved filter in the app, lazyjira rewrites this file, and any comments you added are lost.
@@ -127,7 +127,7 @@ When you create, edit, or delete a saved filter in the app, lazyjira rewrites th
 | `U` | Open bulk CSV upload |
 | `c` | Create ticket |
 | `z/Z` | Fold current group / fold all groups |
-| `d` | Toggle Done visibility |
+| `d` | Toggle visibility of done statuses (`statuses.done`) |
 | `f/F` | Focus the next / previous status in My Work or Team, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that) |
 | `r` | Refresh |
 | `?` | Keybindings help |

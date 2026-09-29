@@ -4,21 +4,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::app::{App, DetailMode};
-use crate::cache::{Status, StatusOrder};
+use crate::cache::{Status, StatusRules};
 use crate::move_picker::MovePicker;
-
-fn status_color(status: &Status) -> Color {
-    match status {
-        Status::NeedsTriage => Color::White,
-        Status::ReadyForWork => Color::Blue,
-        Status::InProgress => Color::Yellow,
-        Status::ToDo => Color::White,
-        Status::InReview => Color::Cyan,
-        Status::Blocked => Color::Red,
-        Status::Closed => Color::Green,
-        Status::Other(_) => Color::Magenta,
-    }
-}
+use crate::views::common::status_color;
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
@@ -205,7 +193,9 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             f.render_widget(block, area);
 
             match &app.detail_mode {
-                DetailMode::View => render_view(f, inner, ticket, app.detail_scroll),
+                DetailMode::View => {
+                    render_view(f, inner, ticket, app.status_rules(), app.detail_scroll)
+                }
                 DetailMode::MoveLoading { .. } => render_with_footer(
                     f,
                     inner,
@@ -215,7 +205,9 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                     ))],
                     "[Esc] cancel",
                 ),
-                DetailMode::MovePicker(picker) => render_move_picker(f, inner, ticket, picker),
+                DetailMode::MovePicker(picker) => {
+                    render_move_picker(f, inner, ticket, picker, app.status_rules())
+                }
                 DetailMode::ResolutionPicker { picker, selected } => {
                     render_resolution_picker(f, inner, picker, *selected)
                 }
@@ -245,10 +237,16 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
 
     let inner = block.inner(area);
     f.render_widget(block, area);
-    render_epic_view(f, inner, epic, app.status_order(), app.detail_scroll);
+    render_epic_view(f, inner, epic, app.status_rules(), app.detail_scroll);
 }
 
-fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket, scroll: u16) {
+fn render_view(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    ticket: &crate::cache::Ticket,
+    rules: &StatusRules,
+    scroll: u16,
+) {
     // Split into body and footer
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -277,8 +275,8 @@ fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket
     lines.push(Line::from(vec![
         Span::raw("Status: "),
         Span::styled(
-            ticket.status_name(),
-            Style::default().fg(status_color(&ticket.status)),
+            ticket.status.as_str(),
+            Style::default().fg(status_color(&ticket.status, rules)),
         ),
         Span::raw("    Assignee: "),
         Span::styled(assignee_str, Style::default().fg(Color::White)),
@@ -341,7 +339,7 @@ fn render_epic_view(
     f: &mut ratatui::Frame,
     area: Rect,
     epic: &crate::cache::Epic,
-    order: &StatusOrder,
+    rules: &StatusRules,
     scroll: u16,
 ) {
     let chunks = Layout::default()
@@ -363,8 +361,8 @@ fn render_epic_view(
     lines.push(Line::from(""));
 
     let total = epic.total();
-    let done = epic.done_count();
-    let pct = epic.progress_pct();
+    let done = epic.done_count(rules);
+    let pct = epic.progress_pct(rules);
     lines.push(Line::from(vec![
         Span::raw("Progress: "),
         Span::styled(
@@ -379,7 +377,7 @@ fn render_epic_view(
         ),
     ]));
 
-    let mut parts: Vec<String> = order
+    let mut parts: Vec<String> = rules
         .group(&epic.children)
         .iter()
         .map(|(status, tickets)| format!("{}: {}", status.as_str(), tickets.len()))
@@ -401,7 +399,7 @@ fn render_epic_view(
     lines.push(Line::from(""));
 
     let mut children: Vec<_> = epic.children.iter().collect();
-    order.sort_tickets(&mut children);
+    rules.sort_tickets(&mut children);
     if children.is_empty() {
         lines.push(Line::from(Span::styled(
             "(no related tickets)",
@@ -416,7 +414,7 @@ fn render_epic_view(
                 ),
                 Span::styled(
                     format!("{:<15}", ticket.status.as_str()),
-                    Style::default().fg(status_color(&ticket.status)),
+                    Style::default().fg(status_color(&ticket.status, rules)),
                 ),
                 Span::raw("  "),
                 Span::styled(
@@ -478,15 +476,16 @@ fn render_move_picker(
     area: Rect,
     ticket: &crate::cache::Ticket,
     picker: &MovePicker,
+    rules: &StatusRules,
 ) {
     let mut lines = vec![
         heading(match &picker.only_to {
             Some(status) => format!(
                 "Transitions to {} from {}:",
                 status.as_str(),
-                ticket.status_name()
+                ticket.status.as_str()
             ),
-            None => format!("Move from {}:", ticket.status_name()),
+            None => format!("Move from {}:", ticket.status.as_str()),
         }),
         Line::from(""),
     ];
@@ -494,7 +493,10 @@ fn render_move_picker(
     let rows = picker.rows();
     if rows.is_empty() {
         lines.push(Line::from(Span::styled(
-            format!("Jira offers no transitions from {}.", ticket.status_name()),
+            format!(
+                "Jira offers no transitions from {}.",
+                ticket.status.as_str()
+            ),
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -512,7 +514,10 @@ fn render_move_picker(
                 shortcut,
                 transition.label(&picker.transitions)
             ),
-            option_style(status_color(&destination), i == picker.selected),
+            option_style(
+                status_color(&transition.to_name, rules),
+                i == picker.selected,
+            ),
         )));
     }
 

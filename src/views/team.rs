@@ -128,7 +128,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Style::default()
                 };
 
-                let status_fg = status_color(&ticket.status);
+                let status_fg = status_color(&ticket.status, app.status_rules());
                 let colored = if is_selected {
                     Style::default().fg(status_fg).bg(Color::DarkGray)
                 } else {
@@ -202,7 +202,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Style::default().add_modifier(Modifier::DIM)
                 };
 
-                let status_fg = status_color(&ticket.status);
+                let status_fg = status_color(&ticket.status, app.status_rules());
                 let colored = if is_selected {
                     Style::default().fg(status_fg).bg(Color::DarkGray)
                 } else {
