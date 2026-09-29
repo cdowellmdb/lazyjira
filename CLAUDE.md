@@ -62,6 +62,7 @@ The team view sorts members by active ticket count (most active first). Any code
 - My Work and Team include a separate Labels column.
 - Search matches ticket key/summary/assignee/labels and team member name/email.
 - `Enter` works while search is active (opens detail for selected row).
+- `f`/`F` cycle the status focus (My Work and Team) through the statuses shown, in display order, then back to all (`App::cycle_status_focus`). Closed isn't in the cycle; `d` shows and hides it.
 - Epics child rows are sorted by status with Done at the bottom.
 - Epics show an accurate progress bar and percentage complete.
 

@@ -128,7 +128,7 @@ When you create, edit, or delete a saved filter in the app, lazyjira rewrites th
 | `c` | Create ticket |
 | `z/Z` | Fold current group / fold all groups |
 | `d` | Toggle Done visibility |
-| `p/w/n/v` | Focus In Progress / Ready for Work / Needs Triage / In Review |
+| `f/F` | Focus the next / previous status in My Work or Team, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that) |
 | `r` | Refresh |
 | `?` | Keybindings help |
 | `q` | Quit |

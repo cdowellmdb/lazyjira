@@ -28,7 +28,6 @@ use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::bulk_plan::{BulkJob, BulkPlan, FetchedTransitions};
-use crate::cache::Status;
 use crate::config::AppConfig;
 use crate::move_picker::JiraCall;
 use app::{
@@ -1022,7 +1021,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
                 .unwrap_or("all");
             Span::styled(
                 format!(
-                    " Tab: switch  j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  sel:{}  Enter: detail  z: fold  d: done({})  p/w/n/v: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
+                    " Tab: switch  j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  sel:{}  Enter: detail  z: fold  d: done({})  f/F: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
                     selected_count, done_state, focus_state, ticket_state, freshness_state, epic_state
                 ),
                 Style::default().fg(Color::DarkGray),
@@ -2236,41 +2235,13 @@ async fn handle_main_keys(
                 "Hiding Done tickets".to_string()
             });
         }
-        KeyCode::Char('p') => {
-            app.toggle_status_focus(Status::InProgress);
-            app.flash = Some(
-                app.status_focus
-                    .as_ref()
-                    .map(|s| format!("Focus: {}", s.as_str()))
-                    .unwrap_or_else(|| "Focus: all".to_string()),
-            );
-        }
-        KeyCode::Char('w') => {
-            app.toggle_status_focus(Status::ReadyForWork);
-            app.flash = Some(
-                app.status_focus
-                    .as_ref()
-                    .map(|s| format!("Focus: {}", s.as_str()))
-                    .unwrap_or_else(|| "Focus: all".to_string()),
-            );
-        }
-        KeyCode::Char('n') => {
-            app.toggle_status_focus(Status::NeedsTriage);
-            app.flash = Some(
-                app.status_focus
-                    .as_ref()
-                    .map(|s| format!("Focus: {}", s.as_str()))
-                    .unwrap_or_else(|| "Focus: all".to_string()),
-            );
-        }
-        KeyCode::Char('v') => {
-            app.toggle_status_focus(Status::InReview);
-            app.flash = Some(
-                app.status_focus
-                    .as_ref()
-                    .map(|s| format!("Focus: {}", s.as_str()))
-                    .unwrap_or_else(|| "Focus: all".to_string()),
-            );
+        KeyCode::Char(c @ ('f' | 'F')) => {
+            if matches!(app.active_tab, Tab::MyWork | Tab::Team) {
+                app.cycle_status_focus(c == 'f');
+                app.flash = Some(app.status_focus_message());
+            } else {
+                app.flash = Some("Status focus works in My Work and Team".to_string());
+            }
         }
         KeyCode::Char('r') => {
             if app.loading {
@@ -2327,6 +2298,7 @@ async fn handle_main_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::Status;
     use std::collections::BTreeMap;
 
     fn sample_config() -> AppConfig {
