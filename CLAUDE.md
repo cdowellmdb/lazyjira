@@ -33,7 +33,7 @@ Use `lazyjira --dev-release` for an optimized rebuild. Both rebuild from the che
 - **src/moves.rs** — Single-ticket move tracking: pending moves, Jira-confirmed moves (to ignore stale reads), and rejected moves awaiting dismissal
 - **src/bulk_upload.rs** — CSV parsing and validation for bulk ticket creation
 - **src/views/** — Tab renderers (`my_work.rs`, `team.rs`, `epics.rs`, `unassigned.rs`, `filters.rs`, shared helpers in `common.rs`)
-- **src/widgets/** — Overlays (`ticket_detail.rs`, `keybindings_help.rs`, `activity.rs`, `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `form.rs`, `move_failure.rs`)
+- **src/widgets/** — Overlays (`ticket_detail.rs`, `keybindings_help.rs`, `activity.rs`, `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `form.rs`, `move_failure.rs`), and `markup.rs`, which renders Jira wiki markup in descriptions (emphasis, links, mentions, lists, tables, quotes, code) as styled lines wrapped to the popup width
 
 ## Key Design Decisions
 
@@ -67,6 +67,8 @@ The team view sorts members by active ticket count (most active first). Any code
 - `f`/`F` cycle the status focus (My Work and Team) through the statuses shown, in display order, then back to all (`App::cycle_status_focus`). Closed isn't in the cycle; `d` shows and hides it.
 - Epics child rows are sorted by status with Done at the bottom.
 - Epics show an accurate progress bar and percentage complete.
+- The detail overlay shows the ticket's fields, its description (Jira markup, via `widgets/markup.rs`) and its comments, oldest first. The body is pre-wrapped to the overlay's width, so its line count is its height: the renderer records the scroll limit in `App::detail_scroll_max` for the scroll keys.
+- In the detail overlay, `[`/`]` step to the previous/next ticket in the list under it (epics, for an epic's detail) and move the list selection with it (`App::step_detail`). `z` toggles full screen.
 
 ## Configuration
 
@@ -81,6 +83,7 @@ The team view sorts members by active ticket count (most active first). Any code
 
 - `ratatui` 0.29 + `crossterm` 0.28 — TUI rendering
 - `tui-textarea` — text input in forms
+- `unicode-width` — column widths when wrapping rendered markup
 - `tokio` — async runtime for parallel CLI calls
 - `reqwest` (rustls, no OpenSSL) — Jira REST calls for moves
 - `serde` + `serde_json` + `serde_yaml` + `toml` — JSON/YAML/TOML parsing

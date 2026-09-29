@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 ratatui = "0.29"
+unicode-width = "0.2"
 crossterm = "0.28"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

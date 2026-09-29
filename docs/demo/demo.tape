@@ -23,12 +23,24 @@ Enter
 Sleep 3s
 Show
 
-# My Work: open a ticket
+# My Work: open a ticket, scroll it, step to the next one, zoom
 Sleep 2s
 Down
 Sleep 800ms
 Enter
-Sleep 3.5s
+Sleep 2.5s
+Screenshot docs/images/ticket-detail.png
+Sleep 500ms
+Type@350ms "jjjjjj"
+Sleep 1.5s
+Type "G"
+Sleep 2s
+Type "]"
+Sleep 2.5s
+Type "z"
+Sleep 2.5s
+Type "z"
+Sleep 800ms
 Escape
 Sleep 800ms
 

@@ -5,7 +5,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::cache::{ActivityEntry, ActivityKind};
 
-fn format_timestamp(ts: &str) -> String {
+pub fn format_timestamp(ts: &str) -> String {
     // "2024-01-15T10:30:00.000+0000" -> "2024-01-15 10:30"
     if ts.len() >= 16 {
         ts[..16].replace('T', " ")

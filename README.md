@@ -11,7 +11,7 @@ lazyjira runs on top of the [`jira` CLI](https://github.com/ankitpokhrel/jira-cl
 - Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, **Filters**
 - Tickets grouped by status, with one-key status focus and a Done toggle
 - Epic progress bars, with an optional list of the epics you care about
-- Ticket detail with description, labels, assignee, epic, and activity history
+- Ticket detail with formatted description, comments, labels, assignee, epic, and activity history
 - Create, comment on, assign, edit, and move tickets without leaving the terminal
 - Multi-select with bulk move and bulk assign
 - Bulk ticket creation from a CSV, with a validated preview before anything is sent
@@ -135,10 +135,18 @@ When you create, edit, or delete a saved filter in the app, lazyjira rewrites th
 
 ### Detail view
 
+![A ticket detail showing formatted Jira markup: headings, a numbered list, a table, a code block, and comments](docs/images/ticket-detail.png)
+
+Descriptions and comments render Jira's wiki markup: headings, bold/italic/strikethrough, links, mentions, lists, tables, quotes, code blocks and icons like `(/)`.
+
 | Key | Action |
 |-----|--------|
 | `Esc` | Close |
-| `Up/Down` | Scroll |
+| `Up/Down`, `j/k` | Scroll |
+| `PgUp/PgDn`, `Space` | Scroll a page |
+| `g/G`, `Home/End` | Jump to top / bottom |
+| `[` / `]` | Previous / next ticket in the list (previous / next epic in an epic's detail) |
+| `z` | Zoom to full screen (toggle) |
 | `o` | Open in browser |
 | `m` | Move status |
 | `C` | Comment |
