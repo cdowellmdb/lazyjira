@@ -16,6 +16,8 @@ Binary name: `lazyjira`
 `lazyjira --dev` (or `lazyjira --rebuild`) forces a rebuild from source and runs the app.
 Use `lazyjira --dev-release` for an optimized rebuild. Both rebuild from the checkout the binary was compiled in (`CARGO_MANIFEST_DIR`), so they only work for binaries built from a local checkout, not release downloads.
 
+`.githooks/pre-commit` runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` when Rust files are staged. Enable it per clone with `git config core.hooksPath .githooks`. Don't bypass it with `--no-verify` unless asked; fix what it reports.
+
 ## Architecture
 
 - **src/main.rs** — Entry point, terminal setup, event loop, key handling, `--dev` flags
