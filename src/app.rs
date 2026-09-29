@@ -1,3 +1,4 @@
+use crate::bulk_actions::BulkState;
 use crate::cache::Cache;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -191,81 +192,6 @@ pub enum GroupSelectionState {
     None,
     Partial,
     All,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BulkAction {
-    Move,
-    Assign,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BulkTarget {
-    Move {
-        /// Name of the status to move to.
-        destination: String,
-        /// Name of the chosen resolution, if any.
-        resolution: Option<String>,
-    },
-    Assign {
-        member_email: String,
-        member_name: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BulkSummary {
-    pub action: BulkAction,
-    pub target: BulkTarget,
-    pub total: usize,
-    pub attempted: usize,
-    pub succeeded: usize,
-    pub failed: usize,
-    pub successful_keys: Vec<String>,
-    pub failed_details: Vec<(String, String)>,
-    /// Tickets that weren't sent, and why.
-    pub skipped: Vec<(String, String)>,
-}
-
-#[derive(Debug, Clone)]
-pub enum BulkState {
-    ActionPicker {
-        targets: Vec<String>,
-        selected: usize,
-    },
-    /// Waiting for Jira to list each target's transitions. Only the answer to `request` is used.
-    MoveLoading { targets: Vec<String>, request: u64 },
-    /// Choosing a destination from `bulk_plan::destinations(&fetched)`.
-    MoveStatusPicker {
-        targets: Vec<String>,
-        fetched: crate::bulk_plan::FetchedTransitions,
-        selected: usize,
-    },
-    /// Choosing one resolution from `plan.resolution_choices()` for the whole move.
-    MoveResolutionPicker {
-        targets: Vec<String>,
-        destination: String,
-        plan: crate::bulk_plan::BulkPlan,
-        selected: usize,
-    },
-    AssignPicker {
-        targets: Vec<String>,
-        selected: usize,
-    },
-    Confirm {
-        targets: Vec<String>,
-        target: BulkTarget,
-        plan: crate::bulk_plan::BulkPlan,
-    },
-    Running {
-        targets: Vec<String>,
-        target: BulkTarget,
-    },
-    Result {
-        summary: BulkSummary,
-        /// Lines scrolled past, so every failure can be read.
-        scroll: u16,
-    },
 }
 
 /// A Team tab row group: the member, their active tickets, then their Done tickets.

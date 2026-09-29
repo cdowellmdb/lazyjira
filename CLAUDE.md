@@ -32,6 +32,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/transitions.rs** — Transition model and parsing, and the rules for matching shortcuts and resolutions
 - **src/move_picker.rs** — Single-ticket move picker state and keys; returns the Jira call to make instead of making it
 - **src/bulk_plan.rs** — What a bulk move/assign sends for each ticket, and why others are skipped
+- **src/bulk_actions.rs** — Bulk move/assign state, progression, and completion; returns work for `main.rs` to execute. Dismissed operations still update tickets, but their results cannot replace a newer modal.
 - **src/moves.rs** — Single-ticket move tracking: pending moves, Jira-confirmed moves (to ignore stale reads), and rejected moves awaiting dismissal
 - **src/bulk_upload.rs** — CSV parsing and validation for bulk ticket creation
 - **src/views/** — Tab renderers (`my_work.rs`, `team.rs`, `epics.rs`, `unassigned.rs`, `filters.rs`, shared helpers in `common.rs`)
