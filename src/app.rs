@@ -358,6 +358,8 @@ pub struct App {
     pub collapsed_filters: HashSet<String>,
     /// Optional epic focus order used by the Epics tab; empty means show all epics.
     epics_i_care_about_rank: HashMap<String, usize>,
+    /// Display order of status groups and epic children, from the `[statuses]` config.
+    status_order: crate::cache::StatusOrder,
 }
 
 impl App {
@@ -403,7 +405,22 @@ impl App {
             collapsed_unassigned: HashSet::new(),
             collapsed_filters: HashSet::new(),
             epics_i_care_about_rank: HashMap::new(),
+            status_order: crate::cache::StatusOrder::default(),
         }
+    }
+
+    /// Orders statuses everywhere by the configured `active` then `done` lists.
+    pub fn set_status_order(&mut self, statuses: &crate::config::StatusConfig) {
+        let order = crate::cache::StatusOrder::new(&statuses.active, &statuses.done);
+        if self.status_order != order {
+            self.status_order = order;
+            self.mark_cache_changed();
+            self.clamp_selection();
+        }
+    }
+
+    pub fn status_order(&self) -> &crate::cache::StatusOrder {
+        &self.status_order
     }
 
     pub fn set_epics_i_care_about(&mut self, epics: Vec<String>) {
@@ -618,27 +635,6 @@ impl App {
             || ticket.assignee.as_deref() == Some(UNASSIGNED_TEAM_NAME)
     }
 
-    fn epic_status_rank(status: &crate::cache::Status) -> usize {
-        match status {
-            crate::cache::Status::InProgress => 0,
-            crate::cache::Status::ReadyForWork => 1,
-            crate::cache::Status::NeedsTriage => 2,
-            crate::cache::Status::ToDo => 3,
-            crate::cache::Status::InReview => 4,
-            crate::cache::Status::Other(_) => 5,
-            crate::cache::Status::Blocked => 6,
-            crate::cache::Status::Closed => 7,
-        }
-    }
-
-    fn sort_epic_children(tickets: &mut Vec<&crate::cache::Ticket>) {
-        tickets.sort_by(|a, b| {
-            Self::epic_status_rank(&a.status)
-                .cmp(&Self::epic_status_rank(&b.status))
-                .then_with(|| a.key.cmp(&b.key))
-        });
-    }
-
     fn epic_is_in_focus(&self, epic_key: &str) -> bool {
         if self.epics_i_care_about_rank.is_empty() {
             return true;
@@ -682,7 +678,7 @@ impl App {
                         || Self::contains_case_insensitive(&epic.summary, s);
                     if epic_matches {
                         let mut children: Vec<_> = epic.children.iter().collect();
-                        Self::sort_epic_children(&mut children);
+                        self.status_order.sort_tickets(&mut children);
                         visible.push((epic, children));
                         continue;
                     }
@@ -692,7 +688,7 @@ impl App {
                         .iter()
                         .filter(|t| Self::ticket_matches_search(t, s))
                         .collect();
-                    Self::sort_epic_children(&mut matching_children);
+                    self.status_order.sort_tickets(&mut matching_children);
 
                     if !matching_children.is_empty() {
                         visible.push((epic, matching_children));
@@ -700,7 +696,7 @@ impl App {
                 }
                 None => {
                     let mut children: Vec<_> = epic.children.iter().collect();
-                    Self::sort_epic_children(&mut children);
+                    self.status_order.sort_tickets(&mut children);
                     visible.push((epic, children));
                 }
             }
@@ -751,7 +747,7 @@ impl App {
         let mut groups: Vec<_> = grouped
             .into_iter()
             .map(|((epic_key, epic_summary), mut tickets)| {
-                Self::sort_epic_children(&mut tickets);
+                self.status_order.sort_tickets(&mut tickets);
                 (epic_key, epic_summary, tickets)
             })
             .collect();
@@ -805,7 +801,7 @@ impl App {
     pub(crate) fn filters_visible_by_status(
         &self,
     ) -> Vec<(crate::cache::Status, Vec<&crate::cache::Ticket>)> {
-        crate::cache::group_by_status(&self.filter_results)
+        self.status_order.group(&self.filter_results)
     }
 
     fn filters_visible_items(&self) -> Vec<VisibleItem> {
@@ -838,12 +834,13 @@ impl App {
         &self,
     ) -> Vec<(crate::cache::Status, Vec<&crate::cache::Ticket>)> {
         let search = self.normalized_search();
-        crate::cache::group_by_status(self.cache.my_tickets.iter().filter(|ticket| {
-            self.status_visible(&ticket.status)
-                && search
-                    .as_deref()
-                    .is_none_or(|s| Self::ticket_matches_search(ticket, s))
-        }))
+        self.status_order
+            .group(self.cache.my_tickets.iter().filter(|ticket| {
+                self.status_visible(&ticket.status)
+                    && search
+                        .as_deref()
+                        .is_none_or(|s| Self::ticket_matches_search(ticket, s))
+            }))
     }
 
     fn my_work_visible_items(&self) -> Vec<VisibleItem> {
@@ -1581,7 +1578,7 @@ mod tests {
     }
 
     #[test]
-    fn my_work_groups_workflow_statuses_after_canonical_ones() {
+    fn my_work_groups_workflow_statuses_before_closed() {
         let mut app = my_work_app(&[
             ("DSCI-2000", "Stalled"),
             ("DSCI-2478", "Backlog"),
@@ -1591,15 +1588,74 @@ mod tests {
             ("DSCI-3300", "Done"),
         ]);
 
-        // Canonical groups first, then workflow statuses in first-seen (key) order.
+        // Configured statuses first, then unlisted ones in first-seen (key) order, then Closed.
         assert_eq!(
             my_work_group_names(&app),
-            ["In Progress", "Closed", "Stalled", "Backlog", "On Deck"]
+            ["In Progress", "Stalled", "Backlog", "On Deck", "Closed"]
         );
-        // 5 headers + 6 tickets; the cursor reaches the last workflow-status row.
+        // 5 headers + 6 tickets; the last workflow-status row sits just above Closed.
         assert_eq!(app.item_count(), 11);
-        app.selected_index = 10;
+        app.selected_index = 8;
         assert_eq!(app.selected_ticket_key(), Some("DSCI-3241".to_string()));
+        app.selected_index = 10;
+        assert_eq!(app.selected_ticket_key(), Some("DSCI-3300".to_string()));
+    }
+
+    fn dsci_statuses() -> crate::config::StatusConfig {
+        let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect();
+        crate::config::StatusConfig {
+            active: names(&[
+                "Backlog",
+                "On Deck",
+                "In Progress",
+                "In Team Review",
+                "Stalled",
+            ]),
+            done: names(&["Done", "Closed", "Resolved"]),
+        }
+    }
+
+    #[test]
+    fn my_work_filters_and_epics_follow_the_configured_status_order() {
+        let statuses = [
+            ("DSCI-1", "Resolved"),
+            ("DSCI-2", "Stalled"),
+            ("DSCI-3", "In Team Review"),
+            ("DSCI-4", "Backlog"),
+            ("DSCI-5", "Blocked"),
+            ("DSCI-6", "On Deck"),
+        ];
+        let expected = [
+            "Backlog",
+            "On Deck",
+            "In Team Review",
+            "Stalled",
+            "Blocked",
+            "Closed",
+        ];
+
+        let mut app = my_work_app(&statuses);
+        app.set_status_order(&dsci_statuses());
+        assert_eq!(my_work_group_names(&app), expected);
+
+        let mut app = filters_app(tickets_with_statuses(&statuses));
+        app.set_status_order(&dsci_statuses());
+        let filter_groups: Vec<_> = app
+            .filters_visible_by_status()
+            .iter()
+            .map(|(status, _)| status.as_str().to_string())
+            .collect();
+        assert_eq!(filter_groups, expected);
+
+        let mut app = epics_app(vec![Epic {
+            key: "DSCI-100".to_string(),
+            summary: "Epic".to_string(),
+            children: tickets_with_statuses(&statuses),
+        }]);
+        app.set_status_order(&dsci_statuses());
+        let (_, children) = &app.epics_visible_epics()[0];
+        let child_statuses: Vec<_> = children.iter().map(|t| t.status.as_str()).collect();
+        assert_eq!(child_statuses, expected);
     }
 
     #[test]

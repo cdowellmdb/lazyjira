@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::app::{App, DetailMode};
-use crate::cache::Status;
+use crate::cache::{Status, StatusOrder};
 use crate::move_picker::MovePicker;
 
 fn status_color(status: &Status) -> Color {
@@ -118,19 +118,6 @@ fn truncate(s: &str, max: usize) -> String {
         result
     } else {
         s.to_string()
-    }
-}
-
-fn epic_status_rank(status: &Status) -> usize {
-    match status {
-        Status::InProgress => 0,
-        Status::ReadyForWork => 1,
-        Status::NeedsTriage => 2,
-        Status::ToDo => 3,
-        Status::InReview => 4,
-        Status::Other(_) => 5,
-        Status::Blocked => 6,
-        Status::Closed => 7,
     }
 }
 
@@ -258,7 +245,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
 
     let inner = block.inner(area);
     f.render_widget(block, area);
-    render_epic_view(f, inner, epic, app.detail_scroll);
+    render_epic_view(f, inner, epic, app.status_order(), app.detail_scroll);
 }
 
 fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket, scroll: u16) {
@@ -350,7 +337,13 @@ fn render_view(f: &mut ratatui::Frame, area: Rect, ticket: &crate::cache::Ticket
     f.render_widget(footer, footer_area);
 }
 
-fn render_epic_view(f: &mut ratatui::Frame, area: Rect, epic: &crate::cache::Epic, scroll: u16) {
+fn render_epic_view(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    epic: &crate::cache::Epic,
+    order: &StatusOrder,
+    scroll: u16,
+) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -386,14 +379,11 @@ fn render_epic_view(f: &mut ratatui::Frame, area: Rect, epic: &crate::cache::Epi
         ),
     ]));
 
-    let counts = epic.count_by_status();
-    let mut parts = Vec::new();
-    for status in Status::all() {
-        let count = counts.get(status).copied().unwrap_or(0);
-        if count > 0 {
-            parts.push(format!("{}: {}", status.as_str(), count));
-        }
-    }
+    let mut parts: Vec<String> = order
+        .group(&epic.children)
+        .iter()
+        .map(|(status, tickets)| format!("{}: {}", status.as_str(), tickets.len()))
+        .collect();
     if parts.is_empty() {
         parts.push("No related tickets".to_string());
     }
@@ -411,11 +401,7 @@ fn render_epic_view(f: &mut ratatui::Frame, area: Rect, epic: &crate::cache::Epi
     lines.push(Line::from(""));
 
     let mut children: Vec<_> = epic.children.iter().collect();
-    children.sort_by(|a, b| {
-        epic_status_rank(&a.status)
-            .cmp(&epic_status_rank(&b.status))
-            .then_with(|| a.key.cmp(&b.key))
-    });
+    order.sort_tickets(&mut children);
     if children.is_empty() {
         lines.push(Line::from(Span::styled(
             "(no related tickets)",

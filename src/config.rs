@@ -31,7 +31,8 @@ fn default_done_window_days() -> u32 {
     14
 }
 
-/// Which status names are considered active vs done.
+/// Which status names are considered active vs done. Their order is the order status
+/// groups are shown in: active statuses first, then done.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusConfig {
     #[serde(default = "default_active_statuses")]
@@ -40,12 +41,13 @@ pub struct StatusConfig {
     pub done: Vec<String>,
 }
 
+/// Also the display order of status groups (see `cache::StatusOrder`).
 fn default_active_statuses() -> Vec<String> {
     vec![
-        "Needs Triage".to_string(),
-        "Ready for Work".to_string(),
-        "To Do".to_string(),
         "In Progress".to_string(),
+        "Ready for Work".to_string(),
+        "Needs Triage".to_string(),
+        "To Do".to_string(),
         "In Review".to_string(),
         "Blocked".to_string(),
     ]

@@ -86,7 +86,7 @@ epics_i_care_about = ["AMP-100", "AMP-200"]
 "Bob Jones" = "bob.jones@example.com"
 
 [statuses]
-active = ["Needs Triage", "Ready for Work", "To Do", "In Progress", "In Review", "Blocked"]
+active = ["In Progress", "Ready for Work", "Needs Triage", "To Do", "In Review", "Blocked"]
 done = ["Done", "Closed"]
 
 [[filters]]
@@ -105,7 +105,7 @@ jql = "priority = P1 AND created >= -7d"
 | `jira.done_window_days` | `14` | How many days of recently finished tickets to load. |
 | `jira.epics_i_care_about` | empty (all epics) | Limits the Epics tab to these epics, in this order. Must be in the `[jira]` section. |
 | `team` | you | Display name mapped to Jira email for everyone shown in the Team tab. |
-| `statuses.active`, `statuses.done` | shown above | Status names that count as active or done when loading tickets. |
+| `statuses.active`, `statuses.done` | shown above | Status names that count as active or done when loading tickets. Their order is also the order status groups are shown in My Work, Filters and Epics: active statuses first, then statuses not listed, then done. |
 | `filters` | empty | Saved JQL filters for the Filters tab. |
 
 When you create, edit, or delete a saved filter in the app, lazyjira rewrites this file, and any comments you added are lost.

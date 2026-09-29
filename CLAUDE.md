@@ -44,7 +44,7 @@ The `jira` CLI (`ankitpokhrel/jira-cli`) uses tab-padding for visual alignment i
 List queries use `--plain --no-headers --columns key,status,assignee,summary` for speed. Rich ticket detail (description, labels, assignee, status, epic linkage) comes from `jira issue view KEY --raw`, is cached locally, and is hydrated on startup for fast detail open. Missing details are prefetched in the background.
 
 ### Statuses
-`Status::from_str` maps workflow status names onto the canonical `Status` variants (`Done`/`Closed`/`Resolved` all become `Status::Closed`). Unknown names become `Status::Other` and are grouped after the canonical statuses (`cache::group_by_status`). The `[statuses]` config only controls which statuses the JQL queries load.
+`Status::from_str` maps workflow status names onto the canonical `Status` variants (`Done`/`Closed`/`Resolved` all become `Status::Closed`). Unknown names become `Status::Other`. The `[statuses]` config controls which statuses the JQL queries load, and its order is the one display order for status groups and epic children: `cache::StatusOrder` ranks `active` in config order, then unlisted statuses (first-seen order), then `done`, with `Status::Closed` always last. Get it from `app.status_order()`; don't sort statuses anywhere else.
 
 `Ticket::jira_status` keeps Jira's real status name next to the enum (issue #19 will make it the only one). Read it with `Ticket::status_name()`, which falls back to the enum for caches written before the field existed, and change a status with `Ticket::set_status(name)` so both stay in step. Views still group by the enum.
 
