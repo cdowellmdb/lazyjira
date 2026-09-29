@@ -53,7 +53,7 @@ pub fn render_text_input(lines: &mut Vec<Line>, label: &str, value: &str, focuse
         ),
         Span::styled(
             value.to_string(),
-            Style::default().fg(Color::White).add_modifier(if focused {
+            Style::default().fg(Color::Reset).add_modifier(if focused {
                 Modifier::BOLD
             } else {
                 Modifier::empty()
@@ -86,7 +86,7 @@ pub fn render_picker(
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(Color::Reset)
         };
         lines.push(Line::from(Span::styled(
             format!("  {}{}", prefix, option),

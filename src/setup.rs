@@ -164,7 +164,7 @@ fn render_setup(f: &mut ratatui::Frame, state: &SetupState) {
         Line::from(""),
         Line::from(Span::styled(
             "Welcome! Let's configure lazyjira for your team.",
-            Style::default().fg(Color::White),
+            Style::default().fg(Color::Reset),
         )),
         Line::from(""),
     ];
@@ -176,7 +176,7 @@ fn render_setup(f: &mut ratatui::Frame, state: &SetupState) {
                 Span::styled(
                     &state.project_key,
                     Style::default()
-                        .fg(Color::White)
+                        .fg(Color::Reset)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("_", Style::default().fg(Color::DarkGray)),
@@ -201,7 +201,7 @@ fn render_setup(f: &mut ratatui::Frame, state: &SetupState) {
                 Span::styled(
                     &state.team_name,
                     Style::default()
-                        .fg(Color::White)
+                        .fg(Color::Reset)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("_", Style::default().fg(Color::DarkGray)),

@@ -55,9 +55,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, entries: &[ActivityEntry], scr
             Span::styled(format!("{:<17}", ts), Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{:<20}", entry.author),
-                Style::default().fg(Color::White),
+                Style::default().fg(Color::Reset),
             ),
-            Span::styled(detail, Style::default().fg(Color::Gray)),
+            Span::styled(detail, Style::default().fg(Color::Reset)),
         ]));
     }
 

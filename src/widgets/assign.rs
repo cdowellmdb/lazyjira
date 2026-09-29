@@ -24,7 +24,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(Color::Reset)
         };
         lines.push(Line::from(Span::styled(
             format!("  {}{} ({})", prefix, member.name, member.email),

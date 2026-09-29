@@ -100,7 +100,7 @@ fn render_frame(f: &mut ratatui::Frame, app: &App, key: &str) -> (Rect, Rect) {
         .title(Span::styled(
             format!(" {} ", key),
             Style::default()
-                .fg(Color::White)
+                .fg(Color::Reset)
                 .add_modifier(Modifier::BOLD),
         ));
     if let Some((index, count)) = app.detail_position() {
@@ -226,7 +226,7 @@ fn render_scrollable(
                 .begin_symbol(None)
                 .end_symbol(None)
                 .track_style(muted())
-                .thumb_style(Style::default().fg(Color::Gray)),
+                .thumb_style(Style::default().fg(Color::Reset)),
             frame.inner(Margin {
                 vertical: 1,
                 horizontal: 0,
@@ -249,7 +249,7 @@ fn section(title: &str, width: usize) -> Line<'static> {
         Span::styled(
             title.to_string(),
             Style::default()
-                .fg(Color::White)
+                .fg(Color::Reset)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -276,7 +276,7 @@ fn title_lines(summary: &str, width: usize) -> Vec<Line<'static>> {
         vec![Span::styled(
             summary.to_string(),
             Style::default()
-                .fg(Color::White)
+                .fg(Color::Reset)
                 .add_modifier(Modifier::BOLD),
         )],
         width,
@@ -305,7 +305,7 @@ fn header_lines(ticket: &Ticket, rules: &StatusRules, width: usize) -> Vec<Line<
     );
 
     let assignee = match &ticket.assignee {
-        Some(name) => Span::styled(name.clone(), Style::default().fg(Color::White)),
+        Some(name) => Span::styled(name.clone(), Style::default().fg(Color::Reset)),
         None => Span::styled("Unassigned", muted().add_modifier(Modifier::ITALIC)),
     };
     push_field(&mut lines, "Assignee", vec![assignee], width);
@@ -316,7 +316,7 @@ fn header_lines(ticket: &Ticket, rules: &StatusRules, width: usize) -> Vec<Line<
             "Reporter",
             vec![Span::styled(
                 reporter.clone(),
-                Style::default().fg(Color::White),
+                Style::default().fg(Color::Reset),
             )],
             width,
         );
@@ -330,7 +330,7 @@ fn header_lines(ticket: &Ticket, rules: &StatusRules, width: usize) -> Vec<Line<
         if let Some(name) = &ticket.epic_name {
             value.push(Span::styled(
                 format!(" · {}", name),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(Color::Reset),
             ));
         }
         push_field(&mut lines, "Epic", value, width);
@@ -506,7 +506,7 @@ fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, 
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{:<12}", ticket.key),
-                Style::default().fg(Color::White),
+                Style::default().fg(Color::Reset),
             ),
             Span::styled(
                 format!("{:<15}", truncate(&ticket.status, 14)),
@@ -515,7 +515,7 @@ fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, 
             Span::raw("  "),
             Span::styled(
                 truncate(&ticket.summary, summary_width),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(Color::Reset),
             ),
         ]));
     }
@@ -538,7 +538,7 @@ fn heading(text: String) -> Line<'static> {
     Line::from(Span::styled(
         text,
         Style::default()
-            .fg(Color::White)
+            .fg(Color::Reset)
             .add_modifier(Modifier::BOLD),
     ))
 }
@@ -646,7 +646,7 @@ fn render_resolution_picker(
         let name = choice.as_ref().map_or("No resolution", |r| r.name.as_str());
         lines.push(Line::from(Span::styled(
             format!("{}{}", prefix, name),
-            option_style(Color::White, i == selected),
+            option_style(Color::Reset, i == selected),
         )));
     }
     render_with_footer(

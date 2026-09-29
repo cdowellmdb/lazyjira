@@ -57,7 +57,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let visible_epics = app.epics_visible_epics();
     let (key_w, status_w, summary_w) = child_column_widths(area);
     let heading_style = Style::default()
-        .fg(Color::Gray)
+        .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
