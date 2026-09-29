@@ -59,8 +59,8 @@ Each issue type has its own workflow, and a transition's name can differ from th
 ### Moves wait for Jira
 A single-ticket move changes the ticket only after Jira reports success (`BackgroundMessage::TicketMoved`); a failure keeps the status and shows the error until dismissed. Every Jira read (detail fetch, cache/epics refresh, filter query) carries `requested_at = app.moves.now()`. Reads requested before a ticket's latest confirmed move must not overwrite its status: use `App::enrich_ticket(key, requested_at, detail)`, `App::replace_cache(cache, requested_at)` or `App::reapply_moves_since` rather than writing statuses directly.
 
-### View/state ordering must match
-The team view sorts members by active ticket count (most active first). Any code that maps `selected_index` to a ticket key (in `app.rs`) MUST use the same sort order as the view renderer. Use `app.sorted_team_members()` for this.
+### Visible rows
+App's grouped view methods return `VisibleGroup` values with header metadata, totals, and occurrence indices. Collapsed groups retain their header and totals but have no ticket rows. Navigation and renderers use these same groups; renderers compare supplied indices with `selected_index`. Keep tab-specific formatting in `views/`. Team members are ordered by active ticket count (most active first), with active tickets before done tickets.
 
 ### Current UX behavior
 - Team view includes the current user (if not in the `[team]` config, inferred from `jira me` email).

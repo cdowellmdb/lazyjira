@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::app::{App, Tab};
+use crate::app::App;
 use crate::views::common::{group_marker, status_color, truncate};
 
 fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
@@ -54,11 +54,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut item_idx: usize = 0;
     let mut selected_visual_line: Option<usize> = None;
     let mut has_rows = false;
 
-    for (status, tickets) in &grouped {
+    for group in &grouped {
+        let status = &group.header;
         if !has_rows {
             let header_w = 2 + key_w + 3 + summary_w + 3 + epic_w + 3 + labels_w;
             lines.push(Line::from(vec![
@@ -77,15 +77,15 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             lines.push(Line::from(""));
         }
 
-        let total_count = tickets.len();
+        let total_count = group.total;
         has_rows = true;
 
-        let collapsed = app.is_collapsed(Tab::MyWork, status.as_str());
+        let collapsed = group.tickets.is_none();
         let indicator = if collapsed { ">" } else { "v" };
         let marker = group_marker(app.group_selection_state(status.as_str()));
 
         // Status header
-        let is_header_selected = item_idx == app.selected_index;
+        let is_header_selected = group.index == app.selected_index;
         if is_header_selected {
             selected_visual_line = Some(lines.len());
         }
@@ -107,16 +107,15 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD)
         };
         lines.push(Line::from(Span::styled(header, header_style)));
-        item_idx += 1;
 
-        if collapsed {
+        let Some(tickets) = &group.tickets else {
             lines.push(Line::from(""));
             continue;
-        }
+        };
 
         // Ticket rows
-        for ticket in tickets {
-            let is_selected = item_idx == app.selected_index;
+        for (index, ticket) in tickets {
+            let is_selected = *index == app.selected_index;
             if is_selected {
                 selected_visual_line = Some(lines.len());
             }
@@ -168,8 +167,6 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     },
                 ),
             ]));
-
-            item_idx += 1;
         }
 
         // Blank line between groups

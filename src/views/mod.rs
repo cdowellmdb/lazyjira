@@ -4,3 +4,121 @@ pub mod filters;
 pub mod my_work;
 pub mod team;
 pub mod unassigned;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{App, FilterFocus, Tab, VisibleItem};
+    use crate::cache::{Epic, TeamMember, Ticket};
+    use ratatui::{backend::TestBackend, style::Color, Terminal};
+
+    #[test]
+    fn rendered_selection_matches_navigation_across_tabs_and_collapsed_groups() {
+        let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        for &tab in Tab::all() {
+            for search in [None, Some("needle")] {
+                for collapse in [false, true] {
+                    let mut app = App::new();
+                    app.active_tab = tab;
+                    app.loading = false;
+                    app.show_done = true;
+                    app.filter_focus = FilterFocus::Results;
+                    app.search = search.map(String::from);
+                    let mut active = Ticket::for_test("DEMO-1", "In Progress");
+                    active.labels = vec!["needle".into()];
+                    active.assignee = Some("Alex".into());
+                    active.assignee_email = Some("alex@example.com".into());
+                    let mut done = active.clone();
+                    done.key = "DEMO-2".into();
+                    done.status = "Done".into();
+                    let other = Ticket::for_test("DEMO-3", "To Do");
+                    let mut unassigned = active.clone();
+                    unassigned.key = "DEMO-4".into();
+                    unassigned.assignee = Some("Unassigned".into());
+                    unassigned.assignee_email = Some("__unassigned__".into());
+                    app.cache.my_tickets = vec![active.clone(), done.clone(), other.clone()];
+                    app.filter_results = app.cache.my_tickets.clone();
+                    app.cache.team_tickets = vec![active.clone(), done.clone(), unassigned];
+                    app.cache.team_members = vec![TeamMember {
+                        name: "Alex".into(),
+                        email: "alex@example.com".into(),
+                    }];
+                    // The same key in two groups must highlight only one occurrence.
+                    app.cache.epics = vec![
+                        Epic {
+                            key: "DEMO-100".into(),
+                            summary: "First epic".into(),
+                            children: vec![active.clone(), done],
+                        },
+                        Epic {
+                            key: "DEMO-200".into(),
+                            summary: "Second epic".into(),
+                            children: vec![active, other],
+                        },
+                    ];
+                    if collapse {
+                        let group = app.selected_header_group_id().unwrap();
+                        app.toggle_group_collapse(&group);
+                    }
+
+                    for index in 0..app.item_count() {
+                        app.selected_index = index;
+                        let selected = app.selected_item().unwrap();
+                        let mut terminal = Terminal::new(TestBackend::new(160, 60)).unwrap();
+                        terminal
+                            .draw(|frame| {
+                                let area = frame.area();
+                                match tab {
+                                    Tab::MyWork => my_work::render(frame, area, &app),
+                                    Tab::Team => team::render(frame, area, &app),
+                                    Tab::Epics => epics::render(frame, area, &app),
+                                    Tab::Unassigned => unassigned::render(frame, area, &app),
+                                    Tab::Filters => filters::render(frame, area, &app, &config),
+                                }
+                            })
+                            .unwrap();
+                        let buffer = terminal.backend().buffer();
+                        let mut highlighted = Vec::new();
+                        let mut text = String::new();
+                        for y in 0..60 {
+                            let mut row = String::new();
+                            for x in 0..160 {
+                                let cell = &buffer[(x, y)];
+                                text.push_str(cell.symbol());
+                                if cell.bg == Color::DarkGray {
+                                    row.push_str(cell.symbol());
+                                }
+                            }
+                            if !row.trim().is_empty() {
+                                highlighted.push(row);
+                            }
+                        }
+                        let expected = match selected {
+                            VisibleItem::Ticket(key) => {
+                                assert_eq!(
+                                    highlighted.len(),
+                                    1,
+                                    "{tab:?}, row {index}: {highlighted:?}"
+                                );
+                                key
+                            }
+                            VisibleItem::GroupHeader(id) => match tab {
+                                Tab::Team => "Alex".into(),
+                                Tab::Unassigned => "No Epic".into(),
+                                _ => id,
+                            },
+                        };
+                        assert!(highlighted.iter().any(|row| row.to_uppercase().contains(&expected.to_uppercase())),
+                            "{tab:?}, search {search:?}, collapse {collapse}, row {index}: expected {expected}, got {highlighted:?}");
+                        if tab == Tab::Team {
+                            assert!(text.contains("active: 1  done: 1"));
+                            if !collapse {
+                                assert!(text.contains("done (1)"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

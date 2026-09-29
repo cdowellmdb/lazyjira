@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::app::{App, FilterFocus, Tab};
+use crate::app::{App, FilterFocus};
 use crate::views::common::{group_marker, status_color, truncate};
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -121,24 +121,24 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
         )));
         lines.push(Line::from(""));
 
-        let mut item_idx = 0usize;
-        for (status, tickets) in app.filters_visible_by_status() {
-            let is_header_selected = results_focused && item_idx == app.selected_index;
+        for group in app.filters_visible_by_status() {
+            let status = &group.header;
+            let is_header_selected = results_focused && group.index == app.selected_index;
             if is_header_selected {
                 selected_visual_line = Some(lines.len());
             }
 
-            let collapsed = app.is_collapsed(Tab::Filters, status.as_str());
+            let collapsed = group.tickets.is_none();
             let indicator = if collapsed { ">" } else { "v" };
             let marker = group_marker(app.group_selection_state(status.as_str()));
             let header_style = if is_header_selected {
                 Style::default()
-                    .fg(status_color(&status, app.status_rules()))
+                    .fg(status_color(status, app.status_rules()))
                     .add_modifier(Modifier::BOLD)
                     .bg(Color::DarkGray)
             } else {
                 Style::default()
-                    .fg(status_color(&status, app.status_rules()))
+                    .fg(status_color(status, app.status_rules()))
                     .add_modifier(Modifier::BOLD)
             };
 
@@ -148,19 +148,18 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     marker,
                     indicator,
                     status.as_str().to_uppercase(),
-                    tickets.len()
+                    group.total
                 ),
                 header_style,
             )));
-            item_idx += 1;
 
-            if collapsed {
+            let Some(tickets) = &group.tickets else {
                 lines.push(Line::from(""));
                 continue;
-            }
+            };
 
-            for ticket in tickets {
-                let is_selected = results_focused && item_idx == app.selected_index;
+            for (index, ticket) in tickets {
+                let is_selected = results_focused && *index == app.selected_index;
                 if is_selected {
                     selected_visual_line = Some(lines.len());
                 }
@@ -201,7 +200,6 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         base,
                     ),
                 ]));
-                item_idx += 1;
             }
 
             lines.push(Line::from(""));
