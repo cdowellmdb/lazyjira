@@ -164,9 +164,17 @@ def issue_view(key):
         {
             "created": "2026-09-22T13:30:00.000+0000",
             "author": person(reporter),
-            "body": "Looping in design for the edge cases before we ship.",
+            "body": "Looping in design for the edge cases before we ship. (/) Spec is approved.",
         }
     ]
+    if t["assignee"]:
+        comments.append(
+            {
+                "created": "2026-09-24T17:05:00.000+0000",
+                "author": person(t["assignee"]),
+                "body": "Draft PR is up. *Tests pass locally*; waiting on {{staging}} to deploy.",
+            }
+        )
     payload = {
         "key": t["key"],
         "fields": {
@@ -175,11 +183,21 @@ def issue_view(key):
             "assignee": person(t["assignee"]),
             "reporter": person(reporter),
             "description": (
-                f"{t['summary']}.\n\n"
-                "Acceptance criteria:\n"
-                "- Behavior is covered by automated tests\n"
-                "- Metrics dashboard shows no regressions\n"
-                "- Docs updated if user-facing"
+                "h2. Context\n"
+                f"{t['summary']}. Customers hit this during *peak checkout traffic*; "
+                "see the [incident review|https://example.com/wiki/INC-42] for details.\n\n"
+                "h3. Acceptance criteria\n"
+                "# Behavior is covered by automated tests\n"
+                "# Metrics dashboard shows _no regressions_\n"
+                "# Docs updated if user-facing\n\n"
+                "h3. Rollout\n"
+                "||Stage||Traffic||Owner||\n"
+                "|Canary|5%|[~priya.shah]|\n"
+                "|General|100%|[~alex.rivera]|\n\n"
+                "{code:bash}\n"
+                "make test && make deploy ENV=staging\n"
+                "{code}\n\n"
+                "(!) Coordinate with the {{payments}} team before enabling in production."
             ),
             "labels": t["labels"],
             "parent": {"key": t["epic"]} if t["epic"] else None,
