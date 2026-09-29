@@ -53,10 +53,10 @@ fn render_sidebar(
                     .bg(Color::DarkGray)
             } else if is_selected {
                 Style::default()
-                    .fg(Color::White)
+                    .fg(Color::Reset)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(Color::Reset)
             };
 
             lines.push(Line::from(Span::styled(
@@ -103,7 +103,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let summary_w = inner.saturating_sub(fixed).max(12);
 
         let heading_style = Style::default()
-            .fg(Color::Gray)
+            .fg(Color::Reset)
             .add_modifier(Modifier::BOLD);
 
         lines.push(Line::from(vec![

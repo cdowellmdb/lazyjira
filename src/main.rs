@@ -958,7 +958,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
             Tab::Unassigned => 3,
             Tab::Filters => 4,
         })
-        .style(Style::default().fg(Color::Gray))
+        .style(Style::default().fg(Color::Reset))
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)

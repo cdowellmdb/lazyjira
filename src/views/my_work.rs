@@ -50,7 +50,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.my_work_visible_by_status();
     let (key_w, summary_w, epic_w, labels_w) = my_work_column_widths(area);
     let heading_style = Style::default()
-        .fg(Color::Gray)
+        .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();

@@ -14,7 +14,7 @@ fn render_option(lines: &mut Vec<Line>, label: &str, selected: bool) {
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::Gray)
+        Style::default().fg(Color::Reset)
     };
     lines.push(Line::from(Span::styled(
         format!("{}{}", prefix, label),

@@ -10,10 +10,10 @@ pub fn status_color(status: &str, rules: &StatusRules) -> Color {
         return Color::Green;
     }
     match Status::from_str(status) {
-        Status::NeedsTriage => Color::White,
+        Status::NeedsTriage => Color::Reset,
         Status::ReadyForWork => Color::Blue,
         Status::InProgress => Color::Yellow,
-        Status::ToDo => Color::White,
+        Status::ToDo => Color::Reset,
         Status::InReview => Color::Cyan,
         Status::Blocked => Color::Red,
         Status::Closed => Color::Green,

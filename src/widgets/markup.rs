@@ -6,15 +6,14 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
-const TEXT: Color = Color::Gray;
-const MUTED: Color = Color::DarkGray;
-
+// Plain text uses the terminal's own foreground, so it reads in light and
+// dark themes alike.
 fn text_style() -> Style {
-    Style::default().fg(TEXT)
+    Style::default().fg(Color::Reset)
 }
 
 fn muted() -> Style {
-    Style::default().fg(MUTED)
+    Style::default().fg(Color::DarkGray)
 }
 
 fn link_style() -> Style {
@@ -177,7 +176,7 @@ impl Renderer {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
             _ => Style::default()
-                .fg(Color::White)
+                .fg(Color::Reset)
                 .add_modifier(Modifier::BOLD),
         };
         self.push_wrapped(vec![], vec![], inline(text, style));
@@ -221,7 +220,7 @@ impl Renderer {
         let gutter = vec![Span::styled("│ ", muted())];
         let content = vec![Span::styled(
             text.to_string(),
-            Style::default().fg(Color::White),
+            Style::default().fg(Color::Reset),
         )];
         self.push_wrapped(gutter.clone(), gutter, content);
     }
@@ -235,7 +234,7 @@ impl Renderer {
                     .map(|(header, cell)| {
                         let style = if header {
                             Style::default()
-                                .fg(Color::White)
+                                .fg(Color::Reset)
                                 .add_modifier(Modifier::BOLD)
                         } else {
                             text_style()
@@ -595,11 +594,7 @@ impl Inline<'_> {
             let code: String = self.chars[i + 1..end].iter().collect();
             self.emit(code, mono_style(self.style));
         } else {
-            let mut style = self.style.add_modifier(modifier);
-            if c == '*' && self.style.fg == Some(TEXT) {
-                style = style.fg(Color::White);
-            }
-            self.nested(i + 1, end, style);
+            self.nested(i + 1, end, self.style.add_modifier(modifier));
         }
         Some(end + 1)
     }
@@ -681,7 +676,7 @@ fn parse_color(name: &str) -> Option<Color> {
         "yellow" | "orange" => Color::Yellow,
         "purple" | "magenta" => Color::Magenta,
         "cyan" | "teal" => Color::Cyan,
-        "white" => Color::White,
+        "white" => Color::Reset,
         "gray" | "grey" => Color::DarkGray,
         _ => return None,
     })
