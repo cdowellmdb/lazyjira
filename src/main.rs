@@ -891,6 +891,27 @@ fn format_age_minutes(age_secs: u64) -> String {
     }
 }
 
+fn shortcut_hints(text: &str) -> ratatui::text::Line<'static> {
+    use ratatui::style::{Color, Style};
+    use ratatui::text::{Line, Span};
+
+    let muted = Style::default().fg(Color::DarkGray);
+    let mut spans = Vec::new();
+    // Hints use "key: label"; status indicators use "name:value".
+    for hint in text.split_inclusive("  ") {
+        if let Some((key, label)) = hint.split_once(": ") {
+            spans.push(Span::styled(
+                key.to_string(),
+                Style::default().fg(Color::Cyan),
+            ));
+            spans.push(Span::styled(format!(": {}", label), muted));
+        } else {
+            spans.push(Span::styled(hint.to_string(), muted));
+        }
+    }
+    Line::from(spans)
+}
+
 fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::style::{Color, Modifier, Style};
@@ -941,12 +962,18 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     }
 
     // Status bar
-    let status_text = if let Some(ref flash) = app.flash {
-        Span::styled(flash.as_str(), Style::default().fg(Color::Red))
+    let status_line = if let Some(ref flash) = app.flash {
+        Line::from(Span::styled(
+            flash.as_str(),
+            Style::default().fg(Color::Red),
+        ))
     } else if let Some(ref search) = app.search {
-        Span::styled(format!("/{}", search), Style::default().fg(Color::Yellow))
+        Line::from(Span::styled(
+            format!("/{}", search),
+            Style::default().fg(Color::Yellow),
+        ))
     } else if let Some(pending) = app.moves.pending_message() {
-        Span::styled(pending, Style::default().fg(Color::Yellow))
+        Line::from(Span::styled(pending, Style::default().fg(Color::Yellow)))
     } else {
         let selected_count = app.selected_ticket_count();
         if app.active_tab == Tab::Filters {
@@ -954,13 +981,10 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
                 FilterFocus::Sidebar => "sidebar",
                 FilterFocus::Results => "results",
             };
-            Span::styled(
-                format!(
+            shortcut_hints(&format!(
                     " j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  z/Z: fold  sel:{}  Tab/S-Tab: switch pane({})  Enter: run/open  n: new  e: edit  x: delete  ?: keys  q: quit ",
                     selected_count, pane
-                ),
-                Style::default().fg(Color::DarkGray),
-            )
+                ))
         } else {
             let done_state = if app.show_done { "on" } else { "off" };
             let epic_state = if app.epics_refreshing {
@@ -978,19 +1002,13 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
                 .map(|age| format!("stale {}", format_age_minutes(age)))
                 .unwrap_or_else(|| "fresh".to_string());
             let focus_state = app.status_focus.as_deref().unwrap_or("all");
-            Span::styled(
-                format!(
+            shortcut_hints(&format!(
                     " Tab: switch  j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  sel:{}  Enter: detail  z: fold  d: done({})  f/F: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
                     selected_count, done_state, focus_state, ticket_state, freshness_state, epic_state
-                ),
-                Style::default().fg(Color::DarkGray),
-            )
+                ))
         }
     };
-    f.render_widget(
-        ratatui::widgets::Paragraph::new(Line::from(status_text)),
-        chunks[2],
-    );
+    f.render_widget(ratatui::widgets::Paragraph::new(status_line), chunks[2]);
 
     // Detail overlay
     if app.is_detail_open() {
@@ -1018,7 +1036,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         widgets::bulk_upload::render(f, app);
     }
     if app.show_keybindings {
-        widgets::keybindings_help::render(f);
+        widgets::keybindings_help::render(f, app);
     }
     widgets::move_failure::render(f, app.moves.failures());
 }
@@ -1056,8 +1074,26 @@ fn render_filter_edit_modal(f: &mut ratatui::Frame, app: &App) {
 }
 
 fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
+    let scroll = app.keybindings_scroll.min(app.keybindings_scroll_max.get());
+    let page = app.keybindings_page_height.get();
     match key {
         KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => app.close_keybindings(),
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.keybindings_scroll = scroll
+                .saturating_add(1)
+                .min(app.keybindings_scroll_max.get());
+        }
+        KeyCode::Up | KeyCode::Char('k') => app.keybindings_scroll = scroll.saturating_sub(1),
+        KeyCode::PageDown | KeyCode::Char(' ') => {
+            app.keybindings_scroll = scroll
+                .saturating_add(page)
+                .min(app.keybindings_scroll_max.get());
+        }
+        KeyCode::PageUp => app.keybindings_scroll = scroll.saturating_sub(page),
+        KeyCode::Home | KeyCode::Char('g') => app.keybindings_scroll = 0,
+        KeyCode::End | KeyCode::Char('G') => {
+            app.keybindings_scroll = app.keybindings_scroll_max.get();
+        }
         _ => {}
     }
 }
@@ -2009,6 +2045,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn main_footer_highlights_shortcuts_and_keeps_status_indicators_muted() {
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Color;
+
+        let mut app = App::new();
+        app.ticket_sync_stage = Some(TicketSyncStage::Full);
+        app.cache_stale_age_secs = Some(180);
+        app.epics_refreshing = true;
+        app.status_focus = Some("In Progress".to_string());
+        let mut terminal = Terminal::new(TestBackend::new(300, 12)).unwrap();
+
+        for tab in Tab::all() {
+            app.active_tab = *tab;
+            terminal.draw(|f| ui(f, &app, &sample_config())).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text: String = (0..300).map(|x| buffer[(x, 11)].symbol()).collect();
+            let mut expected = vec![
+                ("j/k", Color::Cyan),
+                ("Space", Color::Cyan),
+                ("Enter", Color::Cyan),
+                ("q: quit", Color::Cyan),
+                ("navigate", Color::DarkGray),
+                ("sel:0", Color::DarkGray),
+            ];
+            if *tab == Tab::Filters {
+                expected.extend([("Tab/S-Tab", Color::Cyan), ("z/Z", Color::Cyan)]);
+            } else {
+                expected.extend([
+                    ("Tab", Color::Cyan),
+                    ("f/F", Color::Cyan),
+                    ("focus(In Progress)", Color::DarkGray),
+                    ("t:sync-full", Color::DarkGray),
+                    ("c:stale 3m", Color::DarkGray),
+                    ("e:syncing", Color::DarkGray),
+                ]);
+            }
+            for (token, color) in expected {
+                let x = text
+                    .find(token)
+                    .unwrap_or_else(|| panic!("missing {token}: {text}"));
+                assert_eq!(buffer[(x as u16, 11)].fg, color, "{token}");
+            }
+        }
+    }
+
     fn ticket(key: &str, summary: &str, status: &str) -> crate::cache::Ticket {
         crate::cache::Ticket {
             key: key.to_string(),
@@ -2043,6 +2125,74 @@ mod tests {
         )
         .await;
         assert_eq!(app.selected_index, 1);
+    }
+
+    #[test]
+    fn keybindings_help_adapts_scrolls_and_keeps_close_visible() {
+        use ratatui::backend::TestBackend;
+        use ratatui::buffer::Buffer;
+        use ratatui::style::Color;
+
+        fn draw(app: &App, width: u16, height: u16) -> (Buffer, Vec<String>) {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|f| ui(f, app, &sample_config())).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let lines = (0..height)
+                .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            (buffer, lines)
+        }
+
+        let mut app = App::new();
+        app.toggle_keybindings();
+        let (buffer, wide) = draw(&app, 160, 55);
+        let heading = wide
+            .iter()
+            .position(|line| line.contains("Navigation"))
+            .unwrap();
+        assert!(
+            wide[heading].contains("Detail navigation"),
+            "two columns on wide terminals"
+        );
+        assert!(wide
+            .iter()
+            .any(|line| line.contains("New / edit / delete filter")));
+        assert!(wide.iter().any(|line| line.contains("Esc/? close")));
+        assert_eq!(app.keybindings_scroll_max.get(), 0);
+        let key_row = wide
+            .iter()
+            .position(|line| line.contains("Next tab"))
+            .unwrap();
+        let key_x = wide[key_row].find("Tab").unwrap();
+        assert_eq!(buffer[(key_x as u16, key_row as u16)].fg, Color::Cyan);
+
+        for width in [80, 40] {
+            let (_, lines) = draw(&app, width, 24);
+            assert!(app.keybindings_scroll_max.get() > 0);
+            assert!(lines.iter().any(|line| line.contains("Esc/? close")));
+            handle_keybindings_keys(&mut app, KeyCode::PageDown);
+            assert_eq!(app.keybindings_scroll, app.keybindings_page_height.get());
+            handle_keybindings_keys(&mut app, KeyCode::End);
+            let (_, bottom) = draw(&app, width, 24);
+            assert!(bottom
+                .iter()
+                .any(|line| line.contains("New / edit / delete filter")));
+            assert!(bottom.iter().any(|line| line.contains("Esc/? close")));
+            handle_keybindings_keys(&mut app, KeyCode::Home);
+        }
+        handle_keybindings_keys(&mut app, KeyCode::Down);
+        assert_eq!(app.keybindings_scroll, 1);
+        handle_keybindings_keys(&mut app, KeyCode::Up);
+        assert_eq!(app.keybindings_scroll, 0);
+        handle_keybindings_keys(&mut app, KeyCode::End);
+        draw(&app, 160, 55); // Resizing clamps a stale scroll offset.
+        handle_keybindings_keys(&mut app, KeyCode::Down);
+        assert_eq!(app.keybindings_scroll, 0);
+        handle_keybindings_keys(&mut app, KeyCode::Esc);
+        assert!(!app.show_keybindings);
+        app.toggle_keybindings();
+        assert_eq!(app.keybindings_scroll, 0);
+        draw(&app, 8, 4); // Tiny terminals must not panic.
     }
 
     #[test]

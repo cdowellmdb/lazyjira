@@ -263,6 +263,9 @@ pub struct App {
     pub cache_stale_age_secs: Option<u64>,
     /// Whether the keybindings overlay is visible.
     pub show_keybindings: bool,
+    pub keybindings_scroll: u16,
+    pub keybindings_scroll_max: Cell<u16>,
+    pub keybindings_page_height: Cell<u16>,
     /// Ticket keys currently being fetched for rich detail.
     detail_fetching: HashSet<String>,
     /// Why the last detail fetch failed, by ticket key.
@@ -334,6 +337,9 @@ impl App {
             ticket_sync_stage: None,
             cache_stale_age_secs: None,
             show_keybindings: false,
+            keybindings_scroll: 0,
+            keybindings_scroll_max: Cell::new(0),
+            keybindings_page_height: Cell::new(1),
             detail_fetching: HashSet::new(),
             detail_fetch_errors: HashMap::new(),
             moves: crate::moves::MoveTracker::default(),
@@ -913,6 +919,7 @@ impl App {
 
     pub fn toggle_keybindings(&mut self) {
         self.show_keybindings = !self.show_keybindings;
+        self.keybindings_scroll = 0;
     }
 
     pub fn close_keybindings(&mut self) {

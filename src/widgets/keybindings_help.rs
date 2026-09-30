@@ -1,125 +1,220 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
+use crate::app::App;
+use crate::widgets::{form, markup};
 
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
+// An empty key marks a section heading.
+const MAIN: &[(&str, &str)] = &[
+    ("", "Navigation"),
+    ("Tab", "Next tab"),
+    ("j/k · ↑/↓", "Move selection"),
+    ("Enter", "Open ticket or epic"),
+    ("z / Z", "Fold group / all groups"),
+    ("?", "Keyboard shortcuts"),
+    ("q", "Quit lazyjira"),
+    ("", "Selection & bulk actions"),
+    ("Space", "Mark ticket or group"),
+    ("A / u", "Select all / clear selection"),
+    ("B", "Move or assign selected tickets"),
+    ("U", "Upload tickets from CSV"),
+    ("", "Search & filtering"),
+    ("/", "Search tickets, labels, or people"),
+    ("↑/↓ · Ctrl+j/k", "Navigate while searching"),
+    ("Esc", "Leave search"),
+    ("", "Status filters · My Work & Team"),
+    ("d", "Show / hide done tickets"),
+    ("f / F", "Next / previous status focus"),
+    ("", "Create & refresh"),
+    ("c", "Create ticket"),
+    ("r", "Refresh tickets"),
+];
+
+const DETAIL: &[(&str, &str)] = &[
+    ("", "Detail navigation"),
+    ("j/k · ↑/↓", "Scroll"),
+    ("PgUp/PgDn", "Scroll a page (Space: next)"),
+    ("g/G · Home/End", "Jump to top / bottom"),
+    ("[ / ]", "Previous / next ticket"),
+    ("z", "Toggle full screen"),
+    ("o", "Open in browser"),
+    ("Esc", "Close detail / go back"),
+    ("", "Ticket actions"),
+    ("m", "Move ticket"),
+    ("C", "Add comment"),
+    ("a", "Assign ticket"),
+    ("e", "Edit summary & labels"),
+    ("h", "Activity history"),
+    ("", "Move picker"),
+    ("j/k · ↑/↓", "Choose transition"),
+    ("p/w/n/t/v/b/c", "Pick destination by status"),
+    ("Shift+key", "Move immediately"),
+    ("Enter / y", "Select / confirm move"),
+    ("Esc", "Cancel / go back"),
+    ("o", "Open ticket after a failed move"),
+    ("", "Filters tab"),
+    ("j / k", "Navigate filters or results"),
+    ("Tab / S-Tab", "Results or next tab / sidebar"),
+    ("Enter", "Run filter / open result"),
+    ("Space · A/u · B", "Mark / select / bulk (results)"),
+    ("z / Z", "Fold status / all statuses"),
+    ("U", "Upload tickets from CSV"),
+    ("n / e / x", "New / edit / delete filter"),
+];
+
+fn rows(bindings: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let key_width = if width >= 40 { 17 } else { 0 };
+    for &(key, label) in bindings {
+        if key.is_empty() {
+            if !lines.is_empty() {
+                lines.push(Line::default());
+            }
+            lines.extend(markup::wrap(
+                vec![],
+                vec![],
+                vec![Span::styled(
+                    label.to_string(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )],
+                width as usize,
+            ));
+        } else {
+            let key = Span::styled(
+                format!("{key:<key_width$}"),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
+            if key_width == 0 {
+                lines.extend(markup::wrap(
+                    vec![],
+                    vec![],
+                    vec![key.clone()],
+                    width as usize,
+                ));
+            }
+            lines.extend(markup::wrap(
+                if key_width > 0 { vec![key] } else { vec![] },
+                vec![Span::raw(" ".repeat(key_width))],
+                vec![Span::styled(
+                    label.to_string(),
+                    Style::default().fg(Color::Reset),
+                )],
+                width as usize,
+            ));
+        }
+    }
+    lines
 }
 
-pub fn render(f: &mut ratatui::Frame) {
-    let area = centered_rect(64, 66, f.area());
+pub fn render(f: &mut ratatui::Frame, app: &App) {
+    let available = form::centered_rect(92, 90, f.area());
+    let width = available.width.min(128);
+    let inner_width = width.saturating_sub(6);
+    let wide = inner_width >= 110;
+    let column_width = if wide {
+        (inner_width - 4) / 2
+    } else {
+        inner_width
+    };
+    let mut left = rows(MAIN, column_width);
+    let right = rows(DETAIL, column_width);
+    let columns = if wide {
+        vec![left, right]
+    } else {
+        left.push(Line::default());
+        left.extend(right);
+        vec![left]
+    };
+    let count = columns.iter().map(Vec::len).max().unwrap_or(0);
+    let height = available.height.min(count as u16 + 6);
+    let area = Rect {
+        x: f.area().x + (f.area().width - width) / 2,
+        y: f.area().y + (f.area().height - height) / 2,
+        width,
+        height,
+    };
     f.render_widget(Clear, area);
-
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
-        .title(" Keybindings ");
+        .padding(Padding::new(2, 2, 1, 0))
+        .title(Span::styled(
+            " Keyboard shortcuts ",
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
     let inner = block.inner(area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(inner);
+    let max = count.saturating_sub(chunks[0].height as usize) as u16;
+    let scroll = app.keybindings_scroll.min(max);
+    app.keybindings_scroll_max.set(max);
+    app.keybindings_page_height.set(chunks[0].height.max(1));
+    if max > 0 {
+        block = block.title(
+            Line::from(Span::styled(
+                format!(
+                    " {}–{} / {} ",
+                    scroll + 1,
+                    (scroll + chunks[0].height).min(count as u16),
+                    count
+                ),
+                Style::default().fg(Color::DarkGray),
+            ))
+            .right_aligned(),
+        );
+    }
     f.render_widget(block, area);
-
-    let lines = vec![
-        Line::from(Span::styled(
-            "Navigation",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  Tab: switch tab"),
-        Line::from("  j / k or Up / Down: move selection"),
-        Line::from("  Space: toggle ticket or group selection"),
-        Line::from("  A: select all visible tickets"),
-        Line::from("  u: clear selected tickets"),
-        Line::from("  B: open bulk actions (move/assign)"),
-        Line::from("  U: open bulk CSV upload"),
-        Line::from("  Enter: open detail (ticket or epic)"),
-        Line::from("  z: fold/unfold group"),
-        Line::from("  Z: fold/unfold all groups"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Filtering (My Work + Team)",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  d: toggle Done tickets"),
-        Line::from("  f / F: focus the next / previous status (then all)"),
-        Line::from("  /: search (tickets, labels, and team member names)"),
-        Line::from("  (while searching) Up/Down or Ctrl+j/Ctrl+k: navigate"),
-        Line::from("  Unassigned tab: tickets are grouped by epic"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Actions",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  c: create ticket"),
-        Line::from("  U: bulk upload tickets from CSV"),
-        Line::from("  r: refresh tickets"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Detail View",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  Esc: close detail"),
-        Line::from("  Up / Down or j / k: scroll detail"),
-        Line::from("  PgUp / PgDn or Space: scroll a page"),
-        Line::from("  g / G or Home / End: jump to top / bottom"),
-        Line::from("  [ / ]: previous / next ticket in the list"),
-        Line::from("  z: zoom detail to full screen"),
-        Line::from("  o: open ticket in browser"),
-        Line::from("  m: move ticket"),
-        Line::from("  C: add comment"),
-        Line::from("  a: assign/reassign ticket"),
-        Line::from("  e: edit summary and labels"),
-        Line::from("  h: view activity history"),
-        Line::from("  (in move picker) j/k or Up/Down: choose a transition"),
-        Line::from("  (in move picker) p/w/n/t/v/b/c: pick the transition to that status"),
-        Line::from("  (in move picker) Shift+key: move immediately"),
-        Line::from("  (in move picker) Enter or y: confirm pending move"),
-        Line::from("  (in Move failed popup) o: open the ticket in the browser"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Filters Tab",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  j / k: navigate filters or results"),
-        Line::from("  Tab: switch to results / next tab"),
-        Line::from("  Shift+Tab: switch back to sidebar"),
-        Line::from("  Enter: run filter (sidebar) / open ticket (results)"),
-        Line::from("  Space/A/u/B: select + bulk actions (results pane)"),
-        Line::from("  z / Z: fold current status / fold all statuses"),
-        Line::from("  U: open bulk CSV upload"),
-        Line::from("  n: new filter"),
-        Line::from("  e: edit selected filter"),
-        Line::from("  x: delete selected filter"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press ? or Esc to close",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
-
-    let body = Paragraph::new(lines).block(Block::default());
-    f.render_widget(body, inner);
+    let column_areas = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(if wide {
+            vec![
+                Constraint::Length(column_width),
+                Constraint::Length(4),
+                Constraint::Min(0),
+            ]
+        } else {
+            vec![Constraint::Min(0)]
+        })
+        .split(chunks[0]);
+    for (i, lines) in columns.into_iter().enumerate() {
+        f.render_widget(
+            Paragraph::new(lines).scroll((scroll, 0)),
+            column_areas[i * 2],
+        );
+    }
+    let mut footer = vec![Line::from(Span::styled(
+        "─".repeat(inner.width as usize),
+        Style::default().fg(Color::DarkGray),
+    ))];
+    footer.extend(markup::wrap(
+        vec![],
+        vec![],
+        vec![
+            Span::styled(
+                if max == 0 {
+                    ""
+                } else if inner.width >= 60 {
+                    "↑↓/j/k · PgUp/PgDn "
+                } else {
+                    "↑↓ "
+                },
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::styled(
+                if max > 0 { "scroll   " } else { "" },
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled("Esc/?", Style::default().fg(Color::Cyan)),
+            Span::styled(" close", Style::default().fg(Color::DarkGray)),
+        ],
+        inner.width as usize,
+    ));
+    f.render_widget(Paragraph::new(footer), chunks[1]);
 }
