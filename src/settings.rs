@@ -144,7 +144,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let Some(state) = &app.settings else {
         return;
     };
-    let inner = form::render_modal_frame(f, "Preferences", 85, 90);
+    let inner = form::render_modal_frame(f, app, "Preferences", 85, 90);
     let areas = Layout::vertical([
         Constraint::Min(5),
         Constraint::Length(3),

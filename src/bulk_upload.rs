@@ -211,11 +211,16 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn write_temp_csv(content: &str) -> String {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("lazyjira_bulk_upload_{}.csv", stamp));
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "lazyjira_bulk_upload_{}_{stamp}_{id}.csv",
+            std::process::id()
+        ));
         fs::write(&path, content).expect("write temp csv");
         path.to_string_lossy().to_string()
     }

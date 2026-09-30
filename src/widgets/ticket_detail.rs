@@ -113,6 +113,12 @@ fn render_frame(f: &mut ratatui::Frame, app: &App, key: &str) -> (Rect, Rect) {
         );
     }
     let inner = block.inner(area);
+    app.text_selection.borrow_mut().area = Rect::new(
+        area.x.saturating_add(1),
+        area.y,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(1),
+    );
     f.render_widget(block, area);
     if area.width > 2 && area.height > 0 {
         app.mouse_targets.borrow_mut().push((
@@ -851,20 +857,23 @@ mod tests {
                 let x = lines[y].split_once("[×]").unwrap().0.chars().count();
                 assert!(x < width as usize / 4 && y < height as usize / 4);
                 assert!(!lines.iter().any(|line| line.contains("[Close]")));
-                crate::mouse::handle(
-                    &mut app,
-                    crossterm::event::MouseEvent {
-                        kind: crossterm::event::MouseEventKind::Down(
-                            crossterm::event::MouseButton::Left,
-                        ),
-                        column: x as u16 + 1,
-                        row: y as u16,
-                        modifiers: crossterm::event::KeyModifiers::NONE,
-                    },
-                    &tx,
-                    &mut config,
-                )
-                .await;
+                for kind in [
+                    crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                    crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+                ] {
+                    crate::mouse::handle(
+                        &mut app,
+                        crossterm::event::MouseEvent {
+                            kind,
+                            column: x as u16 + 1,
+                            row: y as u16,
+                            modifiers: crossterm::event::KeyModifiers::NONE,
+                        },
+                        &tx,
+                        &mut config,
+                    )
+                    .await;
+                }
                 assert!(!app.is_detail_open());
             }
         }

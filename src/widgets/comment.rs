@@ -9,7 +9,8 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let Some(state) = &app.comment_state else {
         return;
     };
-    let inner = form::render_modal_frame(f, &format!("Comment on {}", state.ticket_key), 85, 75);
+    let inner =
+        form::render_modal_frame(f, app, &format!("Comment on {}", state.ticket_key), 85, 75);
     let areas = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(1),

@@ -304,6 +304,7 @@ pub struct App {
     pub settings: Option<crate::settings::Settings>,
     pub external_editor_requested: bool,
     pub mouse_targets: RefCell<Vec<(ratatui::layout::Rect, crate::mouse::Target)>>,
+    pub text_selection: RefCell<crate::mouse::TextSelection>,
     /// State for the create ticket modal overlay.
     pub create_ticket: Option<CreateTicketState>,
     /// Selected ticket keys in the current visible list context.
@@ -378,6 +379,7 @@ impl App {
             settings: None,
             external_editor_requested: false,
             mouse_targets: RefCell::new(Vec::new()),
+            text_selection: RefCell::new(crate::mouse::TextSelection::default()),
             create_ticket: None,
             selected_ticket_keys: HashSet::new(),
             bulk_state: None,

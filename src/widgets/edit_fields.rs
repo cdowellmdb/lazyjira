@@ -9,7 +9,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let Some(state) = &app.edit_state else {
         return;
     };
-    let inner = form::render_modal_frame(f, &format!("Edit {}", state.ticket_key), 85, 85);
+    let inner = form::render_modal_frame(f, app, &format!("Edit {}", state.ticket_key), 85, 85);
     let areas = Layout::vertical([
         Constraint::Length(3),
         Constraint::Length(3),

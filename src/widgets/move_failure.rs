@@ -6,11 +6,11 @@ use super::form;
 use crate::moves::MoveFailure;
 
 /// Shows the oldest move Jira rejected, with Jira's full error.
-pub fn render(f: &mut ratatui::Frame, failures: &[MoveFailure]) {
+pub fn render(f: &mut ratatui::Frame, app: &crate::app::App, failures: &[MoveFailure]) {
     let Some(failure) = failures.first() else {
         return;
     };
-    let inner = form::render_modal_frame(f, "Move failed", 70, 50);
+    let inner = form::render_modal_frame(f, app, "Move failed", 70, 50);
 
     let mut lines = vec![
         Line::from(Span::styled(
