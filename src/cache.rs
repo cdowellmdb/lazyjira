@@ -267,7 +267,6 @@ pub struct Ticket {
     pub epic_name: Option<String>,
     #[serde(default)]
     pub detail_loaded: bool,
-    pub url: String,
     #[serde(default)]
     pub activity: Vec<ActivityEntry>,
 }
@@ -288,7 +287,6 @@ impl Ticket {
             epic_key: None,
             epic_name: None,
             detail_loaded: false,
-            url: format!("https://jira.example.com/browse/{}", key),
             activity: Vec::new(),
         }
     }

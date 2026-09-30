@@ -1,46 +1,44 @@
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use crossterm::event::KeyCode;
+use ratatui::layout::{Constraint, Layout};
 use ratatui::widgets::Paragraph;
 
 use super::form;
 use crate::app::App;
 
 pub fn render(f: &mut ratatui::Frame, app: &App) {
-    let state = match &app.assign_state {
-        Some(s) => s,
-        None => return,
+    let Some(state) = &app.assign_state else {
+        return;
     };
-
-    let title = format!("Assign {}", state.ticket_key);
-    let inner = form::render_modal_frame(f, &title, 40, 50);
-
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(""));
-
-    for (i, member) in app.cache.team_members.iter().enumerate() {
-        let prefix = if i == state.selected { "> " } else { "  " };
-        let style = if i == state.selected {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Reset)
-        };
-        lines.push(Line::from(Span::styled(
-            format!("  {}{} ({})", prefix, member.name, member.email),
-            style,
-        )));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(""));
-
-    // Footer hints
-    lines.push(Line::from(Span::styled(
-        "[j/k] navigate  [Enter] assign  [Esc] cancel",
-        Style::default().fg(Color::DarkGray),
-    )));
-
-    let body = Paragraph::new(lines);
-    f.render_widget(body, inner);
+    let inner = form::render_modal_frame(f, &format!("Assign {}", state.ticket_key), 70, 60);
+    let areas = Layout::vertical([
+        Constraint::Min(3),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    let options = app
+        .cache
+        .team_members
+        .iter()
+        .map(|m| format!("{} ({})", m.name, m.email))
+        .collect::<Vec<_>>();
+    form::render_choices(
+        f,
+        app,
+        areas[0],
+        (0, "Assignee"),
+        &options,
+        state.selected,
+        &state.search,
+    );
+    f.render_widget(
+        Paragraph::new("Type to filter · ↑↓: choose · Backspace: clear search"),
+        areas[1],
+    );
+    form::buttons(
+        f,
+        app,
+        areas[2],
+        &[("Assign", KeyCode::Enter), ("Cancel", KeyCode::Esc)],
+    );
 }

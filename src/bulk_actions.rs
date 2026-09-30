@@ -63,6 +63,7 @@ pub enum BulkState {
     AssignPicker {
         targets: Vec<String>,
         selected: usize,
+        search: String,
     },
     Confirm {
         targets: Vec<String>,
@@ -237,6 +238,7 @@ pub fn handle_key(app: &mut App, key: KeyCode) -> Option<BulkCall> {
                 app.bulk_state = Some(BulkState::AssignPicker {
                     targets,
                     selected: 0,
+                    search: String::new(),
                 });
             }
             _ => {}
@@ -316,27 +318,25 @@ pub fn handle_key(app: &mut App, key: KeyCode) -> Option<BulkCall> {
                 }
             }
         }
-        BulkState::AssignPicker { targets, selected } => {
-            let max = app.cache.team_members.len().saturating_sub(1);
+        BulkState::AssignPicker {
+            targets,
+            mut selected,
+            mut search,
+        } => {
+            let options = app
+                .cache
+                .team_members
+                .iter()
+                .map(|member| format!("{} ({})", member.name, member.email))
+                .collect::<Vec<_>>();
             match key {
                 KeyCode::Esc => app.bulk_state = None,
-                KeyCode::Char('j') | KeyCode::Down => {
-                    app.bulk_state = Some(BulkState::AssignPicker {
-                        targets,
-                        selected: (selected + 1).min(max),
-                    });
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    app.bulk_state = Some(BulkState::AssignPicker {
-                        targets,
-                        selected: selected.saturating_sub(1),
-                    });
-                }
                 KeyCode::Enter => {
-                    let Some(member) = app.cache.team_members.get(selected) else {
-                        app.flash = Some("No team members configured".to_string());
+                    if !crate::widgets::form::matching(&options, &search).contains(&selected) {
+                        app.flash = Some("No matching assignee".into());
                         return None;
-                    };
+                    }
+                    let member = app.cache.team_members.get(selected)?;
                     let target = BulkTarget::Assign {
                         member_email: member.email.clone(),
                         member_name: member.name.clone(),
@@ -348,7 +348,14 @@ pub fn handle_key(app: &mut App, key: KeyCode) -> Option<BulkCall> {
                         plan,
                     });
                 }
-                _ => {}
+                _ => {
+                    crate::widgets::form::choose(&options, &mut selected, &mut search, key);
+                    app.bulk_state = Some(BulkState::AssignPicker {
+                        targets,
+                        selected,
+                        search,
+                    });
+                }
             }
         }
         BulkState::Confirm {

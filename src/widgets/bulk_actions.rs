@@ -130,13 +130,16 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
     let mut scroll = 0;
+    let mut choices = Vec::new();
 
     match state {
         BulkState::ActionPicker { targets, selected } => {
             lines.push(Line::from(format!("Selected tickets: {}", targets.len())));
             lines.push(Line::from(format!("Keys: {}", sample_keys(targets))));
             lines.push(Line::from(""));
+            choices.push((lines.len(), 0));
             render_option(&mut lines, "Move tickets", *selected == 0);
+            choices.push((lines.len(), 1));
             render_option(&mut lines, "Assign tickets", *selected == 1);
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -165,6 +168,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             }
             for (i, (destination, count)) in destinations.iter().enumerate() {
                 let label = format!("{} ({} of {} tickets)", destination, count, targets.len());
+                choices.push((lines.len(), i));
                 render_option(&mut lines, &label, i == *selected);
             }
             let failed: Vec<(&String, &String)> = fetched
@@ -195,6 +199,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             lines.push(Line::from(""));
             for (i, choice) in plan.resolution_choices().iter().enumerate() {
                 let name = choice.as_ref().map_or("No resolution", |r| r.name.as_str());
+                choices.push((lines.len(), i));
                 render_option(&mut lines, name, i == *selected);
             }
             lines.push(Line::from(""));
@@ -203,10 +208,26 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             ));
             lines.push(hint("[j/k] choose resolution  [Enter] next  [Esc] cancel"));
         }
-        BulkState::AssignPicker { targets, selected } => {
+        BulkState::AssignPicker {
+            targets,
+            selected,
+            search,
+        } => {
             lines.push(Line::from(format!("Tickets: {}", targets.len())));
             lines.push(Line::from(""));
-            for (i, member) in app.cache.team_members.iter().enumerate() {
+            lines.push(Line::from(format!("Type to filter: {search}")));
+            for (i, member) in app
+                .cache
+                .team_members
+                .iter()
+                .enumerate()
+                .filter(|(_, member)| {
+                    format!("{} ({})", member.name, member.email)
+                        .to_lowercase()
+                        .contains(&search.to_lowercase())
+                })
+            {
+                choices.push((lines.len(), i));
                 render_option(
                     &mut lines,
                     &format!("{} ({})", member.name, member.email),
@@ -221,7 +242,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "[j/k] choose assignee  [Enter] next  [Esc] cancel",
+                "Type to filter  [↑↓] choose  [Enter] next  [Esc] cancel",
                 Style::default().fg(Color::DarkGray),
             )));
         }
@@ -278,8 +299,54 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         }
     }
 
-    let body = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
-    f.render_widget(body, inner);
+    let areas = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Min(0),
+        ratatui::layout::Constraint::Length(1),
+    ])
+    .split(inner);
+    let selected = match state {
+        BulkState::ActionPicker { selected, .. }
+        | BulkState::MoveStatusPicker { selected, .. }
+        | BulkState::MoveResolutionPicker { selected, .. }
+        | BulkState::AssignPicker { selected, .. } => Some(*selected),
+        _ => None,
+    };
+    if let Some(line) = choices
+        .iter()
+        .find(|(_, index)| Some(*index) == selected)
+        .map(|(line, _)| *line)
+    {
+        scroll = line.saturating_sub(areas[0].height.saturating_sub(1) as usize) as u16;
+    }
+    for (line, index) in &choices {
+        if let Some(y) = line
+            .checked_sub(scroll as usize)
+            .filter(|y| *y < areas[0].height as usize)
+        {
+            app.mouse_targets.borrow_mut().push((
+                ratatui::layout::Rect::new(areas[0].x, areas[0].y + y as u16, areas[0].width, 1),
+                crate::mouse::Target::Choose {
+                    field: 0,
+                    index: *index,
+                },
+            ));
+        }
+    }
+    let body = Paragraph::new(lines).scroll((scroll, 0));
+    f.render_widget(
+        if choices.is_empty() {
+            body.wrap(Wrap { trim: false })
+        } else {
+            body
+        },
+        areas[0],
+    );
+    use crossterm::event::KeyCode;
+    let buttons = match state {
+        BulkState::Confirm { .. } => vec![("Run", KeyCode::Enter), ("Cancel", KeyCode::Esc)],
+        BulkState::Running { .. } | BulkState::MoveLoading { .. } => vec![("Close", KeyCode::Esc)],
+        BulkState::Result { .. } => vec![("Close", KeyCode::Enter)],
+        _ => vec![("Next", KeyCode::Enter), ("Cancel", KeyCode::Esc)],
+    };
+    form::buttons(f, app, areas[1], &buttons);
 }

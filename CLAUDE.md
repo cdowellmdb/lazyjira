@@ -26,6 +26,8 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/app.rs** — App state, tab management, selection tracking, cache mutations
 - **src/cache.rs** — Data types (Ticket, Epic, TeamMember, Status, Cache)
 - **src/config.rs** — `config.toml` schema, defaults, load/save
+- **src/settings.rs** — In-app team, epic, and startup preferences
+- **src/mouse.rs** — Hit targets registered by renderers and mouse event handling
 - **src/setup.rs** — First-run setup screen (project key, team name); imports the legacy `team.yml` roster
 - **src/jira_client.rs** — Shells out to `jira` CLI, parses output, reads/writes local caches
 - **src/jira_rest.rs** — Jira REST client for moves (list a ticket's transitions, send one by id), using jira-cli's config and `JIRA_API_TOKEN`
@@ -62,6 +64,10 @@ A single-ticket move changes the ticket only after Jira reports success (`Backgr
 ### Visible rows
 App's grouped view methods return `VisibleGroup` values with header metadata, totals, and occurrence indices. Collapsed groups retain their header and totals but have no ticket rows. Navigation and renderers use these same groups; renderers compare supplied indices with `selected_index`. Keep tab-specific formatting in `views/`. Team members are ordered by active ticket count (most active first), with active tickets before done tickets.
 
+Use `App::switch_tab` to restore each tab's position, search, and status focus. Cache updates preserve the selected ticket occurrence and group through `mark_cache_changed`; use `replace_cache`, `replace_epics`, and the ticket update helpers so the old visible rows are retained before data changes.
+
+Renderers register mouse targets for the rows actually drawn, after scrolling. `ui` clears targets before each overlay, so covered controls cannot receive clicks. Mouse actions share keyboard handlers and preserve confirmation steps. Text fields use the existing `tui-textarea` dependency and `widgets::form` helpers.
+
 ### Current UX behavior
 - Team view includes the current user (if not in the `[team]` config, inferred from `jira me` email).
 - My Work and Team include a separate Labels column.
@@ -75,8 +81,8 @@ App's grouped view methods return `VisibleGroup` values with header metadata, to
 
 ## Configuration
 
-- **Config file:** `~/.config/lazyjira/config.toml`, created by the first-run setup. Holds the project key, team name, team roster (`[team]`), statuses, and saved filters. An old top-level `resolutions` list is ignored (moves offer the resolutions Jira allows). The app rewrites it when saved filters change.
-- **Jira instance:** `jira.mongodb.org`, hardcoded for browser links (`JIRA_BASE_URL` in `src/jira_client.rs`, plus `src/main.rs`).
+- **Config file:** `~/.config/lazyjira/config.toml`, created by the first-run setup. Holds the project key, team name, team roster (`[team]`), statuses, saved filters, and `[preferences]`. An old top-level `resolutions` list is ignored (moves offer the resolutions Jira allows). Saved filters and preferences rewrite it. `S` applies team and epic changes during the session.
+- **Browser URLs:** derive them when opened with `jira_client::browse_url`, using jira-cli's `server` through `jira_rest::server_url`. URLs are not stored in tickets or caches.
 - **Unassigned tab:** queries the `Assigned Teams` custom field using `jira.team_name`.
 - **Legacy roster:** `~/.claude/skills/jira/team.yml` is only read once, during first-run setup, to seed `[team]`.
 - **Auth:** Via existing `jira` CLI authentication (`~/.config/.jira/.config.yml`, or `$JIRA_CONFIG_FILE`). Moves call Jira's REST API with that file's `server`, `auth_type` and `login`, and `JIRA_API_TOKEN`.

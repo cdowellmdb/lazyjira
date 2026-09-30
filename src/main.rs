@@ -6,17 +6,20 @@ mod cache;
 mod config;
 mod jira_client;
 mod jira_rest;
+mod mouse;
 mod move_picker;
 mod moves;
+mod settings;
 mod setup;
 mod transitions;
 mod views;
 mod widgets;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -48,10 +51,12 @@ enum CacheRefreshPhase {
 /// requested, so a read that predates a confirmed move can't undo it.
 enum BackgroundMessage {
     EpicsRefreshed {
+        request: u64,
         requested_at: u64,
         result: std::result::Result<Vec<crate::cache::Epic>, String>,
     },
     CacheRefreshed {
+        request: u64,
         phase: CacheRefreshPhase,
         requested_at: u64,
         result: std::result::Result<crate::cache::Cache, String>,
@@ -98,11 +103,10 @@ enum BackgroundMessage {
     },
 }
 
-fn spawn_epics_refresh(
-    tx: &UnboundedSender<BackgroundMessage>,
-    config: &AppConfig,
-    requested_at: u64,
-) {
+fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
+    let requested_at = app.moves.now();
+    let request = app.next_request_id();
+    app.epic_refresh_request = request;
     let tx = tx.clone();
     let config = config.clone();
     tokio::spawn(async move {
@@ -110,6 +114,7 @@ fn spawn_epics_refresh(
             .await
             .map_err(|e| e.to_string());
         let _ = tx.send(BackgroundMessage::EpicsRefreshed {
+            request,
             requested_at,
             result,
         });
@@ -117,11 +122,14 @@ fn spawn_epics_refresh(
 }
 
 fn spawn_cache_refresh(
+    app: &mut App,
     tx: &UnboundedSender<BackgroundMessage>,
     phase: CacheRefreshPhase,
     config: &AppConfig,
-    requested_at: u64,
 ) {
+    let requested_at = app.moves.now();
+    let request = app.next_request_id();
+    app.cache_refresh_request = request;
     let tx = tx.clone();
     let config = config.clone();
     tokio::spawn(async move {
@@ -132,6 +140,7 @@ fn spawn_cache_refresh(
         }
         .map_err(|e| e.to_string());
         let _ = tx.send(BackgroundMessage::CacheRefreshed {
+            request,
             phase,
             requested_at,
             result,
@@ -434,7 +443,12 @@ async fn main() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -446,6 +460,12 @@ async fn main() -> Result<()> {
     let mut app = App::new();
     app.set_epics_i_care_about(config.epics_i_care_about_ordered());
     app.set_status_rules(&config.statuses);
+    app.show_done = config.preferences.show_done;
+    app.active_tab = Tab::all()
+        .iter()
+        .copied()
+        .find(|tab| tab.title() == config.preferences.start_tab)
+        .unwrap_or(Tab::MyWork);
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
     let detail_cache_tx = jira_client::spawn_detail_cache_writer(&config.jira.project);
 
@@ -456,22 +476,17 @@ async fn main() -> Result<()> {
         app.cache_stale_age_secs = Some(snapshot.age_secs);
         app.ticket_sync_stage = Some(TicketSyncStage::ActiveOnly);
         app.flash = Some("Loaded cached data. Refreshing active tickets...".to_string());
-        spawn_cache_refresh(
-            &bg_tx,
-            CacheRefreshPhase::ActiveOnly,
-            &config,
-            app.moves.now(),
-        );
+        spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::ActiveOnly, &config);
     } else {
         let cache = jira_client::fetch_active_only(&config).await?;
         app.replace_cache(cache, app.moves.now());
         app.loading = false;
         app.ticket_sync_stage = Some(TicketSyncStage::Full);
         app.flash = Some("Loaded active tickets. Syncing recently done...".to_string());
-        spawn_cache_refresh(&bg_tx, CacheRefreshPhase::Full, &config, app.moves.now());
+        spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::Full, &config);
     }
 
-    spawn_epics_refresh(&bg_tx, &config, app.moves.now());
+    spawn_epics_refresh(&mut app, &bg_tx, &config);
     app.epics_refreshing = true;
     queue_detail_prefetch(&mut app, &bg_tx);
 
@@ -484,21 +499,17 @@ async fn main() -> Result<()> {
             state_changed = true;
             match message {
                 BackgroundMessage::EpicsRefreshed {
+                    request,
                     requested_at,
                     result,
                 } => {
+                    if request != app.epic_refresh_request {
+                        continue;
+                    }
                     app.epics_refreshing = false;
                     match result {
                         Ok(epics) => {
-                            jira_client::attach_epics_to_tickets(
-                                &mut app.cache.my_tickets,
-                                &mut app.cache.team_tickets,
-                                &epics,
-                            );
-                            app.cache.epics = epics;
-                            app.reapply_moves_since(requested_at);
-                            app.mark_cache_changed();
-                            app.clamp_selection();
+                            app.replace_epics(epics, requested_at);
                             app.flash = Some("Epic relationships refreshed".to_string());
                         }
                         Err(e) => {
@@ -507,90 +518,89 @@ async fn main() -> Result<()> {
                     }
                 }
                 BackgroundMessage::CacheRefreshed {
+                    request,
                     phase,
                     requested_at,
                     result,
-                } => match (phase, result) {
-                    (CacheRefreshPhase::ActiveOnly, Ok(cache))
-                        if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
-                    {
-                        app.replace_cache(cache, requested_at);
-                        app.cache_stale_age_secs = None;
-                        app.ticket_sync_stage = Some(TicketSyncStage::Full);
-                        app.clamp_selection();
-                        queue_detail_prefetch(&mut app, &bg_tx);
-                        app.flash =
-                            Some("Active tickets refreshed. Syncing recently done...".to_string());
-                        spawn_cache_refresh(
-                            &bg_tx,
-                            CacheRefreshPhase::Full,
-                            &config,
-                            app.moves.now(),
-                        );
+                } => {
+                    if request != app.cache_refresh_request {
+                        continue;
                     }
-                    (CacheRefreshPhase::ActiveOnly, Err(e))
-                        if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
-                    {
-                        app.ticket_sync_stage = Some(TicketSyncStage::Full);
-                        app.flash = Some(format!(
-                            "Active refresh failed ({}). Trying full refresh...",
-                            e
-                        ));
-                        spawn_cache_refresh(
-                            &bg_tx,
-                            CacheRefreshPhase::Full,
-                            &config,
-                            app.moves.now(),
-                        );
-                    }
-                    (CacheRefreshPhase::Full, Ok(cache))
-                        if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
-                    {
-                        app.replace_cache(cache, requested_at);
-                        app.cache_stale_age_secs = None;
-                        app.ticket_sync_stage = None;
-                        app.clamp_selection();
-                        queue_detail_prefetch(&mut app, &bg_tx);
-                        if let Err(e) =
-                            jira_client::save_full_cache_snapshot(&config.jira.project, &app.cache)
+                    match (phase, result) {
+                        (CacheRefreshPhase::ActiveOnly, Ok(cache))
+                            if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
                         {
-                            app.flash = Some(format!("Cache snapshot write failed: {}", e));
-                        } else {
-                            app.flash = Some("Ticket cache is up to date".to_string());
+                            app.replace_cache(cache, requested_at);
+                            app.cache_stale_age_secs = None;
+                            app.ticket_sync_stage = Some(TicketSyncStage::Full);
+                            app.clamp_selection();
+                            queue_detail_prefetch(&mut app, &bg_tx);
+                            app.flash = Some(
+                                "Active tickets refreshed. Syncing recently done...".to_string(),
+                            );
+                            spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::Full, &config);
                         }
-                    }
-                    (CacheRefreshPhase::Full, Err(e))
-                        if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
-                    {
-                        app.ticket_sync_stage = None;
-                        app.flash = Some(format!("Full refresh failed: {}", e));
-                    }
-                    (CacheRefreshPhase::Manual, Ok(cache)) => {
-                        app.loading = false;
-                        app.replace_cache(cache, requested_at);
-                        app.cache_stale_age_secs = None;
-                        app.ticket_sync_stage = None;
-                        app.clamp_selection();
-                        queue_detail_prefetch(&mut app, &bg_tx);
-                        if let Err(e) =
-                            jira_client::save_full_cache_snapshot(&config.jira.project, &app.cache)
+                        (CacheRefreshPhase::ActiveOnly, Err(e))
+                            if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
                         {
-                            app.flash = Some(format!("Refreshed (cache save failed: {})", e));
-                        } else {
-                            app.flash =
-                                Some("Refreshed! Syncing epic relationships...".to_string());
+                            app.ticket_sync_stage = Some(TicketSyncStage::Full);
+                            app.flash = Some(format!(
+                                "Active refresh failed ({}). Trying full refresh...",
+                                e
+                            ));
+                            spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::Full, &config);
                         }
-                        if !app.epics_refreshing {
-                            app.epics_refreshing = true;
-                            spawn_epics_refresh(&bg_tx, &config, app.moves.now());
+                        (CacheRefreshPhase::Full, Ok(cache))
+                            if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
+                        {
+                            app.replace_cache(cache, requested_at);
+                            app.cache_stale_age_secs = None;
+                            app.ticket_sync_stage = None;
+                            app.clamp_selection();
+                            queue_detail_prefetch(&mut app, &bg_tx);
+                            if let Err(e) = jira_client::save_full_cache_snapshot(
+                                &config.jira.project,
+                                &app.cache,
+                            ) {
+                                app.flash = Some(format!("Cache snapshot write failed: {}", e));
+                            } else {
+                                app.flash = Some("Ticket cache is up to date".to_string());
+                            }
                         }
+                        (CacheRefreshPhase::Full, Err(e))
+                            if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
+                        {
+                            app.ticket_sync_stage = None;
+                            app.flash = Some(format!("Full refresh failed: {}", e));
+                        }
+                        (CacheRefreshPhase::Manual, Ok(cache)) => {
+                            app.loading = false;
+                            app.replace_cache(cache, requested_at);
+                            app.cache_stale_age_secs = None;
+                            app.ticket_sync_stage = None;
+                            app.clamp_selection();
+                            queue_detail_prefetch(&mut app, &bg_tx);
+                            if let Err(e) = jira_client::save_full_cache_snapshot(
+                                &config.jira.project,
+                                &app.cache,
+                            ) {
+                                app.flash = Some(format!("Refreshed (cache save failed: {})", e));
+                            } else {
+                                app.flash =
+                                    Some("Refreshed! Syncing epic relationships...".to_string());
+                            }
+                            if !app.epics_refreshing {
+                                app.epics_refreshing = true;
+                                spawn_epics_refresh(&mut app, &bg_tx, &config);
+                            }
+                        }
+                        (CacheRefreshPhase::Manual, Err(e)) => {
+                            app.loading = false;
+                            app.flash = Some(format!("Refresh failed: {}", e));
+                        }
+                        _ => {}
                     }
-                    (CacheRefreshPhase::Manual, Err(e)) => {
-                        app.loading = false;
-                        app.flash = Some(format!("Refresh failed: {}", e));
-                    }
-                    _ => {}
-                },
+                }
                 BackgroundMessage::TicketDetailFetched {
                     key,
                     requested_at,
@@ -635,10 +645,10 @@ async fn main() -> Result<()> {
                                 app.loading = true;
                                 app.ticket_sync_stage = None;
                                 spawn_cache_refresh(
+                                    &mut app,
                                     &bg_tx,
                                     CacheRefreshPhase::Manual,
                                     &config,
-                                    app.moves.now(),
                                 );
                             }
                         }
@@ -709,12 +719,7 @@ async fn main() -> Result<()> {
                     if !app.loading {
                         app.loading = true;
                         app.ticket_sync_stage = None;
-                        spawn_cache_refresh(
-                            &bg_tx,
-                            CacheRefreshPhase::Manual,
-                            &config,
-                            app.moves.now(),
-                        );
+                        spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::Manual, &config);
                     }
                 }
                 BackgroundMessage::FilterResults {
@@ -756,13 +761,29 @@ async fn main() -> Result<()> {
 
         if event::poll(Duration::from_millis(120))? {
             match event::read()? {
-                Event::Key(key) => {
+                Event::Key(key) if key.kind != KeyEventKind::Release => {
                     handle_key(&mut app, key, &bg_tx, &mut config).await;
+                    draw_needed = true;
+                }
+                Event::Paste(text) => {
+                    handle_paste(&mut app, &text);
+                    draw_needed = true;
+                }
+                Event::Mouse(mouse) => {
+                    mouse::handle(&mut app, mouse, &bg_tx, &mut config).await;
                     draw_needed = true;
                 }
                 Event::Resize(_, _) => draw_needed = true,
                 _ => {}
             }
+        }
+
+        if app.external_editor_requested {
+            app.external_editor_requested = false;
+            if let Err(error) = edit_externally(&mut terminal, &mut app) {
+                app.flash = Some(format!("Editor failed: {error:#}"));
+            }
+            draw_needed = true;
         }
 
         if app.should_quit {
@@ -775,7 +796,8 @@ async fn main() -> Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
 
@@ -790,11 +812,31 @@ async fn handle_key(
 ) {
     // Flash messages clear on any keypress. Move failures stay until dismissed.
     app.flash = None;
+    if (key.code == KeyCode::F(4)
+        || (key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL)))
+        && app.focused_field().is_some()
+    {
+        if app.current_editor().is_some() {
+            app.external_editor_requested = true;
+        } else {
+            app.flash = Some("Select a text field to use the editor".into());
+        }
+        return;
+    }
+    let show_done_before = app.show_done;
 
     if !app.moves.failures().is_empty() {
         handle_move_failure_keys(app, key.code);
+    } else if app.settings.is_some() {
+        if settings::handle_key(app, key.code, key.modifiers, config) {
+            app.loading = true;
+            app.ticket_sync_stage = None;
+            spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
+            app.epics_refreshing = true;
+            spawn_epics_refresh(app, bg_tx, config);
+        }
     } else if app.is_filter_edit_open() {
-        handle_filter_edit_keys(app, key.code, config);
+        handle_filter_edit_keys(app, key.code, key.modifiers, config);
     } else if app.is_bulk_upload_open() {
         handle_bulk_upload_keys(app, key.code, bg_tx, config);
     } else if app.is_create_ticket_open() {
@@ -804,7 +846,7 @@ async fn handle_key(
     } else if app.is_assign_open() {
         handle_assign_keys(app, key.code, bg_tx);
     } else if app.is_edit_open() {
-        handle_edit_keys(app, key.code, bg_tx);
+        handle_edit_keys(app, key.code, key.modifiers, bg_tx);
     } else if app.is_bulk_open() {
         match bulk_actions::handle_key(app, key.code) {
             Some(BulkCall::FetchTransitions { targets, request }) => {
@@ -830,6 +872,139 @@ async fn handle_key(
     } else {
         handle_main_keys(app, key.code, key.modifiers, bg_tx, config).await;
     }
+    if show_done_before != app.show_done
+        && config.preferences.show_done != app.show_done
+        && app.settings.is_none()
+    {
+        config.preferences.show_done = app.show_done;
+        if let Err(error) = config::save_config(config) {
+            app.flash = Some(format!("Couldn't save Done preference: {error}"));
+        }
+    }
+}
+
+fn handle_paste(app: &mut App, text: &str) {
+    if let Some((editor, multiline)) = app.current_editor() {
+        widgets::form::paste(editor, text, multiline);
+        return;
+    }
+    if !app.moves.failures().is_empty() || app.show_keybindings {
+        return;
+    }
+    let text = text.replace(['\r', '\n'], " ");
+    if let Some(BulkUploadState::PathInput {
+        path,
+        loading: false,
+    }) = &mut app.bulk_upload_state
+    {
+        widgets::form::paste(path, text.trim(), false);
+    } else if let Some(state) = &mut app.assign_state {
+        state.search.push_str(&text);
+        let options = app
+            .cache
+            .team_members
+            .iter()
+            .map(|m| format!("{} ({})", m.name, m.email))
+            .collect::<Vec<_>>();
+        widgets::form::choose(
+            &options,
+            &mut state.selected,
+            &mut state.search,
+            KeyCode::Null,
+        );
+    } else if let Some(state) = &mut app.create_ticket {
+        let field = state.focused_field;
+        if matches!(field, 2 | 3) {
+            let options = if field == 2 {
+                widgets::create_ticket::build_assignee_options(app)
+            } else {
+                widgets::create_ticket::build_epic_options(app)
+            };
+            let state = app.create_ticket.as_mut().unwrap();
+            let (index, query) = if field == 2 {
+                (&mut state.assignee_idx, &mut state.assignee_search)
+            } else {
+                (&mut state.epic_idx, &mut state.epic_search)
+            };
+            query.push_str(&text);
+            widgets::form::choose(&options, index, query, KeyCode::Null);
+        }
+    } else if !app.is_detail_open()
+        && !app.is_bulk_open()
+        && !app.is_bulk_upload_open()
+        && app.settings.is_none()
+    {
+        if let Some(search) = &mut app.search {
+            search.push_str(&text);
+            app.clamp_selection();
+        }
+    }
+}
+
+fn edit_externally(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+) -> Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let Some((editor, multiline)) = app.current_editor() else {
+        return Ok(());
+    };
+    let original = widgets::form::text(editor);
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "lazyjira-editor-{}-{stamp}.txt",
+        std::process::id()
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    file.write_all(original.as_bytes())?;
+    drop(file);
+    let editor_command = ["VISUAL", "EDITOR"]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "vi".into());
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        DisableBracketedPaste
+    )?;
+    let result = Command::new("sh")
+        .arg("-c")
+        .arg(format!("exec {editor_command} \"$1\""))
+        .arg("lazyjira-editor")
+        .arg(&path)
+        .status();
+    enable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
+    terminal.clear()?;
+    let edited = std::fs::read_to_string(&path);
+    if let Ok(text) = &edited {
+        if let Some((editor, _)) = app.current_editor() {
+            *editor = widgets::form::editor("");
+            widgets::form::paste(editor, text.trim_end_matches('\n'), multiline);
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+    edited
+        .with_context(|| format!("Couldn't read edited text; file kept at {}", path.display()))?;
+    if !result?.success() {
+        anyhow::bail!("external editor exited unsuccessfully; its text was kept in the form");
+    }
+    Ok(())
 }
 
 fn maybe_run_dev_mode() -> Result<()> {
@@ -928,7 +1103,22 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         ])
         .split(f.area());
 
+    app.mouse_targets.borrow_mut().clear();
     // Tab bar
+    let mut tab_x = chunks[0].x + 2;
+    for tab in Tab::all() {
+        let width = tab.title().len() as u16;
+        let rect = ratatui::layout::Rect::new(
+            tab_x,
+            chunks[0].y + 1,
+            (width + 2).min(chunks[0].right().saturating_sub(tab_x)),
+            1,
+        );
+        app.mouse_targets
+            .borrow_mut()
+            .push((rect, mouse::Target::Tab(*tab)));
+        tab_x += width + 5;
+    }
     let tab_titles: Vec<Line> = Tab::all().iter().map(|t| Line::from(t.title())).collect();
     let tabs = Tabs::new(tab_titles)
         .block(panel().title(" lazyjira "))
@@ -947,9 +1137,22 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
                 .add_modifier(Modifier::BOLD),
         );
     f.render_widget(tabs, chunks[0]);
+    if chunks[0].right().saturating_sub(tab_x) >= 12 {
+        widgets::form::buttons(
+            f,
+            app,
+            ratatui::layout::Rect::new(chunks[0].right() - 12, chunks[0].y + 1, 10, 1),
+            &[("Settings", KeyCode::Char('S'))],
+        );
+    }
 
     // Content area
-    if app.loading {
+    if app.loading
+        && app.cache.my_tickets.is_empty()
+        && app.cache.team_tickets.is_empty()
+        && app.cache.epics.is_empty()
+        && app.filter_results.is_empty()
+    {
         let loading = ratatui::widgets::Paragraph::new("Loading...").block(panel());
         f.render_widget(loading, chunks[1]);
     } else {
@@ -996,6 +1199,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
             let ticket_state = match app.ticket_sync_stage {
                 Some(TicketSyncStage::ActiveOnly) => "sync-active",
                 Some(TicketSyncStage::Full) => "sync-full",
+                None if app.loading => "refreshing",
                 None => "ready",
             };
             let freshness_state = app
@@ -1013,65 +1217,109 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
 
     // Detail overlay
     if app.is_detail_open() {
+        app.mouse_targets.borrow_mut().clear();
         widgets::ticket_detail::render(f, app);
     }
     if app.is_create_ticket_open() {
+        app.mouse_targets.borrow_mut().clear();
         widgets::create_ticket::render(f, app);
     }
     if app.is_comment_open() {
+        app.mouse_targets.borrow_mut().clear();
         widgets::comment::render(f, app);
     }
     if app.is_assign_open() {
+        app.mouse_targets.borrow_mut().clear();
         widgets::assign::render(f, app);
     }
     if app.is_edit_open() {
+        app.mouse_targets.borrow_mut().clear();
         widgets::edit_fields::render(f, app);
     }
     if app.is_filter_edit_open() {
+        app.mouse_targets.borrow_mut().clear();
         render_filter_edit_modal(f, app);
     }
     if app.is_bulk_open() {
+        app.mouse_targets.borrow_mut().clear();
         widgets::bulk_actions::render(f, app);
     }
     if app.is_bulk_upload_open() {
+        app.mouse_targets.borrow_mut().clear();
         widgets::bulk_upload::render(f, app);
     }
     if app.show_keybindings {
+        app.mouse_targets.borrow_mut().clear();
         widgets::keybindings_help::render(f, app);
+    }
+    if app.settings.is_some() {
+        app.mouse_targets.borrow_mut().clear();
+        settings::render(f, app);
+    }
+    if !app.moves.failures().is_empty() {
+        app.mouse_targets.borrow_mut().clear();
+        let area = f.area();
+        widgets::form::buttons(
+            f,
+            app,
+            ratatui::layout::Rect::new(
+                area.x + 2,
+                area.bottom().saturating_sub(2),
+                area.width.saturating_sub(4),
+                1,
+            ),
+            &[("Dismiss", KeyCode::Enter), ("Browser", KeyCode::Char('o'))],
+        );
     }
     widgets::move_failure::render(f, app.moves.failures());
 }
 
 fn render_filter_edit_modal(f: &mut ratatui::Frame, app: &App) {
-    use ratatui::style::{Color, Style};
-    use ratatui::text::{Line, Span};
-    use ratatui::widgets::Paragraph;
-
-    let state = match &app.filter_edit {
-        Some(s) => s,
-        None => return,
+    use ratatui::layout::{Constraint, Layout};
+    use widgets::form;
+    let Some(state) = &app.filter_edit else {
+        return;
     };
-
     let title = if state.editing_idx.is_some() {
         "Edit Filter"
     } else {
         "New Filter"
     };
-
-    let inner = widgets::form::render_modal_frame(f, title, 60, 30);
-
-    let mut lines = Vec::new();
-    widgets::form::render_text_input(&mut lines, "Name", &state.name, state.focused_field == 0);
-    lines.push(Line::from(""));
-    widgets::form::render_text_input(&mut lines, "JQL", &state.jql, state.focused_field == 1);
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Tab: switch field  Enter: save  Esc: cancel",
-        Style::default().fg(Color::DarkGray),
-    )));
-
-    let widget = Paragraph::new(lines);
-    f.render_widget(widget, inner);
+    let inner = form::render_modal_frame(f, title, 80, 50);
+    let areas = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    form::render_editor(
+        f,
+        app,
+        areas[0],
+        "Name",
+        &state.name,
+        state.focused_field == 0,
+        0,
+    );
+    form::render_editor(
+        f,
+        app,
+        areas[1],
+        "JQL",
+        &state.jql,
+        state.focused_field == 1,
+        1,
+    );
+    form::buttons(
+        f,
+        app,
+        areas[2],
+        &[
+            ("Save", KeyCode::Enter),
+            ("Cancel", KeyCode::Esc),
+            ("Editor", KeyCode::F(4)),
+        ],
+    );
 }
 
 fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
@@ -1104,15 +1352,20 @@ fn handle_move_failure_keys(app: &mut App, key: KeyCode) {
         KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.moves.dismiss_failure(),
         KeyCode::Char('o') => {
             if let Some(failure) = app.moves.failures().first() {
-                open_in_browser(&jira_client::browse_url(&failure.key));
+                let key = failure.key.clone();
+                open_ticket_in_browser(app, &key);
             }
         }
         _ => {}
     }
 }
 
-fn open_in_browser(url: &str) {
-    let _ = Command::new("open").arg(url).spawn();
+fn open_ticket_in_browser(app: &mut App, key: &str) {
+    let result = jira_client::browse_url(key)
+        .and_then(|url| Command::new("open").arg(url).spawn().map_err(Into::into));
+    if let Err(error) = result {
+        app.flash = Some(format!("Couldn't open browser: {error:#}"));
+    }
 }
 
 fn handle_detail_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
@@ -1139,11 +1392,10 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backg
                 }
                 KeyCode::Char('o') => {
                     if let Some(key) = ticket_detail_key.as_ref() {
-                        if let Some(ticket) = app.find_ticket(key) {
-                            open_in_browser(&ticket.url);
-                        }
+                        open_ticket_in_browser(app, key);
                     } else if let Some(epic_key) = app.detail_epic_key.as_ref() {
-                        open_in_browser(&format!("https://jira.mongodb.org/browse/{}", epic_key));
+                        let key = epic_key.clone();
+                        open_ticket_in_browser(app, &key);
                     }
                 }
                 KeyCode::Char('m') => start_picker_call(bg_tx, move_picker::open(app)),
@@ -1151,7 +1403,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backg
                     if let Some(key) = ticket_detail_key {
                         app.comment_state = Some(app::CommentState {
                             ticket_key: key,
-                            body: String::new(),
+                            body: widgets::form::editor(""),
                         });
                     }
                 }
@@ -1164,6 +1416,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backg
                         app.assign_state = Some(app::AssignState {
                             ticket_key: key,
                             selected: 0,
+                            search: String::new(),
                         });
                     }
                 }
@@ -1179,8 +1432,11 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backg
                         app.edit_state = Some(app::EditFieldsState {
                             ticket_key: key,
                             focused_field: 0,
-                            summary,
-                            labels,
+                            summary: widgets::form::editor(&summary),
+                            labels: widgets::form::editor(&labels),
+                            description: widgets::form::editor(
+                                ticket.and_then(|t| t.description.as_deref()).unwrap_or(""),
+                            ),
                         });
                     }
                 }
@@ -1246,7 +1502,7 @@ async fn handle_search_keys(
         KeyCode::Char('U') => {
             app.search = None;
             app.bulk_upload_state = Some(BulkUploadState::PathInput {
-                path: String::new(),
+                path: widgets::form::editor("").into(),
                 loading: false,
             });
         }
@@ -1297,24 +1553,20 @@ fn handle_bulk_upload_keys(
                 if loading {
                     return;
                 }
-                let trimmed = path.trim().to_string();
+                let trimmed = widgets::form::text(&path).trim().to_string();
                 if trimmed.is_empty() {
                     app.flash = Some("CSV path is required".to_string());
                     return;
                 }
                 app.bulk_upload_state = Some(BulkUploadState::PathInput {
-                    path: trimmed.clone(),
+                    path: widgets::form::editor(&trimmed).into(),
                     loading: true,
                 });
                 let context = build_bulk_upload_context(app);
                 spawn_bulk_upload_preview(bg_tx, trimmed, context);
             }
-            KeyCode::Backspace => {
-                path.pop();
-                app.bulk_upload_state = Some(BulkUploadState::PathInput { path, loading });
-            }
-            KeyCode::Char(c) => {
-                path.push(c);
+            _ if !loading => {
+                widgets::form::input(&mut path, key, KeyModifiers::NONE, false);
                 app.bulk_upload_state = Some(BulkUploadState::PathInput { path, loading });
             }
             _ => {}
@@ -1336,7 +1588,7 @@ fn handle_bulk_upload_keys(
             }
             KeyCode::Char('r') => {
                 app.bulk_upload_state = Some(BulkUploadState::PathInput {
-                    path: preview.source_path.clone(),
+                    path: widgets::form::editor(&preview.source_path).into(),
                     loading: true,
                 });
                 let context = build_bulk_upload_context(app);
@@ -1366,7 +1618,7 @@ fn handle_bulk_upload_keys(
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.bulk_upload_state = None,
             KeyCode::Char('r') => {
                 app.bulk_upload_state = Some(BulkUploadState::PathInput {
-                    path: summary.source_path.clone(),
+                    path: widgets::form::editor(&summary.source_path).into(),
                     loading: true,
                 });
                 let context = build_bulk_upload_context(app);
@@ -1380,115 +1632,94 @@ fn handle_bulk_upload_keys(
 async fn handle_create_ticket_keys(
     app: &mut App,
     key: KeyCode,
-    _modifiers: KeyModifiers,
+    modifiers: KeyModifiers,
     bg_tx: &UnboundedSender<BackgroundMessage>,
     config: &AppConfig,
 ) {
-    let state = match &mut app.create_ticket {
-        Some(s) => s,
-        None => return,
+    use widgets::form;
+    let assignees = widgets::create_ticket::build_assignee_options(app);
+    let epics = widgets::create_ticket::build_epic_options(app);
+    let Some(state) = app.create_ticket.as_mut() else {
+        return;
     };
-
     match key {
-        KeyCode::Esc => {
-            app.create_ticket = None;
-        }
-        KeyCode::Tab => {
-            let state = app.create_ticket.as_mut().unwrap();
-            state.focused_field = (state.focused_field + 1) % 4;
-        }
-        KeyCode::BackTab => {
-            let state = app.create_ticket.as_mut().unwrap();
-            state.focused_field = if state.focused_field == 0 {
-                3
-            } else {
-                state.focused_field - 1
-            };
+        KeyCode::Esc => app.create_ticket = None,
+        KeyCode::Tab => state.focused_field = (state.focused_field + 1) % 6,
+        KeyCode::BackTab => state.focused_field = (state.focused_field + 5) % 6,
+        KeyCode::Enter if modifiers.contains(KeyModifiers::SHIFT) => {
+            if state.focused_field == 5 {
+                state.description.insert_newline();
+            }
         }
         KeyCode::Enter => {
-            if state.summary.trim().is_empty() {
-                app.flash = Some("Summary is required".to_string());
+            let summary = form::text(&state.summary);
+            if summary.trim().is_empty() {
+                app.flash = Some("Summary is required".into());
                 return;
             }
-
+            if !form::matching(&assignees, &state.assignee_search).contains(&state.assignee_idx)
+                || !form::matching(&epics, &state.epic_search).contains(&state.epic_idx)
+            {
+                app.flash =
+                    Some("Choose a matching assignee and epic, or clear their search".into());
+                return;
+            }
             let issue_type = app::ISSUE_TYPES[state.issue_type_idx].to_string();
-            let summary = state.summary.clone();
-
-            let assignee_email = if state.assignee_idx == 0 {
-                None
-            } else {
-                app.cache
-                    .team_members
-                    .get(state.assignee_idx - 1)
-                    .map(|m| m.email.clone())
-            };
-
-            let epic_key = if state.epic_idx == 0 {
-                None
-            } else {
-                app.cache
-                    .epics
-                    .get(state.epic_idx - 1)
-                    .map(|e| e.key.clone())
-            };
-
+            let assignee = state
+                .assignee_idx
+                .checked_sub(1)
+                .and_then(|i| app.cache.team_members.get(i))
+                .map(|member| member.email.clone());
+            let epic = state
+                .epic_idx
+                .checked_sub(1)
+                .and_then(|i| app.cache.epics.get(i))
+                .map(|epic| epic.key.clone());
+            let description = form::text(&state.description);
+            let labels: Vec<String> = form::text(&state.labels)
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
             app.create_ticket = None;
-            app.flash = Some("Creating ticket...".to_string());
-
+            app.flash = Some("Creating ticket...".into());
             let project = config.jira.project.clone();
             let tx = bg_tx.clone();
             tokio::spawn(async move {
-                let result = jira_client::create_ticket(
+                let result = jira_client::create_ticket_with_fields(
                     &project,
                     &issue_type,
                     &summary,
-                    assignee_email.as_deref(),
-                    epic_key.as_deref(),
+                    assignee.as_deref(),
+                    epic.as_deref(),
+                    Some(&description),
+                    Some(&labels),
                 )
                 .await
                 .map_err(|e| e.to_string());
                 let _ = tx.send(BackgroundMessage::TicketCreated(result));
             });
         }
-        KeyCode::Char(c) if state.focused_field == 1 => {
-            state.summary.push(c);
-        }
-        KeyCode::Backspace if state.focused_field == 1 => {
-            state.summary.pop();
-        }
-        KeyCode::Char('j') | KeyCode::Down => match state.focused_field {
-            0 => {
-                if state.issue_type_idx < app::ISSUE_TYPES.len() - 1 {
-                    state.issue_type_idx += 1;
-                }
+        _ => match state.focused_field {
+            0 if matches!(key, KeyCode::Char('j') | KeyCode::Down) => {
+                state.issue_type_idx = (state.issue_type_idx + 1).min(app::ISSUE_TYPES.len() - 1)
             }
-            2 => {
-                let max = app.cache.team_members.len(); // options are 0..=max
-                if state.assignee_idx < max {
-                    state.assignee_idx += 1;
-                }
+            0 if matches!(key, KeyCode::Char('k') | KeyCode::Up) => {
+                state.issue_type_idx = state.issue_type_idx.saturating_sub(1)
             }
-            3 => {
-                let max = app.cache.epics.len(); // options are 0..=max
-                if state.epic_idx < max {
-                    state.epic_idx += 1;
-                }
-            }
+            1 => form::input(&mut state.summary, key, modifiers, false),
+            2 => form::choose(
+                &assignees,
+                &mut state.assignee_idx,
+                &mut state.assignee_search,
+                key,
+            ),
+            3 => form::choose(&epics, &mut state.epic_idx, &mut state.epic_search, key),
+            4 => form::input(&mut state.labels, key, modifiers, false),
+            5 => form::input(&mut state.description, key, modifiers, true),
             _ => {}
         },
-        KeyCode::Char('k') | KeyCode::Up => match state.focused_field {
-            0 => {
-                state.issue_type_idx = state.issue_type_idx.saturating_sub(1);
-            }
-            2 => {
-                state.assignee_idx = state.assignee_idx.saturating_sub(1);
-            }
-            3 => {
-                state.epic_idx = state.epic_idx.saturating_sub(1);
-            }
-            _ => {}
-        },
-        _ => {}
     }
 }
 
@@ -1498,225 +1729,164 @@ fn handle_comment_keys(
     modifiers: KeyModifiers,
     bg_tx: &UnboundedSender<BackgroundMessage>,
 ) {
+    let Some(state) = app.comment_state.as_mut() else {
+        return;
+    };
     match key {
-        KeyCode::Esc => {
-            app.comment_state = None;
-        }
-        KeyCode::Enter => {
-            if modifiers.contains(KeyModifiers::SHIFT) {
-                if let Some(ref mut state) = app.comment_state {
-                    state.body.push('\n');
-                }
-                return;
-            }
-
-            let state = match &app.comment_state {
-                Some(s) => s,
-                None => return,
-            };
-            if state.body.trim().is_empty() {
-                app.flash = Some("Comment body is required".to_string());
+        KeyCode::Esc => app.comment_state = None,
+        KeyCode::Enter if !modifiers.contains(KeyModifiers::SHIFT) => {
+            let body = widgets::form::text(&state.body);
+            if body.trim().is_empty() {
+                app.flash = Some("Comment body is required".into());
                 return;
             }
             let ticket_key = state.ticket_key.clone();
-            let body = state.body.clone();
             app.comment_state = None;
             app.flash = Some(format!("Adding comment to {}...", ticket_key));
-
             let tx = bg_tx.clone();
-            let key_clone = ticket_key.clone();
             tokio::spawn(async move {
-                let result = jira_client::add_comment(&key_clone, &body)
+                let result = jira_client::add_comment(&ticket_key, &body)
                     .await
-                    .map(|_| key_clone)
+                    .map(|_| ticket_key)
                     .map_err(|e| e.to_string());
                 let _ = tx.send(BackgroundMessage::CommentAdded(result));
             });
         }
-        // Some terminals encode Shift+Enter (or modified Enter) as Ctrl+J.
-        // Treat it as newline in the comment editor.
-        KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => {
-            if let Some(ref mut state) = app.comment_state {
-                state.body.push('\n');
-            }
-        }
-        KeyCode::Backspace => {
-            if let Some(ref mut state) = app.comment_state {
-                state.body.pop();
-            }
-        }
-        KeyCode::Char(c) => {
-            if let Some(ref mut state) = app.comment_state {
-                state.body.push(c);
-            }
-        }
-        _ => {}
+        _ => widgets::form::input(&mut state.body, key, modifiers, true),
     }
 }
 
 fn handle_assign_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
-    let member_count = app.cache.team_members.len();
+    let options = app
+        .cache
+        .team_members
+        .iter()
+        .map(|m| format!("{} ({})", m.name, m.email))
+        .collect::<Vec<_>>();
+    let Some(state) = app.assign_state.as_mut() else {
+        return;
+    };
     match key {
-        KeyCode::Esc => {
-            app.assign_state = None;
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            if let Some(ref mut state) = app.assign_state {
-                if member_count > 0 && state.selected < member_count - 1 {
-                    state.selected += 1;
-                }
-            }
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if let Some(ref mut state) = app.assign_state {
-                state.selected = state.selected.saturating_sub(1);
-            }
-        }
+        KeyCode::Esc => app.assign_state = None,
         KeyCode::Enter => {
-            let state = match &app.assign_state {
-                Some(s) => s,
-                None => return,
+            if !widgets::form::matching(&options, &state.search).contains(&state.selected) {
+                app.flash = Some("No matching assignee".into());
+                return;
+            }
+            let Some(member) = app.cache.team_members.get(state.selected) else {
+                return;
             };
-            let member = match app.cache.team_members.get(state.selected) {
-                Some(m) => m,
-                None => return,
-            };
+            let (email, name) = (member.email.clone(), member.name.clone());
             let ticket_key = state.ticket_key.clone();
-            let email = member.email.clone();
-            let name = member.name.clone();
-
-            // Optimistic cache update
             app.update_ticket_assignee(&ticket_key, &name, &email);
-
             app.assign_state = None;
             app.flash = Some(format!("Assigning {} to {}...", ticket_key, name));
-
             let tx = bg_tx.clone();
-            let key_clone = ticket_key.clone();
-            let email_clone = email.clone();
             tokio::spawn(async move {
-                let result = jira_client::assign_ticket(&key_clone, &email_clone)
+                let result = jira_client::assign_ticket(&ticket_key, &email)
                     .await
                     .map_err(|e| e.to_string());
                 let _ = tx.send(BackgroundMessage::TicketAssigned {
-                    key: key_clone,
+                    key: ticket_key,
                     result,
                 });
             });
         }
-        _ => {}
+        _ => widgets::form::choose(&options, &mut state.selected, &mut state.search, key),
     }
 }
 
-fn handle_edit_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<BackgroundMessage>) {
-    match key {
-        KeyCode::Esc => {
-            app.edit_state = None;
-        }
-        KeyCode::Tab => {
-            if let Some(ref mut state) = app.edit_state {
-                state.focused_field = (state.focused_field + 1) % 2;
-            }
-        }
-        KeyCode::BackTab => {
-            if let Some(ref mut state) = app.edit_state {
-                state.focused_field = if state.focused_field == 0 { 1 } else { 0 };
-            }
-        }
-        KeyCode::Enter => {
-            let state = match &app.edit_state {
-                Some(s) => s,
-                None => return,
-            };
-
-            let ticket_key = state.ticket_key.clone();
-            let new_summary = state.summary.clone();
-            let new_labels_str = state.labels.clone();
-            let new_labels: Vec<String> = new_labels_str
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            // Optimistic cache update
-            app.update_ticket_fields(&ticket_key, &new_summary, &new_labels);
-
-            app.edit_state = None;
-            app.flash = Some(format!("Updating {}...", ticket_key));
-
-            let tx = bg_tx.clone();
-            let key_clone = ticket_key.clone();
-            let summary_clone = new_summary.clone();
-            let labels_clone = new_labels.clone();
-            tokio::spawn(async move {
-                let summary_opt = if summary_clone.is_empty() {
-                    None
-                } else {
-                    Some(summary_clone.as_str())
-                };
-                let labels_opt = if labels_clone.is_empty() {
-                    None
-                } else {
-                    Some(labels_clone.as_slice())
-                };
-                let result = jira_client::edit_ticket(&key_clone, summary_opt, labels_opt)
-                    .await
-                    .map_err(|e| e.to_string());
-                let _ = tx.send(BackgroundMessage::TicketEdited {
-                    key: key_clone,
-                    result,
-                });
-            });
-        }
-        KeyCode::Backspace => {
-            if let Some(ref mut state) = app.edit_state {
-                match state.focused_field {
-                    0 => {
-                        state.summary.pop();
-                    }
-                    1 => {
-                        state.labels.pop();
-                    }
-                    _ => {}
-                }
-            }
-        }
-        KeyCode::Char(c) => {
-            if let Some(ref mut state) = app.edit_state {
-                match state.focused_field {
-                    0 => state.summary.push(c),
-                    1 => state.labels.push(c),
-                    _ => {}
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn handle_filter_edit_keys(app: &mut App, key: KeyCode, config: &mut AppConfig) {
-    let state = match &mut app.filter_edit {
-        Some(s) => s,
-        None => return,
+fn handle_edit_keys(
+    app: &mut App,
+    key: KeyCode,
+    modifiers: KeyModifiers,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+) {
+    let Some(state) = app.edit_state.as_mut() else {
+        return;
     };
-
     match key {
-        KeyCode::Esc => {
-            app.filter_edit = None;
-        }
-        KeyCode::Tab | KeyCode::BackTab => {
-            state.focused_field = if state.focused_field == 0 { 1 } else { 0 };
+        KeyCode::Esc => app.edit_state = None,
+        KeyCode::Tab => state.focused_field = (state.focused_field + 1) % 3,
+        KeyCode::BackTab => state.focused_field = (state.focused_field + 2) % 3,
+        KeyCode::Enter if modifiers.contains(KeyModifiers::SHIFT) => {
+            if state.focused_field == 2 {
+                state.description.insert_newline();
+            }
         }
         KeyCode::Enter => {
-            if state.name.trim().is_empty() || state.jql.trim().is_empty() {
-                app.flash = Some("Both name and JQL are required".to_string());
+            let key = state.ticket_key.clone();
+            let summary = widgets::form::text(&state.summary);
+            if summary.trim().is_empty() {
+                app.flash = Some("Summary is required".into());
                 return;
             }
-            let filter = crate::config::SavedFilter {
-                name: state.name.trim().to_string(),
-                jql: state.jql.trim().to_string(),
-            };
+            let labels: Vec<String> = widgets::form::text(&state.labels)
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            let description = widgets::form::text(&state.description);
+            // ponytail: jira-cli omits empty bodies; enable clearing when its edit command supports them.
+            if description.is_empty()
+                && app
+                    .find_ticket(&key)
+                    .and_then(|ticket| ticket.description.as_deref())
+                    .is_some_and(|body| !body.is_empty())
+            {
+                app.flash = Some("Use the ticket's browser action to clear its description".into());
+                return;
+            }
+            app.update_ticket_fields(&key, &summary, &labels);
+            app.update_ticket_description(&key, &description);
+            app.edit_state = None;
+            app.flash = Some(format!("Updating {}...", key));
+            let tx = bg_tx.clone();
+            tokio::spawn(async move {
+                let result = jira_client::edit_ticket(
+                    &key,
+                    Some(&summary),
+                    if labels.is_empty() {
+                        None
+                    } else {
+                        Some(&labels)
+                    },
+                    Some(&description),
+                )
+                .await
+                .map_err(|e| e.to_string());
+                let _ = tx.send(BackgroundMessage::TicketEdited { key, result });
+            });
+        }
+        _ => match state.focused_field {
+            0 => widgets::form::input(&mut state.summary, key, modifiers, false),
+            1 => widgets::form::input(&mut state.labels, key, modifiers, false),
+            _ => widgets::form::input(&mut state.description, key, modifiers, true),
+        },
+    }
+}
 
+fn handle_filter_edit_keys(
+    app: &mut App,
+    key: KeyCode,
+    modifiers: KeyModifiers,
+    config: &mut AppConfig,
+) {
+    let Some(state) = app.filter_edit.as_mut() else {
+        return;
+    };
+    match key {
+        KeyCode::Esc => app.filter_edit = None,
+        KeyCode::Tab | KeyCode::BackTab => state.focused_field = 1 - state.focused_field,
+        KeyCode::Enter => {
+            let name = widgets::form::text(&state.name).trim().to_string();
+            let jql = widgets::form::text(&state.jql).trim().to_string();
+            if name.is_empty() || jql.is_empty() {
+                app.flash = Some("Both name and JQL are required".into());
+                return;
+            }
+            let filter = crate::config::SavedFilter { name, jql };
             if let Some(idx) = state.editing_idx {
                 if idx < config.filters.len() {
                     config.filters[idx] = filter;
@@ -1725,32 +1895,22 @@ fn handle_filter_edit_keys(app: &mut App, key: KeyCode, config: &mut AppConfig) 
                 config.filters.push(filter);
                 app.filter_sidebar_idx = config.filters.len() - 1;
             }
-
-            match crate::config::save_config(config) {
-                Ok(()) => {
-                    app.flash = Some("Filter saved".to_string());
-                }
-                Err(e) => {
-                    app.flash = Some(format!("Failed to save filter: {}", e));
-                }
-            }
+            app.flash = Some(match crate::config::save_config(config) {
+                Ok(()) => "Filter saved".into(),
+                Err(e) => format!("Failed to save filter: {}", e),
+            });
             app.filter_edit = None;
         }
-        KeyCode::Backspace => match state.focused_field {
-            0 => {
-                state.name.pop();
-            }
-            1 => {
-                state.jql.pop();
-            }
-            _ => {}
-        },
-        KeyCode::Char(c) => match state.focused_field {
-            0 => state.name.push(c),
-            1 => state.jql.push(c),
-            _ => {}
-        },
-        _ => {}
+        _ => widgets::form::input(
+            if state.focused_field == 0 {
+                &mut state.name
+            } else {
+                &mut state.jql
+            },
+            key,
+            modifiers,
+            false,
+        ),
     }
 }
 
@@ -1762,6 +1922,7 @@ fn handle_filter_keys(
 ) {
     match key {
         KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('S') => app.settings = Some(settings::Settings::new(config)),
         KeyCode::Char('?') => app.toggle_keybindings(),
         KeyCode::Tab => {
             if app.filter_focus == FilterFocus::Sidebar {
@@ -1783,8 +1944,8 @@ fn handle_filter_keys(
         KeyCode::Char('n') => {
             app.filter_edit = Some(app::FilterEditState {
                 focused_field: 0,
-                name: String::new(),
-                jql: String::new(),
+                name: widgets::form::editor(""),
+                jql: widgets::form::editor(""),
                 editing_idx: None,
             });
         }
@@ -1793,8 +1954,8 @@ fn handle_filter_keys(
                 if let Some(filter) = config.filters.get(app.filter_sidebar_idx) {
                     app.filter_edit = Some(app::FilterEditState {
                         focused_field: 0,
-                        name: filter.name.clone(),
-                        jql: filter.jql.clone(),
+                        name: widgets::form::editor(&filter.name),
+                        jql: widgets::form::editor(&filter.jql),
                         editing_idx: Some(app.filter_sidebar_idx),
                     });
                 }
@@ -1822,7 +1983,7 @@ fn handle_filter_keys(
         }
         KeyCode::Char('U') => {
             app.bulk_upload_state = Some(BulkUploadState::PathInput {
-                path: String::new(),
+                path: widgets::form::editor("").into(),
                 loading: false,
             });
         }
@@ -1924,7 +2085,7 @@ fn handle_filter_keys(
                 app.loading = true;
                 app.ticket_sync_stage = None;
                 app.flash = Some("Refreshing tickets...".to_string());
-                spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual, config, app.moves.now());
+                spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
             }
         }
         _ => {}
@@ -1940,7 +2101,12 @@ async fn handle_main_keys(
 ) {
     match key {
         KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('S') => app.settings = Some(settings::Settings::new(config)),
         KeyCode::Tab => app.next_tab(),
+        KeyCode::BackTab => {
+            let index = (app.active_tab.index() + Tab::all().len() - 1) % Tab::all().len();
+            app.switch_tab(Tab::all()[index]);
+        }
         KeyCode::Char('j') | KeyCode::Down => app.move_selection_down(),
         KeyCode::Char('k') | KeyCode::Up => app.move_selection_up(),
         KeyCode::Char(' ') => app.toggle_selection_at_cursor(),
@@ -1981,7 +2147,7 @@ async fn handle_main_keys(
                 app.loading = true;
                 app.ticket_sync_stage = None;
                 app.flash = Some("Refreshing tickets...".to_string());
-                spawn_cache_refresh(bg_tx, CacheRefreshPhase::Manual, config, app.moves.now());
+                spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
             }
         }
         KeyCode::Char('z') => {
@@ -1996,14 +2162,18 @@ async fn handle_main_keys(
             app.create_ticket = Some(app::CreateTicketState {
                 focused_field: 0,
                 issue_type_idx: 0,
-                summary: String::new(),
+                summary: widgets::form::editor(""),
+                labels: widgets::form::editor(""),
+                description: widgets::form::editor(""),
+                assignee_search: String::new(),
+                epic_search: String::new(),
                 assignee_idx: 0,
                 epic_idx: 0,
             });
         }
         KeyCode::Char('U') => {
             app.bulk_upload_state = Some(BulkUploadState::PathInput {
-                path: String::new(),
+                path: widgets::form::editor("").into(),
                 loading: false,
             });
         }
@@ -2043,6 +2213,57 @@ mod tests {
             team: BTreeMap::new(),
             statuses: crate::config::StatusConfig::default(),
             filters: vec![],
+            preferences: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn forms_render_after_resizing_and_keep_actions_visible_at_normal_sizes() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let config = sample_config();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        for (width, height) in [(160, 55), (80, 24), (40, 18), (8, 4)] {
+            let mut app = App::new();
+            app.loading = false;
+            handle_main_keys(
+                &mut app,
+                KeyCode::Char('c'),
+                KeyModifiers::NONE,
+                &tx,
+                &config,
+            )
+            .await;
+            for modal in ["Create", "Comment", "Preferences"] {
+                if modal == "Comment" {
+                    app.create_ticket = None;
+                    app.comment_state = Some(app::CommentState {
+                        ticket_key: "DEMO-1".into(),
+                        body: widgets::form::editor("First line\nSecond line"),
+                    });
+                } else if modal == "Preferences" {
+                    app.comment_state = None;
+                    app.settings = Some(settings::Settings::new(&config));
+                }
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|f| ui(f, &app, &config)).unwrap();
+                if width >= 80 {
+                    let text: String = terminal
+                        .backend()
+                        .buffer()
+                        .content
+                        .iter()
+                        .map(|cell| cell.symbol())
+                        .collect();
+                    assert!(
+                        text.contains("[Cancel]"),
+                        "{modal} at {width}x{height}: {text}"
+                    );
+                    assert!(
+                        text.contains("[Editor]"),
+                        "{modal} at {width}x{height}: {text}"
+                    );
+                }
+            }
         }
     }
 
@@ -2105,7 +2326,6 @@ mod tests {
             epic_key: None,
             epic_name: None,
             detail_loaded: false,
-            url: format!("https://jira.mongodb.org/browse/{}", key),
             activity: Vec::new(),
         }
     }
@@ -2201,14 +2421,14 @@ mod tests {
         let mut app = App::new();
         app.comment_state = Some(crate::app::CommentState {
             ticket_key: "AMP-1".to_string(),
-            body: "hello".to_string(),
+            body: widgets::form::editor("hello"),
         });
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
 
         handle_comment_keys(&mut app, KeyCode::Enter, KeyModifiers::SHIFT, &tx);
 
         let state = app.comment_state.expect("comment modal should remain open");
-        assert_eq!(state.body, "hello\n");
+        assert_eq!(state.body.lines().join("\n"), "hello\n");
     }
 
     #[test]
@@ -2216,7 +2436,7 @@ mod tests {
         let mut app = App::new();
         app.comment_state = Some(crate::app::CommentState {
             ticket_key: "AMP-1".to_string(),
-            body: "   ".to_string(),
+            body: widgets::form::editor("   "),
         });
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -2231,14 +2451,14 @@ mod tests {
         let mut app = App::new();
         app.comment_state = Some(crate::app::CommentState {
             ticket_key: "AMP-1".to_string(),
-            body: "hello".to_string(),
+            body: widgets::form::editor("hello"),
         });
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
 
         handle_comment_keys(&mut app, KeyCode::Char('j'), KeyModifiers::CONTROL, &tx);
 
         let state = app.comment_state.expect("comment modal should remain open");
-        assert_eq!(state.body, "hello\n");
+        assert_eq!(state.body.lines().join("\n"), "hello\n");
     }
 
     #[tokio::test]

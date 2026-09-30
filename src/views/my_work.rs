@@ -57,6 +57,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_visual_line: Option<usize> = None;
+    let mut mouse_rows = Vec::new();
     let mut has_rows = false;
 
     for group in &grouped {
@@ -86,6 +87,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let marker = group_marker(app.group_selection_state(status.as_str()));
 
         // Status header
+        mouse_rows.push((lines.len(), group.index, true));
         let is_header_selected = group.index == app.selected_index;
         if is_header_selected {
             selected_visual_line = Some(lines.len());
@@ -116,6 +118,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
         // Ticket rows
         for (index, ticket) in tickets {
+            mouse_rows.push((lines.len(), *index, false));
             let is_selected = *index == app.selected_index;
             if is_selected {
                 selected_visual_line = Some(lines.len());
@@ -190,6 +193,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         _ => 0,
     };
 
+    crate::mouse::register_rows(app, area, &mouse_rows, scroll_y, &lines);
     let widget = Paragraph::new(lines).block(panel()).scroll((scroll_y, 0));
     f.render_widget(widget, area);
 }

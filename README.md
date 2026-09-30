@@ -68,7 +68,7 @@ The first run asks for two things:
 
 lazyjira then saves `~/.config/lazyjira/config.toml`, adds you to the team roster using the email from `jira me`, and loads your tickets. Press `?` at any time to see the keybindings.
 
-To see teammates in the Team tab, add them to the `[team]` section of the config file and restart lazyjira.
+Press `S` or click **Settings** to manage teammates, pinned epics, Done visibility, and your starting tab. Team and epic changes refresh without restarting.
 
 ## Configuration
 
@@ -96,6 +96,10 @@ jql = "type = Bug AND assignee = currentUser()"
 [[filters]]
 name = "Recent P1s"
 jql = "priority = P1 AND created >= -7d"
+
+[preferences]
+show_done = true
+start_tab = "My Work"
 ```
 
 | Key | Default | What it does |
@@ -107,8 +111,10 @@ jql = "priority = P1 AND created >= -7d"
 | `team` | you | Display name mapped to Jira email for everyone shown in the Team tab. |
 | `statuses.active`, `statuses.done` | shown above | Which statuses are loaded, and which count as done: `d` hides done tickets, epic progress counts them, and Team lists them after active work. So adding e.g. `"Cancelled"` or `"Won't Do"` to `done` treats them as finished. The order is also the order status groups are shown in My Work, Filters and Epics: active statuses first, then statuses not listed, then done. Tickets show Jira's own status name (Resolved stays Resolved). A status not listed follows a listed one it's a synonym of (Resolved follows Done, Open follows To Do); otherwise Done/Closed/Resolved-like names count as done and the rest as active. |
 | `filters` | empty | Saved JQL filters for the Filters tab. |
+| `preferences.show_done` | `true` | Whether Done tickets are visible. Updated when you press `d` or save preferences. |
+| `preferences.start_tab` | `"My Work"` | Starting tab: `My Work`, `Team`, `Epics`, `Unassigned`, or `Filters`. |
 
-When you create, edit, or delete a saved filter in the app, lazyjira rewrites this file, and any comments you added are lost.
+Saved filter and preference changes rewrite this file, and any comments you added are lost.
 
 ## Keybindings
 
@@ -117,6 +123,7 @@ When you create, edit, or delete a saved filter in the app, lazyjira rewrites th
 | Key | Action |
 |-----|--------|
 | `Tab` | Next tab |
+| `Shift+Tab` | Previous tab (in Filters: back to sidebar) |
 | `j/k`, `Up/Down` | Navigate |
 | `Enter` | Open ticket detail (or epic detail on an Epics header) |
 | `/` | Search tickets, labels, and team members (`Esc` to exit) |
@@ -126,12 +133,29 @@ When you create, edit, or delete a saved filter in the app, lazyjira rewrites th
 | `B` | Open bulk action menu (move/assign) |
 | `U` | Open bulk CSV upload |
 | `c` | Create ticket |
+| `S` | Preferences: teammates, pinned epics, Done visibility, starting tab |
 | `z/Z` | Fold current group / fold all groups |
 | `d` | Toggle visibility of done statuses (`statuses.done`) |
 | `f/F` | Focus the next / previous status in My Work or Team, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that) |
 | `r` | Refresh |
 | `?` | Keybindings help |
 | `q` | Quit |
+
+Each tab remembers its selection, search, status focus, and folded groups during the session. Refresh keeps the loaded list visible and follows the selected ticket even when other rows are added or reordered.
+
+### Mouse
+
+Click a tab or row to select it; click the selected row again to open it. Click checkboxes to mark tickets or groups and fold arrows to expand or collapse groups. The wheel navigates lists and scrolls details, help, and editors.
+
+Click the red **[×]** in the top-left of ticket or epic detail to close the popup, including from its history and move menus.
+
+Forms support clicking fields, positioning the text cursor, choosing picker options, and clicking their action buttons. Type to filter assignee and epic pickers; use arrow keys or the wheel to choose. Bulk actions still require the separate confirmation step.
+
+### Writing
+
+Create tickets with a summary, labels, and description. Edit these fields with `e` in ticket detail. Text fields support arrow keys, Home/End, Delete/Backspace, and paste. Comments and descriptions accept multiline paste; `Shift+Enter` or `Ctrl+J` inserts a newline, and `Enter` submits.
+
+`Ctrl+E`, `F4`, or the **Editor** button opens the focused text field in `$VISUAL`, then `$EDITOR`, then `vi`. Returning from the editor brings the text back into the form for review before submission. In preferences, use one `Name = email` line per teammate and comma-separated epic keys; an empty epic list shows all epics.
 
 ### Detail view
 
@@ -151,7 +175,7 @@ Descriptions and comments render Jira's wiki markup: headings, bold/italic/strik
 | `m` | Move status |
 | `C` | Comment |
 | `a` | Assign/reassign |
-| `e` | Edit summary + labels |
+| `e` | Edit summary, labels, and description |
 | `h` | Activity history |
 
 The move picker lists the transitions Jira offers for the ticket, as "transition → status" (for example `Resume Progress → In Progress`), so it only offers moves the ticket's workflow allows. Choose one with `j/k` and `Enter`, then press `Enter` or `y` to confirm.
@@ -205,7 +229,8 @@ The preview also warns about summaries that match an existing ticket or repeat w
 
 ## Limitations
 
-- Browser links (`o`) always point to `https://jira.mongodb.org/browse/…`, and they open with the macOS `open` command, so they may not work on Linux.
+- Browser links (`o`) use the `server` setting from jira-cli's config (`$JIRA_CONFIG_FILE` or `~/.config/.jira/.config.yml`). They open with the macOS `open` command, so they may not work on Linux.
+- jira-cli omits empty descriptions when editing. Use the browser action to clear an existing description.
 - The Unassigned tab queries the `Assigned Teams` custom field. It doesn't work on Jira instances that don't have that field.
 - A move sends one transition. Reaching a status that is several transitions away takes several moves, and transitions that require fields other than a resolution fail with Jira's error; press `o` to finish those in the browser.
 - Moves need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read.

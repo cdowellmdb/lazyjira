@@ -10,11 +10,13 @@ use tokio::time::timeout;
 use crate::cache::{ActivityEntry, ActivityKind, Cache, Epic, TeamMember, Ticket};
 use crate::config::AppConfig;
 
-const JIRA_BASE_URL: &str = "https://jira.mongodb.org/browse";
-
 /// The ticket's page in the Jira web UI.
-pub fn browse_url(key: &str) -> String {
-    format!("{}/{}", JIRA_BASE_URL, key)
+pub fn browse_url(key: &str) -> Result<String> {
+    Ok(format!(
+        "{}/browse/{}",
+        crate::jira_rest::server_url()?,
+        key
+    ))
 }
 const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
 const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
@@ -112,7 +114,6 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
                 .join(" "),
         )
     };
-    let url = browse_url(&key);
 
     Some(Ticket {
         key,
@@ -126,7 +127,6 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
         epic_key: None,
         epic_name: None,
         detail_loaded: false,
-        url,
         activity: Vec::new(),
     })
 }
@@ -362,7 +362,6 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
     activity.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
     let ticket_key = json["key"].as_str().unwrap_or(key).to_string();
-    let url = browse_url(&ticket_key);
 
     Ok(Ticket {
         key: ticket_key,
@@ -376,7 +375,6 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
         epic_key,
         epic_name: None,
         detail_loaded: true,
-        url,
         activity,
     })
 }
@@ -946,6 +944,7 @@ pub async fn edit_ticket(
     key: &str,
     summary: Option<&str>,
     labels: Option<&[String]>,
+    description: Option<&str>,
 ) -> Result<()> {
     let mut args = vec!["issue", "edit", key, "--no-input"];
 
@@ -961,6 +960,9 @@ pub async fn edit_ticket(
         }
     }
 
+    if let Some(body) = description {
+        args.extend(["-b", body]);
+    }
     run_cmd("jira", &args).await?;
     Ok(())
 }
@@ -1030,26 +1032,6 @@ pub async fn create_ticket_with_fields(
     Ok(key)
 }
 
-/// Create a new ticket via `jira issue create`.
-pub async fn create_ticket(
-    project: &str,
-    issue_type: &str,
-    summary: &str,
-    assignee_email: Option<&str>,
-    epic_key: Option<&str>,
-) -> Result<String> {
-    create_ticket_with_fields(
-        project,
-        issue_type,
-        summary,
-        assignee_email,
-        epic_key,
-        None,
-        None,
-    )
-    .await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1069,7 +1051,6 @@ mod tests {
             epic_key: None,
             epic_name: None,
             detail_loaded: false,
-            url: format!("https://example.atlassian.net/browse/{}", key),
             activity: Vec::new(),
         }
     }
@@ -1146,6 +1127,7 @@ mod tests {
             team: BTreeMap::new(),
             statuses: StatusConfig::default(),
             filters: vec![],
+            preferences: Default::default(),
         };
         let query = unassigned_team_active_query(&config);
         assert!(query.contains("assignee is EMPTY"));

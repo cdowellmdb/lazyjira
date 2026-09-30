@@ -93,12 +93,20 @@ fn render_frame(f: &mut ratatui::Frame, app: &App, key: &str) -> (Rect, Rect) {
     };
     f.render_widget(Clear, area);
 
-    let mut block = panel().padding(Padding::horizontal(1)).title(Span::styled(
-        format!(" {} ", key),
-        Style::default()
-            .fg(Color::Reset)
-            .add_modifier(Modifier::BOLD),
-    ));
+    let mut block = panel()
+        .padding(Padding::horizontal(1))
+        .title(Line::from(vec![
+            Span::styled(
+                " [×] ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {} ", key),
+                Style::default()
+                    .fg(Color::Reset)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
     if let Some((index, count)) = app.detail_position() {
         block = block.title(
             Line::from(Span::styled(format!(" {} of {} ", index, count), muted())).right_aligned(),
@@ -106,6 +114,12 @@ fn render_frame(f: &mut ratatui::Frame, app: &App, key: &str) -> (Rect, Rect) {
     }
     let inner = block.inner(area);
     f.render_widget(block, area);
+    if area.width > 2 && area.height > 0 {
+        app.mouse_targets.borrow_mut().push((
+            Rect::new(area.x + 1, area.y, 5.min(area.width - 2), 1),
+            crate::mouse::Target::CloseDetail,
+        ));
+    }
     (area, inner)
 }
 
@@ -123,15 +137,27 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                         Style::default().fg(Color::Yellow),
                     ))],
                     &[("Esc", "cancel")],
+                    app,
                 ),
                 DetailMode::MovePicker(picker) => {
-                    render_move_picker(f, inner, ticket, picker, app.status_rules())
+                    render_move_picker(f, inner, ticket, picker, app.status_rules(), app)
                 }
                 DetailMode::ResolutionPicker { picker, selected } => {
-                    render_resolution_picker(f, inner, picker, *selected)
+                    render_resolution_picker(f, inner, picker, *selected, app)
                 }
                 DetailMode::History { scroll } => {
                     crate::widgets::activity::render(f, inner, &ticket.activity, *scroll);
+                    crate::widgets::form::buttons(
+                        f,
+                        app,
+                        Rect::new(
+                            inner.x,
+                            inner.bottom().saturating_sub(1),
+                            inner.width,
+                            u16::from(inner.height > 0),
+                        ),
+                        &[("Back", crossterm::event::KeyCode::Esc)],
+                    );
                 }
             }
             return;
@@ -171,7 +197,7 @@ fn hint_lines(hints: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
 
 /// Draws `hints` at the bottom of `area`, after a blank line, and returns the
 /// area above them.
-fn render_footer(f: &mut ratatui::Frame, area: Rect, hints: &[(&str, &str)]) -> Rect {
+fn render_footer(f: &mut ratatui::Frame, area: Rect, hints: &[(&str, &str)], app: &App) -> Rect {
     let footer = hint_lines(hints, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -185,6 +211,44 @@ fn render_footer(f: &mut ratatui::Frame, area: Rect, hints: &[(&str, &str)]) -> 
         height: chunks[1].height.saturating_sub(1),
         ..chunks[1]
     };
+    for (row, line) in footer.iter().take(footer_area.height as usize).enumerate() {
+        let mut x = footer_area.x;
+        for span in &line.spans {
+            let width = span.width() as u16;
+            if span.style.fg == Some(Color::Cyan) {
+                let key = match span.content.as_ref() {
+                    "Esc" => Some(crossterm::event::KeyCode::Esc),
+                    "Enter" => Some(crossterm::event::KeyCode::Enter),
+                    value if value.chars().count() == 1 => {
+                        value.chars().next().map(crossterm::event::KeyCode::Char)
+                    }
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    app.mouse_targets.borrow_mut().push((
+                        Rect::new(
+                            x,
+                            footer_area.y + row as u16,
+                            width.min(footer_area.right().saturating_sub(x)),
+                            1,
+                        ),
+                        crate::mouse::Target::Key(key),
+                    ));
+                }
+                if span.content == "[\u{a0}]" {
+                    app.mouse_targets.borrow_mut().push((
+                        Rect::new(x, footer_area.y + row as u16, 1, 1),
+                        crate::mouse::Target::Key(crossterm::event::KeyCode::Char('[')),
+                    ));
+                    app.mouse_targets.borrow_mut().push((
+                        Rect::new(x + 2, footer_area.y + row as u16, 1, 1),
+                        crate::mouse::Target::Key(crossterm::event::KeyCode::Char(']')),
+                    ));
+                }
+            }
+            x = x.saturating_add(width);
+        }
+    }
     f.render_widget(Paragraph::new(footer), footer_area);
     chunks[0]
 }
@@ -432,7 +496,7 @@ fn comment_lines(ticket: &Ticket, width: usize) -> Vec<Line<'static>> {
 }
 
 fn render_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, ticket: &Ticket) {
-    let body = render_footer(f, area, VIEW_HINTS);
+    let body = render_footer(f, area, VIEW_HINTS, app);
     let width = body.width as usize;
 
     let mut lines = header_lines(ticket, app.status_rules(), width);
@@ -448,7 +512,7 @@ fn render_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, ticke
 }
 
 fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, epic: &Epic) {
-    let body = render_footer(f, area, EPIC_HINTS);
+    let body = render_footer(f, area, EPIC_HINTS, app);
     let width = body.width as usize;
     let rules = app.status_rules();
 
@@ -525,8 +589,9 @@ fn render_with_footer(
     area: Rect,
     lines: Vec<Line>,
     hints: &[(&str, &str)],
+    app: &App,
 ) {
-    let body = render_footer(f, area, hints);
+    let body = render_footer(f, area, hints, app);
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 }
 
@@ -548,12 +613,42 @@ fn option_style(color: Color, selected: bool) -> Style {
     }
 }
 
+fn render_menu(
+    f: &mut ratatui::Frame,
+    app: &App,
+    area: Rect,
+    lines: Vec<Line<'static>>,
+    choices: (&[(usize, usize)], usize),
+    hints: &[(&str, &str)],
+) {
+    let body = render_footer(f, area, hints, app);
+    let selected_line = choices
+        .0
+        .iter()
+        .find(|(_, index)| *index == choices.1)
+        .map_or(0, |(line, _)| *line);
+    let scroll = selected_line.saturating_sub(body.height.saturating_sub(1) as usize);
+    for &(line, index) in choices.0 {
+        if let Some(y) = line
+            .checked_sub(scroll)
+            .filter(|y| *y < body.height as usize)
+        {
+            app.mouse_targets.borrow_mut().push((
+                Rect::new(body.x, body.y + y as u16, body.width, 1),
+                crate::mouse::Target::Choose { field: 0, index },
+            ));
+        }
+    }
+    f.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), body);
+}
+
 fn render_move_picker(
     f: &mut ratatui::Frame,
     area: Rect,
     ticket: &crate::cache::Ticket,
     picker: &MovePicker,
     rules: &StatusRules,
+    app: &App,
 ) {
     let mut lines = vec![
         heading(match &picker.only_to {
@@ -567,6 +662,7 @@ fn render_move_picker(
         Line::from(""),
     ];
 
+    let mut choices = Vec::new();
     let rows = picker.rows();
     if rows.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -578,6 +674,7 @@ fn render_move_picker(
         )));
     }
     for (i, transition) in rows.iter().enumerate() {
+        choices.push((lines.len(), i));
         let destination = Status::from_str(&transition.to_name);
         let shortcut = match destination {
             Status::Other(_) => "    ".to_string(),
@@ -609,13 +706,22 @@ fn render_move_picker(
         )));
     }
 
-    render_with_footer(
+    render_menu(
         f,
+        app,
         area,
         lines,
+        (&choices, picker.selected),
         &[
             ("j/k", "choose"),
-            ("Enter", "select"),
+            (
+                "Enter",
+                if picker.confirming {
+                    "confirm"
+                } else {
+                    "select"
+                },
+            ),
             ("p/w/n/t/v/b/c", "pick by status"),
             ("Shift+key", "move now"),
             ("Esc", "cancel"),
@@ -628,6 +734,7 @@ fn render_resolution_picker(
     area: Rect,
     picker: &MovePicker,
     selected: usize,
+    app: &App,
 ) {
     let transition = picker
         .selected_transition()
@@ -637,7 +744,9 @@ fn render_resolution_picker(
         heading(format!("{} — select a resolution:", transition)),
         Line::from(""),
     ];
+    let mut choices = Vec::new();
     for (i, choice) in picker.resolution_choices().iter().enumerate() {
+        choices.push((lines.len(), i));
         let prefix = if i == selected { "› " } else { "  " };
         let name = choice.as_ref().map_or("No resolution", |r| r.name.as_str());
         lines.push(Line::from(Span::styled(
@@ -645,10 +754,12 @@ fn render_resolution_picker(
             option_style(Color::Reset, i == selected),
         )));
     }
-    render_with_footer(
+    render_menu(
         f,
+        app,
         area,
         lines,
+        (&choices, selected),
         &[("j/k", "choose"), ("Enter", "move"), ("Esc", "back")],
     );
 }
@@ -676,7 +787,6 @@ mod tests {
             epic_key: None,
             epic_name: None,
             detail_loaded: true,
-            url: String::new(),
             activity: vec![
                 comment("2026-09-02T10:00:00.000+0000", "Eliza Spang", "Second *reply*"),
                 comment("2026-09-01T09:30:00.000+0000", "Christian Dowell", "First"),
@@ -723,10 +833,41 @@ mod tests {
             .unwrap_or_else(|| panic!("{:?} not drawn:\n{}", text, lines.join("\n")))
     }
 
-    #[test]
-    fn narrow_footer_wraps_instead_of_cutting_hints_off() {
-        let lines = draw(&app_showing(ticket()), 70, 34);
-        assert!(row(&lines, "↑↓ scroll") < row(&lines, "Esc close"));
+    #[tokio::test]
+    async fn top_left_close_button_closes_the_popup() {
+        let mut config = toml::from_str("[jira]\nproject = 'DSCI'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        for (width, height, fullscreen) in [(55, 50, false), (40, 18, false), (80, 24, true)] {
+            for mode in [
+                DetailMode::View,
+                DetailMode::History { scroll: 0 },
+                DetailMode::MoveLoading { request: 1 },
+            ] {
+                let mut app = app_showing(ticket());
+                app.detail_fullscreen = fullscreen;
+                app.detail_mode = mode;
+                let lines = draw(&app, width, height);
+                let y = row(&lines, "[×]");
+                let x = lines[y].split_once("[×]").unwrap().0.chars().count();
+                assert!(x < width as usize / 4 && y < height as usize / 4);
+                assert!(!lines.iter().any(|line| line.contains("[Close]")));
+                crate::mouse::handle(
+                    &mut app,
+                    crossterm::event::MouseEvent {
+                        kind: crossterm::event::MouseEventKind::Down(
+                            crossterm::event::MouseButton::Left,
+                        ),
+                        column: x as u16 + 1,
+                        row: y as u16,
+                        modifiers: crossterm::event::KeyModifiers::NONE,
+                    },
+                    &tx,
+                    &mut config,
+                )
+                .await;
+                assert!(!app.is_detail_open());
+            }
+        }
     }
 
     #[test]

@@ -11,6 +11,7 @@ use crate::widgets::{form, markup};
 const MAIN: &[(&str, &str)] = &[
     ("", "Navigation"),
     ("Tab", "Next tab"),
+    ("Shift+Tab", "Previous tab / filter sidebar"),
     ("j/k · ↑/↓", "Move selection"),
     ("Enter", "Open ticket or epic"),
     ("z / Z", "Fold group / all groups"),
@@ -30,6 +31,7 @@ const MAIN: &[(&str, &str)] = &[
     ("f / F", "Next / previous status focus"),
     ("", "Create & refresh"),
     ("c", "Create ticket"),
+    ("S", "Team, epic & startup preferences"),
     ("r", "Refresh tickets"),
 ];
 
@@ -46,8 +48,10 @@ const DETAIL: &[(&str, &str)] = &[
     ("m", "Move ticket"),
     ("C", "Add comment"),
     ("a", "Assign ticket"),
-    ("e", "Edit summary & labels"),
+    ("e", "Edit summary, labels & description"),
     ("h", "Activity history"),
+    ("Ctrl+E / F4", "External editor (text fields)"),
+    ("Shift+Enter", "Newline (comments & descriptions)"),
     ("", "Move picker"),
     ("j/k · ↑/↓", "Choose transition"),
     ("p/w/n/t/v/b/c", "Pick destination by status"),
@@ -217,4 +221,8 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         inner.width as usize,
     ));
     f.render_widget(Paragraph::new(footer), chunks[1]);
+    app.mouse_targets.borrow_mut().push((
+        chunks[1],
+        crate::mouse::Target::Key(crossterm::event::KeyCode::Esc),
+    ));
 }

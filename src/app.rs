@@ -30,28 +30,34 @@ pub(crate) struct VisibleGroup<'a, H> {
 #[derive(Debug, Clone)]
 pub struct CommentState {
     pub ticket_key: String,
-    pub body: String,
+    pub body: tui_textarea::TextArea<'static>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AssignState {
     pub ticket_key: String,
     pub selected: usize,
+    pub search: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct EditFieldsState {
     pub ticket_key: String,
-    pub focused_field: usize, // 0=summary, 1=labels
-    pub summary: String,
-    pub labels: String, // comma-separated
+    pub focused_field: usize, // 0=summary, 1=labels, 2=description
+    pub summary: tui_textarea::TextArea<'static>,
+    pub labels: tui_textarea::TextArea<'static>,
+    pub description: tui_textarea::TextArea<'static>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CreateTicketState {
-    pub focused_field: usize, // 0=type, 1=summary, 2=assignee, 3=epic
+    pub focused_field: usize, // 0=type, 1=summary, 2=assignee, 3=epic, 4=labels, 5=description
     pub issue_type_idx: usize,
-    pub summary: String,
+    pub summary: tui_textarea::TextArea<'static>,
+    pub labels: tui_textarea::TextArea<'static>,
+    pub description: tui_textarea::TextArea<'static>,
+    pub assignee_search: String,
+    pub epic_search: String,
     pub assignee_idx: usize, // 0 = "None", then 1..N = team members
     pub epic_idx: usize,     // 0 = "None", then 1..N = cached epics
 }
@@ -96,10 +102,10 @@ pub struct BulkUploadSummary {
     pub failed_details: Vec<(usize, String, String)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum BulkUploadState {
     PathInput {
-        path: String,
+        path: Box<tui_textarea::TextArea<'static>>,
         loading: bool,
     },
     Preview {
@@ -125,6 +131,10 @@ pub enum Tab {
 }
 
 impl Tab {
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
     pub fn next(self) -> Self {
         match self {
             Tab::MyWork => Tab::Team,
@@ -167,8 +177,8 @@ pub enum FilterFocus {
 #[derive(Debug, Clone)]
 pub struct FilterEditState {
     pub focused_field: usize, // 0=name, 1=jql
-    pub name: String,
-    pub jql: String,
+    pub name: tui_textarea::TextArea<'static>,
+    pub jql: tui_textarea::TextArea<'static>,
     /// None = creating new, Some(idx) = editing existing filter at index.
     pub editing_idx: Option<usize>,
 }
@@ -227,12 +237,22 @@ struct VisibleKeysCache {
     group_ticket_keys: HashMap<String, Vec<String>>,
 }
 
+#[derive(Default, Clone)]
+struct ViewPosition {
+    selected: Option<VisibleItem>,
+    group: Option<String>,
+    index: usize,
+    search: Option<String>,
+    status_focus: Option<String>,
+}
+
 /// Full application state.
 pub struct App {
     pub cache: Cache,
     pub active_tab: Tab,
     /// Index of the selected item in the current tab's list.
     pub selected_index: usize,
+    tab_positions: [ViewPosition; 5],
     /// If Some, the detail overlay is open for this ticket key.
     pub detail_ticket_key: Option<String>,
     /// If Some, the detail overlay is open for this epic key.
@@ -257,6 +277,8 @@ pub struct App {
     pub status_focus: Option<String>,
     /// True while full epic relationships are being refreshed in background.
     pub epics_refreshing: bool,
+    pub epic_refresh_request: u64,
+    pub cache_refresh_request: u64,
     /// Ticket sync stage for background cache refresh.
     pub ticket_sync_stage: Option<TicketSyncStage>,
     /// Age of the cache snapshot loaded at startup, in seconds.
@@ -279,6 +301,9 @@ pub struct App {
     /// Cached visible ticket keys for selection/counting in the active tab.
     visible_keys_cache: RefCell<VisibleKeysCache>,
     pub should_quit: bool,
+    pub settings: Option<crate::settings::Settings>,
+    pub external_editor_requested: bool,
+    pub mouse_targets: RefCell<Vec<(ratatui::layout::Rect, crate::mouse::Target)>>,
     /// State for the create ticket modal overlay.
     pub create_ticket: Option<CreateTicketState>,
     /// Selected ticket keys in the current visible list context.
@@ -321,6 +346,7 @@ impl App {
             cache: Cache::empty(),
             active_tab: Tab::MyWork,
             selected_index: 0,
+            tab_positions: std::array::from_fn(|_| ViewPosition::default()),
             detail_ticket_key: None,
             detail_epic_key: None,
             detail_mode: DetailMode::View,
@@ -334,6 +360,8 @@ impl App {
             show_done: true,
             status_focus: None,
             epics_refreshing: false,
+            epic_refresh_request: 0,
+            cache_refresh_request: 0,
             ticket_sync_stage: None,
             cache_stale_age_secs: None,
             show_keybindings: false,
@@ -347,6 +375,9 @@ impl App {
             view_generation: 0,
             visible_keys_cache: RefCell::new(VisibleKeysCache::default()),
             should_quit: false,
+            settings: None,
+            external_editor_requested: false,
+            mouse_targets: RefCell::new(Vec::new()),
             create_ticket: None,
             selected_ticket_keys: HashSet::new(),
             bulk_state: None,
@@ -369,6 +400,88 @@ impl App {
         }
     }
 
+    pub fn focus_field(&mut self, field: usize) {
+        if let Some(state) = &mut self.settings {
+            state.focused_field = field.min(3);
+        } else if let Some(state) = &mut self.filter_edit {
+            state.focused_field = field.min(1);
+        } else if let Some(state) = &mut self.create_ticket {
+            state.focused_field = field.min(5);
+        } else if let Some(state) = &mut self.edit_state {
+            state.focused_field = field.min(2);
+        }
+    }
+
+    pub fn current_editor(&mut self) -> Option<(&mut tui_textarea::TextArea<'static>, bool)> {
+        if !self.moves.failures().is_empty() || self.show_keybindings || self.bulk_state.is_some() {
+            return None;
+        }
+        if let Some(state) = &mut self.bulk_upload_state {
+            return match state {
+                BulkUploadState::PathInput {
+                    path,
+                    loading: false,
+                } => Some((path, false)),
+                _ => None,
+            };
+        }
+        if let Some(state) = &mut self.settings {
+            return match state.focused_field {
+                0 => Some((&mut state.team, true)),
+                1 => Some((&mut state.epics, false)),
+                _ => None,
+            };
+        }
+        if let Some(state) = &mut self.filter_edit {
+            return Some((
+                if state.focused_field == 0 {
+                    &mut state.name
+                } else {
+                    &mut state.jql
+                },
+                false,
+            ));
+        }
+        if let Some(state) = &mut self.create_ticket {
+            return match state.focused_field {
+                1 => Some((&mut state.summary, false)),
+                4 => Some((&mut state.labels, false)),
+                5 => Some((&mut state.description, true)),
+                _ => None,
+            };
+        }
+        if let Some(state) = &mut self.comment_state {
+            return Some((&mut state.body, true));
+        }
+        if let Some(state) = &mut self.edit_state {
+            return match state.focused_field {
+                0 => Some((&mut state.summary, false)),
+                1 => Some((&mut state.labels, false)),
+                _ => Some((&mut state.description, true)),
+            };
+        }
+        None
+    }
+
+    pub fn focused_field(&self) -> Option<usize> {
+        if let Some(state) = &self.settings {
+            Some(state.focused_field)
+        } else if let Some(state) = &self.filter_edit {
+            Some(state.focused_field)
+        } else if let Some(state) = &self.create_ticket {
+            Some(state.focused_field)
+        } else if let Some(state) = &self.edit_state {
+            Some(state.focused_field)
+        } else if self.assign_state.is_some()
+            || self.comment_state.is_some()
+            || self.bulk_upload_state.is_some()
+        {
+            Some(0)
+        } else {
+            None
+        }
+    }
+
     /// Orders statuses and decides which are done from the configured `active` and `done` lists.
     pub fn set_status_rules(&mut self, statuses: &crate::config::StatusConfig) {
         let rules = crate::cache::StatusRules::new(&statuses.active, &statuses.done);
@@ -384,6 +497,7 @@ impl App {
     }
 
     pub fn set_epics_i_care_about(&mut self, epics: Vec<String>) {
+        self.ensure_visible_keys_cache();
         let mut rank = HashMap::new();
         for key in epics {
             let normalized = key.trim().to_ascii_uppercase();
@@ -403,9 +517,23 @@ impl App {
 
     /// Replaces the cache with a Jira read requested at `requested_at` (see `MoveTracker::now`).
     pub fn replace_cache(&mut self, cache: Cache, requested_at: u64) {
+        self.ensure_visible_keys_cache();
         self.cache = cache;
         self.reapply_moves_since(requested_at);
         self.mark_cache_changed();
+    }
+
+    pub fn replace_epics(&mut self, epics: Vec<crate::cache::Epic>, requested_at: u64) {
+        self.ensure_visible_keys_cache();
+        crate::jira_client::attach_epics_to_tickets(
+            &mut self.cache.my_tickets,
+            &mut self.cache.team_tickets,
+            &epics,
+        );
+        self.cache.epics = epics;
+        self.reapply_moves_since(requested_at);
+        self.mark_cache_changed();
+        self.clamp_selection();
     }
 
     /// A new id for a background request, so its answer can be matched to what's on screen.
@@ -415,16 +543,89 @@ impl App {
     }
 
     pub fn mark_cache_changed(&mut self) {
+        // ponytail: O(n) row scan per update; batch restoration if large-board hydration lags.
+        // Keep the old visible rows long enough to identify the selected occurrence.
+        let position = {
+            let cache = self.visible_keys_cache.get_mut();
+            cache
+                .state
+                .as_ref()
+                .filter(|state| state.active_tab == self.active_tab)
+                .and_then(|_| cache.items.get(self.selected_index).cloned())
+                .map(|selected| (selected, Self::group_at(&cache.items, self.selected_index)))
+        };
         self.view_generation = self.view_generation.wrapping_add(1);
         let cache = self.visible_keys_cache.get_mut();
         cache.state = None;
         cache.items.clear();
         cache.group_ticket_keys.clear();
+        if let Some((selected, group)) = position {
+            self.restore_position(Some(&selected), group.as_deref(), self.selected_index);
+        }
     }
 
     pub fn next_tab(&mut self) {
-        self.active_tab = self.active_tab.next();
-        self.selected_index = 0;
+        self.switch_tab(self.active_tab.next());
+    }
+
+    fn group_at(items: &[VisibleItem], index: usize) -> Option<String> {
+        items
+            .iter()
+            .take(index.saturating_add(1))
+            .rev()
+            .find_map(|item| match item {
+                VisibleItem::GroupHeader(id) => Some(id.clone()),
+                _ => None,
+            })
+    }
+
+    fn restore_position(
+        &mut self,
+        selected: Option<&VisibleItem>,
+        group: Option<&str>,
+        index: usize,
+    ) {
+        self.ensure_visible_keys_cache();
+        let cache = self.visible_keys_cache.borrow();
+        let mut current_group = None;
+        let mut found = None;
+        for (i, item) in cache.items.iter().enumerate() {
+            if let VisibleItem::GroupHeader(id) = item {
+                current_group = Some(id.as_str());
+            }
+            if Some(item) == selected && current_group == group {
+                found = Some(i);
+                break;
+            }
+        }
+        self.selected_index = found
+            .or_else(|| cache.items.iter().position(|item| Some(item) == selected))
+            .unwrap_or(index.min(cache.items.len().saturating_sub(1)));
+    }
+
+    pub fn switch_tab(&mut self, tab: Tab) {
+        if tab == self.active_tab {
+            return;
+        }
+        self.ensure_visible_keys_cache();
+        let cache = self.visible_keys_cache.borrow();
+        self.tab_positions[self.active_tab.index()] = ViewPosition {
+            selected: cache.items.get(self.selected_index).cloned(),
+            group: Self::group_at(&cache.items, self.selected_index),
+            index: self.selected_index,
+            search: self.search.clone(),
+            status_focus: self.status_focus.clone(),
+        };
+        drop(cache);
+        self.active_tab = tab;
+        let position = self.tab_positions[tab.index()].clone();
+        self.search = position.search;
+        self.status_focus = position.status_focus;
+        self.restore_position(
+            position.selected.as_ref(),
+            position.group.as_deref(),
+            position.index,
+        );
         self.clamp_selection();
     }
 
@@ -1432,6 +1633,7 @@ impl App {
     /// Applies `update` to every cached copy of `key`: My Work, Team, epic children and
     /// filter results.
     fn update_ticket(&mut self, key: &str, mut update: impl FnMut(&mut crate::cache::Ticket)) {
+        self.ensure_visible_keys_cache();
         let copies = self
             .cache
             .my_tickets
@@ -1514,12 +1716,77 @@ impl App {
             ticket.labels = labels.to_vec();
         });
     }
+
+    pub fn update_ticket_description(&mut self, key: &str, description: &str) {
+        self.update_ticket(key, |ticket| {
+            ticket.description = Some(description.to_string())
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{App, GroupSelectionState, Tab};
     use crate::cache::{Epic, Ticket};
+
+    #[test]
+    fn refresh_and_tab_changes_keep_ticket_identity_and_folds() {
+        let mut app = App::new();
+        app.cache.my_tickets = vec![
+            Ticket::for_test("DEMO-2", "In Progress"),
+            Ticket::for_test("DEMO-3", "In Progress"),
+            Ticket::for_test("DEMO-9", "Blocked"),
+        ];
+        app.selected_index = 2;
+        let mut refreshed = app.cache.clone();
+        refreshed
+            .my_tickets
+            .insert(0, Ticket::for_test("DEMO-1", "In Progress"));
+        app.replace_cache(refreshed, app.moves.now());
+        assert_eq!(app.selected_ticket_key().as_deref(), Some("DEMO-3"));
+        assert_eq!(app.selected_index, 3);
+        app.toggle_group_collapse("Blocked");
+        app.selected_index = 3;
+        app.switch_tab(Tab::Epics);
+        app.switch_tab(Tab::MyWork);
+        assert_eq!(app.selected_ticket_key().as_deref(), Some("DEMO-3"));
+        assert!(app.is_collapsed(Tab::MyWork, "Blocked"));
+        app.cache.my_tickets.remove(0);
+        app.mark_cache_changed();
+        assert_eq!(app.selected_ticket_key().as_deref(), Some("DEMO-3"));
+        app.search = Some("DEMO-3".into());
+        app.status_focus = Some("In Progress".into());
+        app.selected_index = 1;
+        app.switch_tab(Tab::Team);
+        assert!(app.search.is_none());
+        app.switch_tab(Tab::MyWork);
+        assert_eq!(app.search.as_deref(), Some("DEMO-3"));
+        assert_eq!(app.status_focus.as_deref(), Some("In Progress"));
+        assert_eq!(app.selected_ticket_key().as_deref(), Some("DEMO-3"));
+    }
+
+    #[test]
+    fn refresh_keeps_the_same_occurrence_of_a_ticket_shared_by_epics() {
+        let mut app = App::new();
+        app.active_tab = Tab::Epics;
+        app.cache.epics = ["DEMO-100", "DEMO-200"]
+            .into_iter()
+            .map(|key| Epic {
+                key: key.into(),
+                summary: key.into(),
+                children: vec![Ticket::for_test("DEMO-1", "In Progress")],
+            })
+            .collect();
+        app.selected_index = 3;
+        let mut refreshed = app.cache.clone();
+        refreshed.epics[0]
+            .children
+            .push(Ticket::for_test("DEMO-2", "In Progress"));
+        app.replace_cache(refreshed, app.moves.now());
+        assert_eq!(app.selected_ticket_key().as_deref(), Some("DEMO-1"));
+        assert_eq!(app.selected_group_id().as_deref(), Some("DEMO-200"));
+        assert_eq!(app.selected_index, 4);
+    }
 
     #[test]
     fn ticket_changes_reach_every_copy_and_refresh_visibility() {
@@ -1572,7 +1839,6 @@ mod tests {
             epic_key: None,
             epic_name: None,
             detail_loaded: false,
-            url: format!("https://jira.mongodb.org/browse/{}", key),
             activity: Vec::new(),
         }
     }

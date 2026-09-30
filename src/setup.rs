@@ -110,6 +110,7 @@ fn build_config(state: &SetupState) -> AppConfig {
         team,
         statuses: StatusConfig::default(),
         filters: vec![],
+        preferences: Default::default(),
     }
 }
 

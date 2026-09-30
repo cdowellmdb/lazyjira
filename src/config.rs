@@ -14,6 +14,32 @@ pub struct AppConfig {
     pub statuses: StatusConfig,
     #[serde(default)]
     pub filters: Vec<SavedFilter>,
+    #[serde(default)]
+    pub preferences: Preferences,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Preferences {
+    #[serde(default = "default_show_done")]
+    pub show_done: bool,
+    #[serde(default = "default_start_tab")]
+    pub start_tab: String,
+}
+
+fn default_show_done() -> bool {
+    true
+}
+fn default_start_tab() -> String {
+    "My Work".into()
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            show_done: default_show_done(),
+            start_tab: default_start_tab(),
+        }
+    }
 }
 
 /// Jira project and team settings.
@@ -192,6 +218,7 @@ mod tests {
                 name: "My bugs".to_string(),
                 jql: "type = Bug AND assignee = currentUser()".to_string(),
             }],
+            preferences: Default::default(),
         }
     }
 
@@ -289,6 +316,7 @@ team_name = "My Team"
             team: BTreeMap::new(),
             statuses: StatusConfig::default(),
             filters: vec![],
+            preferences: Default::default(),
         };
 
         assert_eq!(
@@ -313,6 +341,7 @@ team_name = "My Team"
             team: BTreeMap::new(),
             statuses: StatusConfig::default(),
             filters: vec![],
+            preferences: Default::default(),
         };
 
         assert_eq!(
