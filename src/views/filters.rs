@@ -1,10 +1,12 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::{App, FilterFocus};
-use crate::views::common::{group_marker, status_color, truncate};
+use crate::views::common::{
+    fold_indicator, group_marker, highlight_row, panel, status_color, truncate,
+};
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
     let chunks = Layout::default()
@@ -44,7 +46,7 @@ fn render_sidebar(
     } else {
         for (i, filter) in config.filters.iter().enumerate() {
             let is_selected = i == app.filter_sidebar_idx;
-            let prefix = if is_selected { "> " } else { "  " };
+            let prefix = if is_selected { "› " } else { "  " };
 
             let style = if is_selected && sidebar_focused {
                 Style::default()
@@ -66,10 +68,16 @@ fn render_sidebar(
         }
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Saved Filters ")
-        .border_style(border_style);
+    highlight_row(
+        &mut lines,
+        if sidebar_focused && !config.filters.is_empty() {
+            Some(app.filter_sidebar_idx)
+        } else {
+            None
+        },
+        panel().inner(area).width,
+    );
+    let block = panel().title(" Saved Filters ").border_style(border_style);
     let widget = Paragraph::new(lines).block(block);
     f.render_widget(widget, area);
 }
@@ -98,7 +106,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     } else {
         let key_w = 14usize;
         let status_w = 14usize;
-        let inner = area.width.saturating_sub(2) as usize;
+        let inner = panel().inner(area).width as usize;
         let fixed = 2 + key_w + 3 + status_w + 3 + 3;
         let summary_w = inner.saturating_sub(fixed).max(12);
 
@@ -108,15 +116,15 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
         lines.push(Line::from(vec![
             Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
         ]));
 
         let header_w = 2 + key_w + 3 + status_w + 3 + summary_w;
         lines.push(Line::from(Span::styled(
-            "-".repeat(header_w),
+            "─".repeat(header_w),
             Style::default().fg(Color::DarkGray),
         )));
         lines.push(Line::from(""));
@@ -128,8 +136,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 selected_visual_line = Some(lines.len());
             }
 
-            let collapsed = group.tickets.is_none();
-            let indicator = if collapsed { ">" } else { "v" };
+            let indicator = fold_indicator(group.tickets.is_none());
             let marker = group_marker(app.group_selection_state(status.as_str()));
             let header_style = if is_header_selected {
                 Style::default()
@@ -189,12 +196,12 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         format!("  {:<key_w$}", format!("{} {}", marker, ticket.key)),
                         base,
                     ),
-                    Span::styled(" | ", base),
+                    Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<status_w$}", truncate(ticket.status.as_str(), status_w)),
                         status_style,
                     ),
-                    Span::styled(" | ", base),
+                    Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
                         base,
@@ -205,6 +212,8 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             lines.push(Line::from(""));
         }
     }
+
+    highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);
 
     // Scroll to keep selected row visible
     let visible = area.height.saturating_sub(2) as usize;
@@ -219,10 +228,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
         format!(" Results ({}) ", app.filter_results.len())
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(border_style);
+    let block = panel().title(title).border_style(border_style);
     let widget = Paragraph::new(lines).block(block).scroll((scroll_y, 0));
     f.render_widget(widget, area);
 }

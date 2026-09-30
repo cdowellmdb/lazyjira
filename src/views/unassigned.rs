@@ -1,10 +1,12 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::App;
-use crate::views::common::{group_marker, status_color, truncate};
+use crate::views::common::{
+    fold_indicator, group_marker, highlight_row, panel, status_color, truncate,
+};
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
 
@@ -12,7 +14,7 @@ fn ticket_column_widths(area: Rect) -> (usize, usize, usize) {
     let key_w = 14usize;
     let mut status_w = 12usize;
     let mut summary_w = 48usize;
-    let inner = area.width.saturating_sub(2) as usize;
+    let inner = panel().inner(area).width as usize;
     let prefix_and_separators = 4 + key_w + 3 + status_w + 3;
     let mut overflow = prefix_and_separators + summary_w;
 
@@ -55,9 +57,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     if !grouped.is_empty() {
         lines.push(Line::from(vec![
             Span::styled(format!("    {:<key_w$}", "SEL KEY"), heading_style),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
         ]));
         lines.push(Line::from(""));
@@ -65,8 +67,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
     for group in grouped {
         let (epic_key, epic_summary) = &group.header;
-        let collapsed = group.tickets.is_none();
-        let indicator = if collapsed { ">" } else { "v" };
+        let indicator = fold_indicator(group.tickets.is_none());
         let marker = group_marker(app.group_selection_state(epic_key));
 
         let is_header_selected = group.index == app.selected_index;
@@ -88,7 +89,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         };
         lines.push(Line::from(Span::styled(header, header_style)));
         let count_style = if is_header_selected {
-            Style::default().fg(Color::Gray).bg(Color::DarkGray)
+            Style::default().fg(Color::Gray)
         } else {
             Style::default().fg(Color::DarkGray)
         };
@@ -131,12 +132,12 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     format!("    {:<key_w$}", format!("{} {}", marker, ticket.key)),
                     base,
                 ),
-                Span::styled(" | ", base),
+                Span::styled(" │ ", base.fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:<status_w$}", ticket.status.as_str()),
                     status_style,
                 ),
-                Span::styled(" | ", base),
+                Span::styled(" │ ", base.fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
                     base,
@@ -159,14 +160,14 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         )));
     }
 
+    highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);
+
     let visible = area.height.saturating_sub(2) as usize;
     let scroll_y = match selected_visual_line {
         Some(line) if line >= visible => (line - visible + 1) as u16,
         _ => 0,
     };
 
-    let widget = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL))
-        .scroll((scroll_y, 0));
+    let widget = Paragraph::new(lines).block(panel()).scroll((scroll_y, 0));
     f.render_widget(widget, area);
 }

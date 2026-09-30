@@ -1,7 +1,38 @@
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
 use crate::app::GroupSelectionState;
 use crate::cache::{Status, StatusRules};
+
+pub fn panel() -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title_style(Style::default().fg(Color::Reset))
+        .padding(Padding::horizontal(1))
+}
+
+pub fn fold_indicator(collapsed: bool) -> &'static str {
+    if collapsed {
+        "▶"
+    } else {
+        "▼"
+    }
+}
+
+pub fn highlight_row(lines: &mut [Line<'_>], index: Option<usize>, width: u16) {
+    if let Some(line) = index.and_then(|index| lines.get_mut(index)) {
+        line.spans.push(Span::raw(
+            " ".repeat((width as usize).saturating_sub(line.width())),
+        ));
+        line.style = line.style.bg(Color::DarkGray);
+        if let Some(key) = line.spans.first_mut() {
+            key.style = key.style.add_modifier(Modifier::BOLD);
+        }
+    }
+}
 
 /// Color for a status name: green when it's done, otherwise by the built-in status it
 /// reads as, and magenta for workflow statuses the app doesn't know.

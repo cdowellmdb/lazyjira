@@ -78,6 +78,7 @@ mod tests {
                             })
                             .unwrap();
                         let buffer = terminal.backend().buffer();
+                        assert_eq!(buffer[(0, 0)].symbol(), "╭");
                         let mut highlighted = Vec::new();
                         let mut text = String::new();
                         for y in 0..60 {
@@ -90,6 +91,11 @@ mod tests {
                                 }
                             }
                             if !row.trim().is_empty() {
+                                assert_eq!(
+                                    buffer[(157, y)].bg,
+                                    Color::DarkGray,
+                                    "{tab:?}, row {index}: highlight fills the row"
+                                );
                                 highlighted.push(row);
                             }
                         }
@@ -108,6 +114,7 @@ mod tests {
                                 _ => id,
                             },
                         };
+                        assert!(text.contains(if collapse { '▶' } else { '▼' }));
                         assert!(highlighted.iter().any(|row| row.to_uppercase().contains(&expected.to_uppercase())),
                             "{tab:?}, search {search:?}, collapse {collapse}, row {index}: expected {expected}, got {highlighted:?}");
                         if tab == Tab::Team {

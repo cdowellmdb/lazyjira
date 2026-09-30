@@ -1,10 +1,12 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::App;
-use crate::views::common::{group_marker, status_color, truncate};
+use crate::views::common::{
+    fold_indicator, group_marker, highlight_row, panel, status_color, truncate,
+};
 
 fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
     let key_w = 14usize;
@@ -12,7 +14,7 @@ fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
     let mut summary_w = 28usize;
     let mut epic_w = 20usize;
     let mut labels_w = 18usize;
-    let inner = area.width.saturating_sub(2) as usize;
+    let inner = panel().inner(area).width as usize;
     let prefix_and_separators = 2 + key_w + 3 + status_w + 3 + 3 + 3;
     let mut overflow = prefix_and_separators + summary_w + epic_w + labels_w;
 
@@ -55,8 +57,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     for group in members {
         let (member, active_count) = group.header;
         let done_count = group.total - active_count;
-        let collapsed = group.tickets.is_none();
-        let indicator = if collapsed { ">" } else { "v" };
+        let indicator = fold_indicator(group.tickets.is_none());
         let marker = group_marker(app.group_selection_state(&member.email));
 
         // Member header
@@ -106,13 +107,13 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         } else {
             lines.push(Line::from(vec![
                 Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{:<epic_w$}", "EPIC"), heading_style),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{:<labels_w$}", "LABELS"), heading_style),
             ]));
 
@@ -151,14 +152,14 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         format!("  {:<key_w$}", format!("{} {}", marker, ticket.key)),
                         base,
                     ),
-                    Span::styled(" | ", base),
+                    Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
-                    Span::styled(" | ", base),
+                    Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
                         base,
                     ),
-                    Span::styled(" | ", base),
+                    Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<epic_w$}", truncate(epic_str, epic_w)),
                         if is_selected {
@@ -167,7 +168,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                             Style::default().fg(Color::DarkGray)
                         },
                     ),
-                    Span::styled(" | ", base),
+                    Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<labels_w$}", truncate(&labels_str, labels_w)),
                         if is_selected {
@@ -223,14 +224,14 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         format!("    {:<key_w$}", format!("{} {}", marker, ticket.key)),
                         base,
                     ),
-                    Span::styled(" | ", base),
+                    Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
-                    Span::styled(" | ", base),
+                    Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
                         base,
                     ),
-                    Span::styled(" | ", base),
+                    Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<epic_w$}", truncate(epic_str, epic_w)),
                         if is_selected {
@@ -241,7 +242,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                                 .add_modifier(Modifier::DIM)
                         },
                     ),
-                    Span::styled(" | ", base),
+                    Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<labels_w$}", truncate(&labels_str, labels_w)),
                         if is_selected {
@@ -275,6 +276,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         )));
     }
 
+    highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);
+
     // Scroll to keep selected row visible
     let visible = area.height.saturating_sub(2) as usize;
     let scroll_y = match selected_visual_line {
@@ -282,8 +285,6 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         _ => 0,
     };
 
-    let widget = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL))
-        .scroll((scroll_y, 0));
+    let widget = Paragraph::new(lines).block(panel()).scroll((scroll_y, 0));
     f.render_widget(widget, area);
 }

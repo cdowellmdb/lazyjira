@@ -1,9 +1,10 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Clear, Padding, Paragraph};
 
 use crate::app::App;
+use crate::views::common::panel;
 use crate::widgets::{form, markup};
 
 // An empty key marks a section heading.
@@ -140,8 +141,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         height,
     };
     f.render_widget(Clear, area);
-    let mut block = Block::default()
-        .borders(Borders::ALL)
+    let mut block = panel()
         .padding(Padding::new(2, 2, 1, 0))
         .title(Span::styled(
             " Keyboard shortcuts ",

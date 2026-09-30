@@ -1,7 +1,9 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear};
+use ratatui::widgets::Clear;
+
+use crate::views::common::panel;
 
 pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
@@ -31,9 +33,7 @@ pub fn render_modal_frame(
 ) -> Rect {
     let area = centered_rect(percent_x, percent_y, f.area());
     f.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" {} ", title));
+    let block = panel().title(format!(" {} ", title));
     let inner = block.inner(area);
     f.render_widget(block, area);
     inner
@@ -80,7 +80,7 @@ pub fn render_picker(
         }),
     )));
     for (i, option) in options.iter().enumerate() {
-        let prefix = if i == selected { "> " } else { "  " };
+        let prefix = if i == selected { "› " } else { "  " };
         let style = if i == selected && focused {
             Style::default()
                 .fg(Color::Yellow)

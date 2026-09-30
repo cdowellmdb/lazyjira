@@ -3,14 +3,13 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    Wrap,
+    Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
 };
 
 use crate::app::{App, DetailMode};
 use crate::cache::{ActivityKind, Epic, Status, StatusRules, Ticket};
 use crate::move_picker::MovePicker;
-use crate::views::common::status_color;
+use crate::views::common::{panel, status_color};
 use crate::widgets::activity::format_timestamp;
 use crate::widgets::markup;
 
@@ -94,15 +93,12 @@ fn render_frame(f: &mut ratatui::Frame, app: &App, key: &str) -> (Rect, Rect) {
     };
     f.render_widget(Clear, area);
 
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .padding(Padding::horizontal(1))
-        .title(Span::styled(
-            format!(" {} ", key),
-            Style::default()
-                .fg(Color::Reset)
-                .add_modifier(Modifier::BOLD),
-        ));
+    let mut block = panel().padding(Padding::horizontal(1)).title(Span::styled(
+        format!(" {} ", key),
+        Style::default()
+            .fg(Color::Reset)
+            .add_modifier(Modifier::BOLD),
+    ));
     if let Some((index, count)) = app.detail_position() {
         block = block.title(
             Line::from(Span::styled(format!(" {} of {} ", index, count), muted())).right_aligned(),
@@ -587,7 +583,7 @@ fn render_move_picker(
             Status::Other(_) => "    ".to_string(),
             ref status => format!("[{}] ", status.move_shortcut()),
         };
-        let prefix = if i == picker.selected { "> " } else { "  " };
+        let prefix = if i == picker.selected { "› " } else { "  " };
         lines.push(Line::from(Span::styled(
             format!(
                 "{}{}{}",
@@ -642,7 +638,7 @@ fn render_resolution_picker(
         Line::from(""),
     ];
     for (i, choice) in picker.resolution_choices().iter().enumerate() {
-        let prefix = if i == selected { "> " } else { "  " };
+        let prefix = if i == selected { "› " } else { "  " };
         let name = choice.as_ref().map_or("No resolution", |r| r.name.as_str());
         lines.push(Line::from(Span::styled(
             format!("{}{}", prefix, name),

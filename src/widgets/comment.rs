@@ -1,10 +1,11 @@
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
 use super::form;
 use crate::app::App;
+use crate::views::common::panel;
 
 pub fn render(f: &mut ratatui::Frame, app: &App) {
     let state = match &app.comment_state {
@@ -33,7 +34,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let mut body_text = state.body.clone();
     body_text.push('_');
     let body = Paragraph::new(body_text)
-        .block(Block::default().borders(Borders::ALL))
+        .block(panel())
         .wrap(Wrap { trim: false });
     f.render_widget(body, sections[1]);
 

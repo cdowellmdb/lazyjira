@@ -913,10 +913,11 @@ fn shortcut_hints(text: &str) -> ratatui::text::Line<'static> {
 }
 
 fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
+    use crate::views::common::panel;
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Block, Borders, Tabs};
+    use ratatui::widgets::Tabs;
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -930,7 +931,8 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     // Tab bar
     let tab_titles: Vec<Line> = Tab::all().iter().map(|t| Line::from(t.title())).collect();
     let tabs = Tabs::new(tab_titles)
-        .block(Block::default().borders(Borders::ALL).title(" lazyjira "))
+        .block(panel().title(" lazyjira "))
+        .divider(Span::styled(" · ", Style::default().fg(Color::DarkGray)))
         .select(match app.active_tab {
             Tab::MyWork => 0,
             Tab::Team => 1,
@@ -948,8 +950,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
 
     // Content area
     if app.loading {
-        let loading = ratatui::widgets::Paragraph::new("Loading...")
-            .block(Block::default().borders(Borders::ALL));
+        let loading = ratatui::widgets::Paragraph::new("Loading...").block(panel());
         f.render_widget(loading, chunks[1]);
     } else {
         match app.active_tab {
