@@ -251,7 +251,7 @@ cargo run --release
 
 A pre-commit hook in `.githooks/` runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` on commits that touch Rust files. Enable it once per clone with `git config core.hooksPath .githooks`. Skip it for a single commit with `git commit --no-verify`.
 
-`lazyjira --dev` rebuilds from the source checkout the binary was built from, then runs it. `--dev-release` does the same with an optimized build. Both flags only work for binaries built from a local checkout, not for release downloads.
+`lazyjira --dev` rebuilds and runs the lazyjira checkout in your current directory (or a parent directory). `--dev-release` does the same with an optimized build. The command prints which manifest it builds. Outside a checkout, it falls back to the source directory the binary was built from, if that directory still exists.
 
 To re-record the demo GIF, install [VHS](https://github.com/charmbracelet/vhs) and run `docs/demo/record.sh`. It uses a fake `jira` CLI and a throwaway `HOME`, so no real Jira data ends up in the recording.
 
