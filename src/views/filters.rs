@@ -77,8 +77,20 @@ fn render_sidebar(
         },
         panel().inner(area).width,
     );
+    let inner = panel().inner(area);
+    let scroll = app
+        .filter_sidebar_idx
+        .saturating_sub(inner.height.saturating_sub(1) as usize);
+    for index in scroll..config.filters.len().min(scroll + inner.height as usize) {
+        app.mouse_targets.borrow_mut().push((
+            Rect::new(inner.x, inner.y + (index - scroll) as u16, inner.width, 1),
+            crate::mouse::Target::Filter(index),
+        ));
+    }
     let block = panel().title(" Saved Filters ").border_style(border_style);
-    let widget = Paragraph::new(lines).block(block);
+    let widget = Paragraph::new(lines)
+        .block(block)
+        .scroll((scroll as u16, 0));
     f.render_widget(widget, area);
 }
 
@@ -92,6 +104,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
     let mut lines = Vec::new();
     let mut selected_visual_line: Option<usize> = None;
+    let mut mouse_rows = Vec::new();
 
     if app.filter_loading {
         lines.push(Line::from(Span::styled(
@@ -131,6 +144,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
         for group in app.filters_visible_by_status() {
             let status = &group.header;
+            mouse_rows.push((lines.len(), group.index, true));
             let is_header_selected = results_focused && group.index == app.selected_index;
             if is_header_selected {
                 selected_visual_line = Some(lines.len());
@@ -166,6 +180,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             };
 
             for (index, ticket) in tickets {
+                mouse_rows.push((lines.len(), *index, false));
                 let is_selected = results_focused && *index == app.selected_index;
                 if is_selected {
                     selected_visual_line = Some(lines.len());
@@ -229,6 +244,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     };
 
     let block = panel().title(title).border_style(border_style);
+    crate::mouse::register_rows(app, area, &mouse_rows, scroll_y, &lines);
     let widget = Paragraph::new(lines).block(block).scroll((scroll_y, 0));
     f.render_widget(widget, area);
 }

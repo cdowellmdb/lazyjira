@@ -47,6 +47,24 @@ struct JiraCliConfig {
     login: Option<String>,
 }
 
+/// Browser links use the same Jira instance as jira-cli, without needing a REST token.
+pub fn server_url() -> Result<String> {
+    let path = jira_cli_config_path()?;
+    let yaml = std::fs::read_to_string(&path)
+        .with_context(|| format!("Couldn't read jira-cli's config {}", path.display()))?;
+    configured_server(&yaml)
+}
+
+fn configured_server(yaml: &str) -> Result<String> {
+    let config: JiraCliConfig =
+        serde_yaml::from_str(yaml).context("jira-cli's config has no usable `server` setting")?;
+    let url = reqwest::Url::parse(config.server.trim()).context("Invalid Jira server URL")?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        bail!("Jira server must be an HTTP or HTTPS URL");
+    }
+    Ok(config.server.trim().trim_end_matches('/').to_string())
+}
+
 /// No `Debug`, so the token can't end up in a log or error message.
 enum Auth {
     Bearer(String),
@@ -100,7 +118,7 @@ impl JiraRest {
             .context("Couldn't set up the HTTP client")?;
         Ok(Self {
             http,
-            server: config.server.trim_end_matches('/').to_string(),
+            server: configured_server(config_yaml)?,
             auth,
         })
     }
@@ -193,6 +211,16 @@ mod tests {
                           epic:\n  name: customfield_1\ninstallation: Local\n\
                           login: someone@example.com\nproject:\n  key: DEMO\n\
                           server: https://jira.example.com/\ntimezone: UTC\n";
+
+    #[test]
+    fn browser_server_keeps_context_paths_and_needs_no_auth_settings() {
+        assert_eq!(
+            configured_server("server: https://jira.example.com/jira/\n").unwrap(),
+            "https://jira.example.com/jira"
+        );
+        assert!(configured_server("server: file:///tmp/jira").is_err());
+        assert!(configured_server("server: not-a-url").is_err());
+    }
 
     #[test]
     fn reads_server_and_bearer_auth_from_jira_cli_config() {

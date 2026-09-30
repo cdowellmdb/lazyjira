@@ -49,30 +49,32 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
 
     match state {
         BulkUploadState::PathInput { path, loading } => {
-            form::render_text_input(&mut lines, "CSV Path", path, true);
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Headers: summary (required), type, assignee_email, epic_key, labels, description",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(Span::styled(
-                "Labels use '|' separators (example: frontend|urgent). Max rows: 500.",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(""));
-            if *loading {
-                lines.push(Line::from(Span::styled(
-                    "Loading preview...",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                )));
-            }
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "[Enter] preview  [Esc] cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
+            let areas = ratatui::layout::Layout::vertical([
+                ratatui::layout::Constraint::Length(3),
+                ratatui::layout::Constraint::Min(0),
+                ratatui::layout::Constraint::Length(1),
+            ])
+            .split(inner);
+            form::render_editor(f, app, areas[0], "CSV path", path, !loading, 0);
+            f.render_widget(
+                Paragraph::new(if *loading {
+                    "Loading preview..."
+                } else {
+                    "Columns: summary, type, assignee_email, epic_key, labels, description"
+                }),
+                areas[1],
+            );
+            form::buttons(
+                f,
+                app,
+                areas[2],
+                &[
+                    ("Preview", crossterm::event::KeyCode::Enter),
+                    ("Cancel", crossterm::event::KeyCode::Esc),
+                    ("Editor", crossterm::event::KeyCode::F(4)),
+                ],
+            );
+            return;
         }
         BulkUploadState::Preview { preview, selected } => {
             lines.push(Line::from(format!("Path: {}", preview.source_path)));
@@ -104,6 +106,20 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                 let (start, end) = preview_window(preview.rows.len(), *selected, 14);
                 for (idx, row) in preview.rows[start..end].iter().enumerate() {
                     let absolute_idx = start + idx;
+                    if lines.len() < inner.height.saturating_sub(1) as usize {
+                        app.mouse_targets.borrow_mut().push((
+                            ratatui::layout::Rect::new(
+                                inner.x,
+                                inner.y + lines.len() as u16,
+                                inner.width,
+                                1,
+                            ),
+                            crate::mouse::Target::Choose {
+                                field: 0,
+                                index: absolute_idx,
+                            },
+                        ));
+                    }
                     let marker = if absolute_idx == *selected { ">" } else { " " };
                     let status = if !row.errors.is_empty() {
                         "ERR"
@@ -242,4 +258,30 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
 
     let body = Paragraph::new(lines);
     f.render_widget(body, inner);
+    use crossterm::event::KeyCode;
+    let buttons = match state {
+        BulkUploadState::PathInput { .. } => {
+            vec![("Preview", KeyCode::Enter), ("Cancel", KeyCode::Esc)]
+        }
+        BulkUploadState::Preview { .. } => vec![
+            ("Submit", KeyCode::Enter),
+            ("Reload", KeyCode::Char('r')),
+            ("Close", KeyCode::Esc),
+        ],
+        BulkUploadState::Running { .. } => vec![("Close", KeyCode::Esc)],
+        BulkUploadState::Result { .. } => {
+            vec![("Close", KeyCode::Enter), ("Reload", KeyCode::Char('r'))]
+        }
+    };
+    form::buttons(
+        f,
+        app,
+        ratatui::layout::Rect::new(
+            inner.x,
+            inner.bottom().saturating_sub(1),
+            inner.width,
+            u16::from(inner.height > 0),
+        ),
+        &buttons,
+    );
 }

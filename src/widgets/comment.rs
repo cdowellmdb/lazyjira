@@ -1,46 +1,34 @@
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use crossterm::event::KeyCode;
+use ratatui::layout::{Constraint, Layout};
+use ratatui::widgets::Paragraph;
 
 use super::form;
 use crate::app::App;
-use crate::views::common::panel;
 
 pub fn render(f: &mut ratatui::Frame, app: &App) {
-    let state = match &app.comment_state {
-        Some(s) => s,
-        None => return,
+    let Some(state) = &app.comment_state else {
+        return;
     };
-
-    let title = format!("Comment on {}", state.ticket_key);
-    let inner = form::render_modal_frame(f, &title, 50, 30);
-
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(3),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-
-    let label = Paragraph::new(Line::from(Span::styled(
-        "Comment:",
-        Style::default().fg(Color::Cyan),
-    )));
-    f.render_widget(label, sections[0]);
-
-    let mut body_text = state.body.clone();
-    body_text.push('_');
-    let body = Paragraph::new(body_text)
-        .block(panel())
-        .wrap(Wrap { trim: false });
-    f.render_widget(body, sections[1]);
-
-    let footer = Paragraph::new(Line::from(Span::styled(
-        "[Shift+Enter] newline  [Enter] submit  [Esc] cancel",
-        Style::default().fg(Color::DarkGray),
-    )));
-    f.render_widget(footer, sections[2]);
+    let inner = form::render_modal_frame(f, &format!("Comment on {}", state.ticket_key), 85, 75);
+    let areas = Layout::vertical([
+        Constraint::Min(3),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    form::render_editor(f, app, areas[0], "Comment", &state.body, true, 0);
+    f.render_widget(
+        Paragraph::new("Shift+Enter/Ctrl+J: newline · Ctrl+E/F4: external editor"),
+        areas[1],
+    );
+    form::buttons(
+        f,
+        app,
+        areas[2],
+        &[
+            ("Submit", KeyCode::Enter),
+            ("Cancel", KeyCode::Esc),
+            ("Editor", KeyCode::F(4)),
+        ],
+    );
 }

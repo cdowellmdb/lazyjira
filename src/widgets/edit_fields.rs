@@ -1,49 +1,62 @@
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
+use crossterm::event::KeyCode;
+use ratatui::layout::{Constraint, Layout};
 use ratatui::widgets::Paragraph;
 
 use super::form;
 use crate::app::App;
 
 pub fn render(f: &mut ratatui::Frame, app: &App) {
-    let state = match &app.edit_state {
-        Some(s) => s,
-        None => return,
+    let Some(state) = &app.edit_state else {
+        return;
     };
-
-    let title = format!("Edit {}", state.ticket_key);
-    let inner = form::render_modal_frame(f, &title, 50, 40);
-
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(""));
-
-    // Summary text input (field 0)
-    form::render_text_input(
-        &mut lines,
+    let inner = form::render_modal_frame(f, &format!("Edit {}", state.ticket_key), 85, 85);
+    let areas = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Min(3),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    form::render_editor(
+        f,
+        app,
+        areas[0],
         "Summary",
         &state.summary,
         state.focused_field == 0,
+        0,
     );
-
-    lines.push(Line::from(""));
-
-    // Labels text input (field 1)
-    form::render_text_input(
-        &mut lines,
-        "Labels (comma-separated)",
+    form::render_editor(
+        f,
+        app,
+        areas[1],
+        "Labels · comma-separated",
         &state.labels,
         state.focused_field == 1,
+        1,
     );
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(""));
-
-    // Footer hints
-    lines.push(Line::from(Span::styled(
-        "[Tab] next field  [Enter] save  [Esc] cancel",
-        Style::default().fg(Color::DarkGray),
-    )));
-
-    let body = Paragraph::new(lines);
-    f.render_widget(body, inner);
+    form::render_editor(
+        f,
+        app,
+        areas[2],
+        "Description",
+        &state.description,
+        state.focused_field == 2,
+        2,
+    );
+    f.render_widget(
+        Paragraph::new("Tab: next field · Shift+Enter: newline · Ctrl+E/F4: external editor"),
+        areas[3],
+    );
+    form::buttons(
+        f,
+        app,
+        areas[4],
+        &[
+            ("Save", KeyCode::Enter),
+            ("Cancel", KeyCode::Esc),
+            ("Editor", KeyCode::F(4)),
+        ],
+    );
 }
