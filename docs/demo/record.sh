@@ -16,6 +16,7 @@ cp "$repo/docs/demo/config.toml" "$demo_home/.config/lazyjira/config.toml"
 cargo build --release --manifest-path "$repo/Cargo.toml"
 
 cd "$repo"
-LAZYJIRA_DEMO_HOME="$demo_home" \
+env -u JIRA_API_TOKEN -u JIRA_CONFIG_FILE -u NO_COLOR \
+  LAZYJIRA_DEMO_HOME="$demo_home" \
   LAZYJIRA_DEMO_PATH="$repo/docs/demo/bin:$repo/target/release:$PATH" \
   vhs docs/demo/demo.tape

@@ -1,22 +1,26 @@
 # lazyjira
 
-A fast, keyboard-driven terminal UI for Jira, built for daily triage and for keeping an eye on your team's work.
+A fast terminal UI for Jira, with keyboard and mouse controls for daily triage and keeping an eye on your team's work.
 
-lazyjira runs on top of the [`jira` CLI](https://github.com/ankitpokhrel/jira-cli). It uses your existing CLI login, opens instantly from a local cache, and refreshes in the background. It was built for one team's workflow on `jira.mongodb.org`, so a few parts still assume that instance (see [Limitations](#limitations)).
+lazyjira runs on top of the [`jira` CLI](https://github.com/ankitpokhrel/jira-cli). It uses your existing CLI login and Jira server, opens instantly from a local cache, and refreshes in the background. See [Limitations](#limitations) for workflow and platform requirements.
 
-![lazyjira moving through My Work, a ticket detail, Team, Epics, Unassigned, and a saved filter](docs/images/demo.gif)
+![lazyjira showing ticket detail with a close control, live preferences, searchable ticket creation, and the five workspace tabs](docs/images/demo.gif)
 
 ## Features
 
 - Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, **Filters**
+- Mouse controls for tabs, rows, scrolling, forms, pickers, and action menus
 - Tickets grouped by status, with one-key status focus and a Done toggle
 - Epic progress bars, with an optional list of the epics you care about
 - Ticket detail with formatted description, comments, labels, assignee, epic, and activity history
 - Create, comment on, assign, edit, and move tickets without leaving the terminal
+- Cursor editing, multiline paste, and external editors for ticket content
+- Searchable assignee and epic pickers
+- In-app preferences for teammates, pinned epics, Done visibility, and starting tab
 - Multi-select with bulk move and bulk assign
 - Bulk ticket creation from a CSV, with a validated preview before anything is sent
 - Saved JQL filters
-- Local cache for fast startup and instant detail views
+- Local cache for fast startup and instant detail views, with your place preserved across refreshes and tab changes
 
 ## Requirements
 
@@ -52,7 +56,7 @@ To build from source instead:
 cargo install --path . --force
 
 # From a release tag
-cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.1.1
+cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.5.0
 ```
 
 ## Quick start
@@ -159,7 +163,7 @@ Create tickets with a summary, labels, and description. Edit these fields with `
 
 ### Detail view
 
-![A ticket detail showing formatted Jira markup: headings, a numbered list, a table, a code block, and comments](docs/images/ticket-detail.png)
+![A ticket detail with a top-left close control and formatted Jira headings, a numbered list, a table, and code](docs/images/ticket-detail.png)
 
 Descriptions and comments render Jira's wiki markup: headings, bold/italic/strikethrough, links, mentions, lists, tables, quotes, code blocks and icons like `(/)`.
 
