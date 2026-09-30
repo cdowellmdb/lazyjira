@@ -9,7 +9,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let Some(state) = &app.assign_state else {
         return;
     };
-    let inner = form::render_modal_frame(f, &format!("Assign {}", state.ticket_key), 70, 60);
+    let inner = form::render_modal_frame(f, app, &format!("Assign {}", state.ticket_key), 70, 60);
     let areas = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(1),

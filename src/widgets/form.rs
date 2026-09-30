@@ -14,11 +14,21 @@ pub fn editor(value: &str) -> TextArea<'static> {
     editor.move_cursor(CursorMove::End);
     editor.set_cursor_line_style(Style::default());
     editor.set_cursor_style(Style::default().fg(Color::Black).bg(Color::Cyan));
+    editor.set_selection_style(Style::default().fg(Color::Black).bg(Color::LightBlue));
     editor
 }
 
 pub fn text(editor: &TextArea<'_>) -> String {
     editor.lines().join("\n")
+}
+
+pub fn char_width(editor: &TextArea<'_>, c: char, offset: usize) -> usize {
+    if c == '\t' && editor.tab_length() > 0 {
+        let tab = editor.tab_length() as usize;
+        tab - offset % tab
+    } else {
+        unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+    }
 }
 
 pub fn input(editor: &mut TextArea<'_>, key: KeyCode, modifiers: KeyModifiers, multiline: bool) {
@@ -64,6 +74,9 @@ pub fn render_editor(
         .borrow_mut()
         .push((area, Target::Field(field)));
     if focused {
+        app.text_selection.borrow_mut().editor_selected = editor
+            .selection_range()
+            .is_some_and(|(start, end)| start != end);
         f.render_widget(editor, inner);
         let (row, column) = editor.cursor();
         for y in inner.y..inner.bottom() {
@@ -72,8 +85,7 @@ pub fn render_editor(
                     let width: usize = editor.lines()[row]
                         .chars()
                         .take(column)
-                        .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0))
-                        .sum();
+                        .fold(0, |width, c| width + char_width(editor, c, width));
                     app.mouse_targets.borrow_mut().push((
                         inner,
                         Target::Text {
@@ -248,6 +260,7 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 
 pub fn render_modal_frame(
     f: &mut ratatui::Frame,
+    app: &crate::app::App,
     title: &str,
     percent_x: u16,
     percent_y: u16,
@@ -256,6 +269,7 @@ pub fn render_modal_frame(
     f.render_widget(Clear, area);
     let block = panel().title(format!(" {} ", title));
     let inner = block.inner(area);
+    app.text_selection.borrow_mut().area = inner;
     f.render_widget(block, area);
     inner
 }

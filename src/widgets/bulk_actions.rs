@@ -125,7 +125,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         BulkState::Running { .. } => ("Bulk Action Running", 60, 34),
         _ => ("Bulk Actions", 58, 54),
     };
-    let inner = form::render_modal_frame(f, title, percent_x, percent_y);
+    let inner = form::render_modal_frame(f, app, title, percent_x, percent_y);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));

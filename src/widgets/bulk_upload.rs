@@ -42,7 +42,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         BulkUploadState::Running { .. } => ("Bulk Upload Running", 68, 36),
         BulkUploadState::Result { .. } => ("Bulk Upload Results", 72, 54),
     };
-    let inner = form::render_modal_frame(f, title, percent_x, percent_y);
+    let inner = form::render_modal_frame(f, app, title, percent_x, percent_y);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));

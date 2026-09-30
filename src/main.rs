@@ -812,6 +812,15 @@ async fn handle_key(
 ) {
     // Flash messages clear on any keypress. Move failures stay until dismissed.
     app.flash = None;
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        mouse::copy_selected(app);
+        return;
+    }
+    if key.code == KeyCode::Esc && mouse::selected_text(app).is_some() {
+        mouse::clear(app);
+        return;
+    }
+    mouse::clear_screen(app);
     if (key.code == KeyCode::F(4)
         || (key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL)))
         && app.focused_field().is_some()
@@ -884,6 +893,7 @@ async fn handle_key(
 }
 
 fn handle_paste(app: &mut App, text: &str) {
+    mouse::clear_screen(app);
     if let Some((editor, multiline)) = app.current_editor() {
         widgets::form::paste(editor, text, multiline);
         return;
@@ -1103,7 +1113,8 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         ])
         .split(f.area());
 
-    app.mouse_targets.borrow_mut().clear();
+    mouse::begin_layer(app);
+    app.text_selection.borrow_mut().area = panel().inner(chunks[1]);
     // Tab bar
     let mut tab_x = chunks[0].x + 2;
     for tab in Tab::all() {
@@ -1217,47 +1228,47 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
 
     // Detail overlay
     if app.is_detail_open() {
-        app.mouse_targets.borrow_mut().clear();
+        mouse::begin_layer(app);
         widgets::ticket_detail::render(f, app);
     }
     if app.is_create_ticket_open() {
-        app.mouse_targets.borrow_mut().clear();
+        mouse::begin_layer(app);
         widgets::create_ticket::render(f, app);
     }
     if app.is_comment_open() {
-        app.mouse_targets.borrow_mut().clear();
+        mouse::begin_layer(app);
         widgets::comment::render(f, app);
     }
     if app.is_assign_open() {
-        app.mouse_targets.borrow_mut().clear();
+        mouse::begin_layer(app);
         widgets::assign::render(f, app);
     }
     if app.is_edit_open() {
-        app.mouse_targets.borrow_mut().clear();
+        mouse::begin_layer(app);
         widgets::edit_fields::render(f, app);
     }
     if app.is_filter_edit_open() {
-        app.mouse_targets.borrow_mut().clear();
+        mouse::begin_layer(app);
         render_filter_edit_modal(f, app);
     }
     if app.is_bulk_open() {
-        app.mouse_targets.borrow_mut().clear();
+        mouse::begin_layer(app);
         widgets::bulk_actions::render(f, app);
     }
     if app.is_bulk_upload_open() {
-        app.mouse_targets.borrow_mut().clear();
+        mouse::begin_layer(app);
         widgets::bulk_upload::render(f, app);
     }
     if app.show_keybindings {
-        app.mouse_targets.borrow_mut().clear();
+        mouse::begin_layer(app);
         widgets::keybindings_help::render(f, app);
     }
     if app.settings.is_some() {
-        app.mouse_targets.borrow_mut().clear();
+        mouse::begin_layer(app);
         settings::render(f, app);
     }
     if !app.moves.failures().is_empty() {
-        app.mouse_targets.borrow_mut().clear();
+        mouse::begin_layer(app);
         let area = f.area();
         widgets::form::buttons(
             f,
@@ -1271,7 +1282,8 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
             &[("Dismiss", KeyCode::Enter), ("Browser", KeyCode::Char('o'))],
         );
     }
-    widgets::move_failure::render(f, app.moves.failures());
+    widgets::move_failure::render(f, app, app.moves.failures());
+    mouse::render_selection(f, app);
 }
 
 fn render_filter_edit_modal(f: &mut ratatui::Frame, app: &App) {
@@ -1285,7 +1297,7 @@ fn render_filter_edit_modal(f: &mut ratatui::Frame, app: &App) {
     } else {
         "New Filter"
     };
-    let inner = form::render_modal_frame(f, title, 80, 50);
+    let inner = form::render_modal_frame(f, app, title, 80, 50);
     let areas = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(3),

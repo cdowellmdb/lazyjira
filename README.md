@@ -155,6 +155,8 @@ Click the red **[×]** in the top-left of ticket or epic detail to close the pop
 
 Forms support clicking fields, positioning the text cursor, choosing picker options, and clicking their action buttons. Type to filter assignee and epic pickers; use arrow keys or the wheel to choose. Bulk actions still require the separate confirmation step.
 
+Drag across visible text in lists, ticket details, or form fields to select it. Click **Copy** or press `Ctrl+C` to copy the selection to the macOS clipboard; `Esc` clears it. Typing or pasting replaces selected text in a form field.
+
 ### Writing
 
 Create tickets with a summary, labels, and description. Edit these fields with `e` in ticket detail. Text fields support arrow keys, Home/End, Delete/Backspace, and paste. Comments and descriptions accept multiline paste; `Shift+Enter` or `Ctrl+J` inserts a newline, and `Enter` submits.

@@ -9,7 +9,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let Some(state) = &app.create_ticket else {
         return;
     };
-    let inner = form::render_modal_frame(f, "Create Ticket", 90, 90);
+    let inner = form::render_modal_frame(f, app, "Create Ticket", 90, 90);
     let areas = Layout::vertical([
         Constraint::Length(6),
         Constraint::Length(3),
