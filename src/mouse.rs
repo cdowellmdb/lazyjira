@@ -229,6 +229,9 @@ pub fn copy_selected(app: &mut App) {
     let Some(text) = selected_text(app) else {
         return;
     };
+    if let Some((editor, _)) = app.current_editor() {
+        editor.set_yank_text(text.clone());
+    }
     let result = copy_to_clipboard(&text);
     app.flash = Some(match result {
         Ok(()) => "Copied selection".into(),
