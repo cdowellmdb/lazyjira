@@ -8,20 +8,29 @@ lazyjira runs on top of the [`jira` CLI](https://github.com/ankitpokhrel/jira-cl
 
 ## Features
 
-- Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, **Filters**
-- Mouse controls for tabs, rows, scrolling, forms, pickers, and action menus
-- Tickets grouped by status, with one-key status focus and a Done toggle
+Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (saved JQL).
+
+**Triage fast**
+- Step through tickets in the detail view with `←`/`→`, and press `z` for full screen
+- Fold status groups and a parent's sub-tasks; `f` focuses one status, `d` hides Done
+- Opens instantly from a local cache, then refreshes from Jira without losing your place
+- Ticket detail renders Jira markup and shows comments and activity history
 - Epic progress bars, with an optional list of the epics you care about
-- Sub-tasks listed under their parent in every tab, including inside their epic
-- Ticket detail with formatted description, comments, labels, assignee, epic, and activity history
+
+**Change tickets safely**
 - Create, comment on, assign, edit, and move tickets without leaving the terminal
-- Cursor editing, multiline paste, and external editors for ticket content
-- Searchable assignee and epic pickers
-- In-app preferences for teammates, pinned epics, Done visibility, and starting tab
-- Multi-select with bulk move and bulk assign
+- Moves offer only the transitions that ticket's workflow allows
+- The status changes only after Jira confirms; a rejected move stays on screen until you dismiss it
+- Bulk move/assign skips tickets that can't make the change and lists why
 - Bulk ticket creation from a CSV, with a validated preview before anything is sent
-- Saved JQL filters
-- Local cache for fast startup and instant detail views, with your place preserved across refreshes and tab changes
+
+**Keyboard or mouse**
+- Click to select, click again to open; works on rows, menus, and pickers
+- Click checkboxes to select tickets, fold arrows to fold groups, and **[×]** to close a detail
+- Click into form fields and buttons; scroll lists and details with the wheel
+- Drag across text to select it, then copy with `Ctrl+C`
+- Edit in `$EDITOR`, paste multiple lines, and filter pickers by typing
+- Preferences (teammates, pinned epics, Done visibility, starting tab) apply without a restart
 
 ## Requirements
 
@@ -57,7 +66,7 @@ To build from source instead:
 cargo install --path . --force
 
 # From a release tag
-cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.6.0
+cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.7.1
 ```
 
 ## Quick start
@@ -77,7 +86,7 @@ Press `S` or click **Settings** to manage teammates, pinned epics, Done visibili
 
 ## Configuration
 
-Config lives at `~/.config/lazyjira/config.toml`. lazyjira reads it once at startup.
+Config lives at `~/.config/lazyjira/config.toml`. lazyjira reads it at startup, so edit it by hand only while lazyjira isn't running. Changes made in the app (preferences with `S`, saved filters, the `d` toggle) apply right away and are saved to this file.
 
 ```toml
 [jira]
