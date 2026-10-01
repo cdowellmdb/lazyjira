@@ -278,6 +278,8 @@ pub struct App {
     pub search: Option<String>,
     /// Whether Done tickets are visible in My Work and Team tabs.
     pub show_done: bool,
+    /// Recolors each drawn frame.
+    pub theme: crate::theme::Theme,
     /// Optional focused active status name for My Work and Team.
     pub status_focus: Option<String>,
     /// True while full epic relationships are being refreshed in background.
@@ -366,6 +368,7 @@ impl App {
             flash: None,
             search: None,
             show_done: true,
+            theme: Default::default(),
             status_focus: None,
             epics_refreshing: false,
             epic_refresh_request: 0,
@@ -412,7 +415,7 @@ impl App {
 
     pub fn focus_field(&mut self, field: usize) {
         if let Some(state) = &mut self.settings {
-            state.focused_field = field.min(3);
+            state.focused_field = field.min(4);
         } else if let Some(state) = &mut self.filter_edit {
             state.focused_field = field.min(1);
         } else if let Some(state) = &mut self.create_ticket {

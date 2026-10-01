@@ -561,6 +561,9 @@ fn choose(app: &mut App, field: usize, index: usize) {
         if field == 3 {
             state.show_done = index != 0;
         }
+        if field == 4 {
+            state.theme = index.min(state.themes.len() - 1);
+        }
     } else if let Some(state) = &mut app.create_ticket {
         match field {
             0 => state.issue_type_idx = index,

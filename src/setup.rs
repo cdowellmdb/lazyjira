@@ -111,6 +111,7 @@ fn build_config(state: &SetupState) -> AppConfig {
         statuses: StatusConfig::default(),
         filters: vec![],
         preferences: Default::default(),
+        themes: Default::default(),
     }
 }
 

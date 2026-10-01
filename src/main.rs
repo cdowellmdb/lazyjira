@@ -12,6 +12,7 @@ mod moves;
 mod settings;
 mod setup;
 mod subtasks;
+mod theme;
 mod transitions;
 mod views;
 mod widgets;
@@ -462,6 +463,7 @@ async fn main() -> Result<()> {
     app.set_epics_i_care_about(config.epics_i_care_about_ordered());
     app.set_status_rules(&config.statuses);
     app.show_done = config.preferences.show_done;
+    app.theme = theme::resolve(&config.preferences.theme, &config.themes);
     app.active_tab = Tab::all()
         .iter()
         .copied()
@@ -1315,6 +1317,10 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     }
     widgets::move_failure::render(f, app, app.moves.failures());
     mouse::render_selection(f, app);
+    app.settings
+        .as_ref()
+        .map_or(app.theme, settings::Settings::theme)
+        .apply(f.buffer_mut());
 }
 
 fn render_filter_edit_modal(f: &mut ratatui::Frame, app: &App) {
@@ -2266,6 +2272,7 @@ mod tests {
             statuses: crate::config::StatusConfig::default(),
             filters: vec![],
             preferences: Default::default(),
+            themes: Default::default(),
         }
     }
 

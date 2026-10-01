@@ -16,6 +16,9 @@ pub struct AppConfig {
     pub filters: Vec<SavedFilter>,
     #[serde(default)]
     pub preferences: Preferences,
+    /// Custom themes by name, offered alongside the presets.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub themes: BTreeMap<String, crate::theme::Theme>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +27,8 @@ pub struct Preferences {
     pub show_done: bool,
     #[serde(default = "default_start_tab")]
     pub start_tab: String,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_show_done() -> bool {
@@ -32,12 +37,16 @@ fn default_show_done() -> bool {
 fn default_start_tab() -> String {
     "My Work".into()
 }
+fn default_theme() -> String {
+    crate::theme::DEFAULT.into()
+}
 
 impl Default for Preferences {
     fn default() -> Self {
         Self {
             show_done: default_show_done(),
             start_tab: default_start_tab(),
+            theme: default_theme(),
         }
     }
 }
@@ -219,12 +228,20 @@ mod tests {
                 jql: "type = Bug AND assignee = currentUser()".to_string(),
             }],
             preferences: Default::default(),
+            themes: Default::default(),
         }
     }
 
     #[test]
     fn round_trip_serialization() {
-        let config = sample_config();
+        let mut config = sample_config();
+        config.themes.insert(
+            "mine".into(),
+            crate::theme::Theme {
+                accent: Some(ratatui::style::Color::Rgb(255, 0, 0)),
+                ..Default::default()
+            },
+        );
         let toml_str = toml::to_string_pretty(&config).expect("serialize");
         let parsed: AppConfig = toml::from_str(&toml_str).expect("deserialize");
 
@@ -245,6 +262,7 @@ mod tests {
         assert_eq!(parsed.filters.len(), 1);
         assert_eq!(parsed.filters[0].name, "My bugs");
         assert_eq!(parsed.filters[0].jql, config.filters[0].jql);
+        assert_eq!(parsed.themes, config.themes);
     }
 
     #[test]
@@ -317,6 +335,7 @@ team_name = "My Team"
             statuses: StatusConfig::default(),
             filters: vec![],
             preferences: Default::default(),
+            themes: Default::default(),
         };
 
         assert_eq!(
@@ -342,6 +361,7 @@ team_name = "My Team"
             statuses: StatusConfig::default(),
             filters: vec![],
             preferences: Default::default(),
+            themes: Default::default(),
         };
 
         assert_eq!(

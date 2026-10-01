@@ -7,6 +7,7 @@ use tui_textarea::TextArea;
 use crate::{
     app::{App, Tab},
     config::AppConfig,
+    theme::{self, Theme},
     widgets::form,
 };
 
@@ -16,6 +17,9 @@ pub struct Settings {
     pub epics: TextArea<'static>,
     pub start_tab: usize,
     pub show_done: bool,
+    /// Every theme to offer, by name; the chosen one previews while settings are open.
+    pub themes: Vec<(String, Theme)>,
+    pub theme: usize,
 }
 
 impl Settings {
@@ -36,7 +40,22 @@ impl Settings {
                 .position(|tab| tab.title() == config.preferences.start_tab)
                 .unwrap_or(0),
             show_done: config.preferences.show_done,
+            themes: theme::names(&config.themes)
+                .into_iter()
+                .map(|name| {
+                    let theme = theme::resolve(&name, &config.themes);
+                    (name, theme)
+                })
+                .collect(),
+            theme: theme::names(&config.themes)
+                .iter()
+                .position(|name| *name == config.preferences.theme)
+                .unwrap_or(0),
         }
+    }
+
+    pub fn theme(&self) -> Theme {
+        self.themes[self.theme].1
     }
 
     fn config(&self, current: &AppConfig) -> Result<AppConfig> {
@@ -84,6 +103,7 @@ impl Settings {
         config.jira.epics_i_care_about = epics;
         config.preferences.start_tab = Tab::all()[self.start_tab].title().into();
         config.preferences.show_done = self.show_done;
+        config.preferences.theme = self.themes[self.theme].0.clone();
         Ok(config)
     }
 }
@@ -100,8 +120,8 @@ pub fn handle_key(
     };
     match key {
         KeyCode::Esc => app.settings = None,
-        KeyCode::Tab => state.focused_field = (state.focused_field + 1) % 4,
-        KeyCode::BackTab => state.focused_field = (state.focused_field + 3) % 4,
+        KeyCode::Tab => state.focused_field = (state.focused_field + 1) % 5,
+        KeyCode::BackTab => state.focused_field = (state.focused_field + 4) % 5,
         KeyCode::Enter if !modifiers.contains(KeyModifiers::SHIFT) => {
             match state.config(config).and_then(|next| {
                 crate::config::save_config(&next)?;
@@ -110,6 +130,7 @@ pub fn handle_key(
                 Ok(next) => {
                     *config = next;
                     app.show_done = config.preferences.show_done;
+                    app.theme = state.theme();
                     app.set_epics_i_care_about(config.epics_i_care_about_ordered());
                     app.settings = None;
                     app.flash = Some("Preferences saved. Refreshing team...".into());
@@ -134,6 +155,12 @@ pub fn handle_key(
             {
                 state.show_done = !state.show_done
             }
+            4 if matches!(key, KeyCode::Up | KeyCode::Left) => {
+                state.theme = state.theme.saturating_sub(1)
+            }
+            4 if matches!(key, KeyCode::Down | KeyCode::Right) => {
+                state.theme = (state.theme + 1).min(state.themes.len() - 1)
+            }
             _ => {}
         },
     }
@@ -150,6 +177,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         Constraint::Length(3),
         Constraint::Length(5),
         Constraint::Length(4),
+        Constraint::Length(8),
         Constraint::Length(1),
     ])
     .split(inner);
@@ -192,10 +220,23 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         usize::from(state.show_done),
         "",
     );
-    form::buttons(
+    form::render_choices(
         f,
         app,
         areas[4],
+        (4, "Theme · previews as you choose"),
+        &state
+            .themes
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>(),
+        state.theme,
+        "",
+    );
+    form::buttons(
+        f,
+        app,
+        areas[5],
         &[
             ("Save", KeyCode::Enter),
             ("Cancel", KeyCode::Esc),
@@ -224,5 +265,42 @@ mod tests {
         assert_eq!(updated.filters[0].jql, "type = Bug");
         settings.team = form::editor("Alex = wrong-email");
         assert!(settings.config(&config).is_err());
+    }
+
+    #[test]
+    fn choosing_a_theme_previews_it_and_esc_keeps_the_saved_one() {
+        let config: AppConfig = toml::from_str(
+            "[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n[themes.mine]\naccent = 'red'\n",
+        )
+        .unwrap();
+        let mut app = App::new();
+        app.settings = Some(Settings::new(&config));
+        let mut config = config;
+        app.focus_field(4);
+        for _ in 0..crate::theme::PRESETS.len() + 1 {
+            handle_key(&mut app, KeyCode::Down, KeyModifiers::NONE, &mut config);
+        }
+        let state = app.settings.as_ref().unwrap();
+        assert_eq!(state.themes[state.theme].0, "mine");
+        assert_eq!(state.theme().accent, Some(ratatui::style::Color::Red));
+        assert_eq!(state.config(&config).unwrap().preferences.theme, "mine");
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|f| crate::ui(f, &app, &config)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(buffer
+            .content
+            .iter()
+            .any(|cell| cell.fg == ratatui::style::Color::Red));
+        assert!(!buffer
+            .content
+            .iter()
+            .any(|cell| cell.fg == ratatui::style::Color::Cyan));
+
+        handle_key(&mut app, KeyCode::Esc, KeyModifiers::NONE, &mut config);
+        assert!(app.settings.is_none());
+        assert_eq!(app.theme, Theme::default());
+        assert_eq!(config.preferences.theme, crate::theme::DEFAULT);
     }
 }

@@ -16,3 +16,11 @@ jql = "type = Bug AND assignee = currentUser()"
 [[filters]]
 name = "Blocked"
 jql = "status = Blocked"
+
+[themes.ocean]
+background = "#0b1d2a"
+text = "#d6e6f2"
+muted = "#4f6d82"
+selection = "#16344a"
+accent = "#4fd1c5"
+highlight = "#f6c177"
