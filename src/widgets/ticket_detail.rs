@@ -203,7 +203,12 @@ fn hint_lines(hints: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
 
 /// Draws `hints` at the bottom of `area`, after a blank line, and returns the
 /// area above them.
-fn render_footer(f: &mut ratatui::Frame, area: Rect, hints: &[(&str, &str)], app: &App) -> Rect {
+pub(crate) fn render_footer(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    hints: &[(&str, &str)],
+    app: &App,
+) -> Rect {
     let footer = hint_lines(hints, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -610,7 +615,7 @@ fn heading(text: String) -> Line<'static> {
     ))
 }
 
-fn option_style(color: Color, selected: bool) -> Style {
+pub(crate) fn option_style(color: Color, selected: bool) -> Style {
     let style = Style::default().fg(color);
     if selected {
         style.add_modifier(Modifier::BOLD).bg(Color::DarkGray)
@@ -619,7 +624,7 @@ fn option_style(color: Color, selected: bool) -> Style {
     }
 }
 
-fn render_menu(
+pub(crate) fn render_menu(
     f: &mut ratatui::Frame,
     app: &App,
     area: Rect,

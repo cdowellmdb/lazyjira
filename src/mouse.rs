@@ -792,6 +792,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bulk_actions_take_clicks_on_options_hints_and_close() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "To Do")];
+        app.selected_index = 1;
+        crate::bulk_actions::open(&mut app);
+        draw(&app, &config);
+        click(&mut app, &mut config, &tx, |t| {
+            matches!(t, Target::Choose { index: 1, .. })
+        })
+        .await;
+        assert!(matches!(
+            app.bulk_state,
+            Some(BulkState::ActionPicker { selected: 1, .. })
+        ));
+        draw(&app, &config);
+        click(&mut app, &mut config, &tx, |t| {
+            matches!(t, Target::Key(KeyCode::Enter))
+        })
+        .await;
+        assert!(matches!(
+            app.bulk_state,
+            Some(BulkState::AssignPicker { .. })
+        ));
+
+        // The [×] in the title closes it, like the ticket detail's.
+        draw(&app, &config);
+        let close = app
+            .mouse_targets
+            .borrow()
+            .iter()
+            .find(|(_, t)| matches!(t, Target::Key(KeyCode::Esc)))
+            .unwrap()
+            .0;
+        let buffer = draw(&app, &config);
+        assert_eq!(buffer[(close.x + 1, close.y)].symbol(), "[");
+        click(&mut app, &mut config, &tx, |t| {
+            matches!(t, Target::Key(KeyCode::Esc))
+        })
+        .await;
+        assert!(app.bulk_state.is_none());
+    }
+
+    #[tokio::test]
     async fn clicking_a_parents_arrow_folds_its_sub_tasks() {
         let mut config: AppConfig =
             toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
