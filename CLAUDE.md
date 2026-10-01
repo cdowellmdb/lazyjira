@@ -26,7 +26,8 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/app.rs** — App state, tab management, selection tracking, cache mutations
 - **src/cache.rs** — Data types (Ticket, Epic, TeamMember, Status, Cache)
 - **src/config.rs** — `config.toml` schema, defaults, load/save
-- **src/settings.rs** — In-app team, epic, and startup preferences
+- **src/settings.rs** — In-app team, epic, startup, and theme preferences
+- **src/theme.rs** — Color themes: presets, custom themes from `[themes]`, and the pass that recolors a drawn frame
 - **src/mouse.rs** — Hit targets registered by renderers and mouse event handling
 - **src/setup.rs** — First-run setup screen (project key, team name); imports the legacy `team.yml` roster
 - **src/jira_client.rs** — Shells out to `jira` CLI, parses output, reads/writes local caches
@@ -76,6 +77,9 @@ The Epics fetch also adds the sub-tasks of an epic's children to that epic's `ch
 
 Folding a parent adds its key to `App::collapsed_parents` (one set for every tab). `nest` tags each row with its `Family` (a parent with a sub-task count, or a child); `index_groups` drops the children of folded parents from the rows but keeps them in `total`, and `VisibleGroup::family` carries the tags to renderers and to `selected_fold_parent`. So row counts that must include hidden rows (Team's header counts) come from `total`, never from `tickets.len()`, and Team splits active from done by status, not position. `z` goes through `App::toggle_fold_at_cursor`: the selected parent or sub-task folds its parent, anything else folds its group.
 
+### Themes recolor the finished frame
+Renderers draw with plain ANSI colors, each used for one job: `DarkGray` is muted text as a foreground and the selected row as a background, `Cyan` is keys and focus, `Yellow` is headers and the chosen option, and so on (`Theme::role` lists them). `ui` ends with `Theme::apply`, which swaps those colors in the buffer for the theme's roles, like a terminal color scheme. So keep drawing with the ANSI color for the job, not a theme field, and code that finds things by color (the footer's key hints, the editor cursor) keeps working. Unset roles, and every role of `default`, leave the terminal's color. While preferences are open, `ui` applies the highlighted theme instead of `App::theme`, which is how the picker previews.
+
 ### Current UX behavior
 - Team view includes the current user (if not in the `[team]` config, inferred from `jira me` email).
 - My Work and Team include a separate Labels column.
@@ -109,7 +113,7 @@ Folding a parent adds its key to `App::collapsed_parents` (one set for every tab
 
 ## Demo recording
 
-`docs/demo/record.sh` re-records `docs/images/demo.gif` with VHS. It runs the app with a throwaway `HOME`/`TMPDIR` and puts `docs/demo/bin/jira` (a fake `jira` CLI with made-up data) first on `PATH`. Never record against a real Jira instance. If you change which `jira` subcommands, flags, or columns the app uses, update the fake CLI to match. Moves and sub-task nesting use the REST API rather than the CLI, so the demo doesn't show them.
+`docs/demo/record.sh` re-records `docs/images/demo.gif` with VHS (`docs/demo/record.sh docs/demo/themes.tape` re-records `docs/images/themes.gif`). It runs the app with a throwaway `HOME`/`TMPDIR` and puts `docs/demo/bin/jira` (a fake `jira` CLI with made-up data) first on `PATH`. Never record against a real Jira instance. If you change which `jira` subcommands, flags, or columns the app uses, update the fake CLI to match. Moves and sub-task nesting use the REST API rather than the CLI, so the demo doesn't show them.
 
 ## Notes
 

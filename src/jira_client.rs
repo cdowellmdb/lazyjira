@@ -1158,6 +1158,7 @@ mod tests {
             statuses: StatusConfig::default(),
             filters: vec![],
             preferences: Default::default(),
+            themes: Default::default(),
         };
         let query = unassigned_team_active_query(&config);
         assert!(query.contains("assignee is EMPTY"));

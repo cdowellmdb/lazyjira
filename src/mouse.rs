@@ -561,6 +561,9 @@ fn choose(app: &mut App, field: usize, index: usize) {
         if field == 3 {
             state.show_done = index != 0;
         }
+        if field == 4 {
+            state.theme = index.min(state.themes.len() - 1);
+        }
     } else if let Some(state) = &mut app.create_ticket {
         match field {
             0 => state.issue_type_idx = index,
@@ -1062,5 +1065,13 @@ mod tests {
         .await;
         assert!(app.settings.is_some());
         assert_eq!(app.search.as_deref(), Some("search stays here"));
+
+        draw(&app, &config);
+        click(&mut app, &mut config, &tx, |t| {
+            matches!(t, Target::Choose { field: 4, index: 2 })
+        })
+        .await;
+        assert_eq!(app.focused_field(), Some(4));
+        assert_eq!(app.settings.as_ref().map(|state| state.theme), Some(2));
     }
 }

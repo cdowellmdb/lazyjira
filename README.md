@@ -30,7 +30,8 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 - Click into form fields and buttons; scroll lists and details with the wheel
 - Drag across text to select it, then copy with `Ctrl+C`
 - Edit in `$EDITOR`, paste multiple lines, and filter pickers by typing
-- Preferences (teammates, pinned epics, Done visibility, starting tab) apply without a restart
+- Preferences (teammates, pinned epics, Done visibility, starting tab, theme) apply without a restart
+- Built-in color themes, previewed live as you pick, plus your own in `config.toml`
 
 ## Requirements
 
@@ -82,7 +83,7 @@ The first run asks for two things:
 
 lazyjira then saves `~/.config/lazyjira/config.toml`, adds you to the team roster using the email from `jira me`, and loads your tickets. Press `?` at any time to see the keybindings.
 
-Press `S` or click **Settings** to manage teammates, pinned epics, Done visibility, and your starting tab. Team and epic changes refresh without restarting.
+Press `S` or click **Settings** to manage teammates, pinned epics, Done visibility, your starting tab, and the color theme. Team and epic changes refresh without restarting.
 
 ## Configuration
 
@@ -114,6 +115,11 @@ jql = "priority = P1 AND created >= -7d"
 [preferences]
 show_done = true
 start_tab = "My Work"
+theme = "default"
+
+[themes.ocean]
+background = "#0b1d2a"
+accent = "#4fd1c5"
 ```
 
 | Key | Default | What it does |
@@ -127,6 +133,30 @@ start_tab = "My Work"
 | `filters` | empty | Saved JQL filters for the Filters tab. |
 | `preferences.show_done` | `true` | Whether Done tickets are visible. Updated when you press `d` or save preferences. |
 | `preferences.start_tab` | `"My Work"` | Starting tab: `My Work`, `Team`, `Epics`, `Unassigned`, or `Filters`. |
+| `preferences.theme` | `"default"` | Color theme: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin`, `solarized-light`, or a custom theme's name, in any case. An unknown name uses the default. |
+| `themes.<name>` | empty | Custom themes. See [Themes](#themes). |
+
+### Themes
+
+![Picking a theme in preferences, previewed live, then the Nord theme in My Work, ticket detail, and Team](docs/images/themes.gif)
+
+Pick a theme from the **Theme** list in preferences (`S`), next to **Starting tab**. The app recolors as you move through the list, so you see each theme before choosing it; **Save** keeps it and **Cancel** goes back. The `default` theme uses your terminal's own colors. The other presets set their own background and need a terminal with true color.
+
+To make your own, add a `[themes.<name>]` table and pick it in preferences. Each role takes a hex color (`"#4fd1c5"`) or a color name (`"red"`, `"light-blue"`). Roles you leave out keep your terminal's color. A custom theme named after a preset replaces the whole preset, so copy the preset's colors from [`src/theme.rs`](src/theme.rs) if you only want to change a few.
+
+| Role | Used for |
+|------|----------|
+| `background` | Behind everything |
+| `text` | Regular text |
+| `muted` | Borders, separators, hints |
+| `subtle` | Secondary text on the selected row |
+| `selection` | Behind the selected row |
+| `accent` | Keys, focused fields, links, In Review |
+| `highlight` | Headers, the chosen option, In Progress |
+| `error` | Errors, Blocked |
+| `success` | Done |
+| `info` | Ready for Work, info markers, selected text |
+| `special` | Statuses lazyjira doesn't know |
 
 Saved filter and preference changes rewrite this file, and any comments you added are lost.
 
@@ -147,7 +177,7 @@ Saved filter and preference changes rewrite this file, and any comments you adde
 | `B` | Open bulk action menu (move/assign) |
 | `U` | Open bulk CSV upload |
 | `c` | Create ticket |
-| `S` | Preferences: teammates, pinned epics, Done visibility, starting tab |
+| `S` | Preferences: teammates, pinned epics, Done visibility, starting tab, theme |
 | `z/Z` | Fold the current group, or a parent's sub-tasks when a parent or one of its sub-tasks is selected / fold all groups |
 | `d` | Toggle visibility of done statuses (`statuses.done`) |
 | `f/F` | Focus the next / previous status in My Work or Team, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that) |

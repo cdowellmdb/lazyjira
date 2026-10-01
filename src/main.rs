@@ -12,6 +12,7 @@ mod moves;
 mod settings;
 mod setup;
 mod subtasks;
+mod theme;
 mod transitions;
 mod views;
 mod widgets;
@@ -440,6 +441,8 @@ fn spawn_bulk_upload_execution(
 #[tokio::main]
 async fn main() -> Result<()> {
     maybe_run_dev_mode()?;
+    // Before the terminal is set up, so a config error prints to a normal terminal.
+    let loaded_config = config::load_config()?;
 
     // Setup terminal
     enable_raw_mode()?;
@@ -453,7 +456,7 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut config = match config::load_config()? {
+    let mut config = match loaded_config {
         Some(config) => config,
         None => setup::run_setup(&mut terminal).await?,
     };
@@ -462,6 +465,7 @@ async fn main() -> Result<()> {
     app.set_epics_i_care_about(config.epics_i_care_about_ordered());
     app.set_status_rules(&config.statuses);
     app.show_done = config.preferences.show_done;
+    app.theme = theme::resolve(&config.preferences.theme, &config.themes);
     app.active_tab = Tab::all()
         .iter()
         .copied()
@@ -1315,6 +1319,12 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     }
     widgets::move_failure::render(f, app, app.moves.failures());
     mouse::render_selection(f, app);
+    app.settings
+        .as_ref()
+        .map_or(app.theme, |state| {
+            theme::resolve(&state.themes[state.theme], &config.themes)
+        })
+        .apply(f.buffer_mut());
 }
 
 fn render_filter_edit_modal(f: &mut ratatui::Frame, app: &App) {
@@ -2266,6 +2276,7 @@ mod tests {
             statuses: crate::config::StatusConfig::default(),
             filters: vec![],
             preferences: Default::default(),
+            themes: Default::default(),
         }
     }
 
@@ -2399,6 +2410,57 @@ mod tests {
         )
         .await;
         assert_eq!(app.selected_index, 1);
+    }
+
+    #[test]
+    fn presets_theme_every_cell_on_every_tab_and_overlay() {
+        use ratatui::{backend::TestBackend, style::Color};
+        let mut config = sample_config();
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = [
+            "In Progress",
+            "Ready for Work",
+            "Blocked",
+            "In Review",
+            "Done",
+            "Odd",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, status)| {
+            let mut ticket = ticket(&format!("AMP-{i}"), "Summary", status);
+            ticket.description =
+                Some("*bold* [link|https://example.com] {color:red}red{color} @alex".into());
+            ticket.labels = vec!["label".into()];
+            ticket
+        })
+        .collect();
+        for (name, theme) in theme::PRESETS {
+            config.preferences.theme = name.to_string();
+            app.theme = *theme;
+            for overlay in 0..4 {
+                for tab in Tab::all() {
+                    app.active_tab = *tab;
+                    // A ticket row, so the selected row's colors are drawn too.
+                    app.selected_index = 1;
+                    app.close_detail();
+                    app.show_keybindings = overlay == 1;
+                    app.settings = (overlay == 2).then(|| settings::Settings::new(&config));
+                    if overlay == 3 {
+                        app.open_detail("AMP-0".into());
+                    }
+                    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+                    terminal.draw(|f| ui(f, &app, &config)).unwrap();
+                    for cell in &terminal.backend().buffer().content {
+                        assert!(
+                            matches!((cell.fg, cell.bg), (Color::Rgb(..), Color::Rgb(..))),
+                            "{name}, {tab:?}, overlay {overlay}: {cell:?} kept a terminal color"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

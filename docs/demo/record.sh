@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Re-records docs/images/demo.gif against fake Jira data. Requires vhs.
+# Re-records docs/images/demo.gif (or the tape given, such as docs/demo/themes.tape)
+# against fake Jira data. Requires vhs.
 #
 # lazyjira runs with a throwaway HOME and TMPDIR, and docs/demo/bin/jira
 # stands in for the real jira CLI, so no real config, cache, or Jira
@@ -19,4 +20,4 @@ cd "$repo"
 env -u JIRA_API_TOKEN -u JIRA_CONFIG_FILE -u NO_COLOR \
   LAZYJIRA_DEMO_HOME="$demo_home" \
   LAZYJIRA_DEMO_PATH="$repo/docs/demo/bin:$repo/target/release:$PATH" \
-  vhs docs/demo/demo.tape
+  vhs "${1:-docs/demo/demo.tape}"
