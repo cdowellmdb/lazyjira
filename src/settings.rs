@@ -216,15 +216,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         usize::from(state.show_done),
         "",
     );
-    form::render_choices(
-        f,
-        app,
-        theme,
-        (4, "Theme · previews as you choose"),
-        &state.themes,
-        state.theme,
-        "",
-    );
+    form::render_choices(f, app, theme, (4, "Theme"), &state.themes, state.theme, "");
     form::buttons(
         f,
         app,

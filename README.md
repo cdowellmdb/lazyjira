@@ -140,7 +140,7 @@ accent = "#4fd1c5"
 
 ![Picking a theme in preferences, previewed live, then the Nord theme in My Work, ticket detail, and Team](docs/images/themes.gif)
 
-Pick a theme in preferences (`S`). The app recolors as you move through the list; **Save** keeps it and **Cancel** goes back. The `default` theme uses your terminal's own colors. The other presets set their own background and need a terminal with true color.
+Pick a theme from the **Theme** list in preferences (`S`), next to **Starting tab**. The app recolors as you move through the list, so you see each theme before choosing it; **Save** keeps it and **Cancel** goes back. The `default` theme uses your terminal's own colors. The other presets set their own background and need a terminal with true color.
 
 To make your own, add a `[themes.<name>]` table and pick it in preferences. Each role takes a hex color (`"#4fd1c5"`) or a color name (`"red"`, `"light-blue"`). Roles you leave out keep your terminal's color. A custom theme named after a preset replaces the whole preset, so copy the preset's colors from [`src/theme.rs`](src/theme.rs) if you only want to change a few.
 
