@@ -5,13 +5,14 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    fold_indicator, group_marker, highlight_row, panel, status_color, truncate,
+    fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
+    KEY_WIDTH,
 };
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
 
 fn ticket_column_widths(area: Rect) -> (usize, usize, usize) {
-    let key_w = 14usize;
+    let key_w = KEY_WIDTH;
     let mut status_w = 12usize;
     let mut summary_w = 48usize;
     let inner = panel().inner(area).width as usize;
@@ -129,12 +130,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 "[ ]"
             };
+            let (key_cell, summary) =
+                ticket_cells(app, group.family.get(index).copied(), ticket, marker);
 
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!("    {:<key_w$}", format!("{} {}", marker, ticket.key)),
-                    base,
-                ),
+                Span::styled(format!("    {:<key_w$}", key_cell), base),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:<status_w$}", ticket.status.as_str()),
@@ -142,7 +142,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 ),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
                 Span::styled(
-                    format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
+                    format!("{:<summary_w$}", truncate(&summary, summary_w)),
                     base,
                 ),
             ]));

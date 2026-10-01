@@ -265,6 +265,10 @@ pub struct Ticket {
     pub labels: Vec<String>,
     pub epic_key: Option<String>,
     pub epic_name: Option<String>,
+    /// The ticket this sub-task belongs to. Read from Jira's search on every refresh, never
+    /// from the detail cache, so a re-parented sub-task doesn't keep its old parent.
+    #[serde(default)]
+    pub parent_key: Option<String>,
     #[serde(default)]
     pub detail_loaded: bool,
     #[serde(default)]
@@ -286,6 +290,7 @@ impl Ticket {
             labels: Vec::new(),
             epic_key: None,
             epic_name: None,
+            parent_key: None,
             detail_loaded: false,
             activity: Vec::new(),
         }

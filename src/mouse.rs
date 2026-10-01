@@ -340,13 +340,12 @@ pub fn register_rows(
             let rect = Rect::new(inner.x, inner.y + y as u16, inner.width, 1);
             let mut targets = app.mouse_targets.borrow_mut();
             targets.push((rect, Target::Row(index)));
-            let prefix = lines[line]
+            let text = lines[line]
                 .spans
                 .iter()
                 .map(|span| span.content.as_ref())
-                .collect::<String>()
-                .find('[')
-                .unwrap_or(0) as u16;
+                .collect::<String>();
+            let prefix = text.find('[').unwrap_or(0) as u16;
             targets.push((
                 Rect::new(
                     rect.x + prefix,
@@ -359,6 +358,16 @@ pub fn register_rows(
             if header {
                 targets.push((
                     Rect::new(rect.x + 4, rect.y, rect.width.saturating_sub(4).min(1), 1),
+                    Target::Fold(index),
+                ));
+            } else if let Some(arrow) = text.split(" │ ").next().and_then(|key_cell| {
+                key_cell
+                    .find(['▼', '▶'])
+                    .map(|at| key_cell[..at].chars().count())
+            }) {
+                // A parent's fold arrow sits in its key cell.
+                targets.push((
+                    Rect::new(rect.x + arrow as u16, rect.y, 1, 1),
                     Target::Fold(index),
                 ));
             }
@@ -464,6 +473,8 @@ pub async fn handle(
                     app.selected_index = index;
                     if let Some(group) = app.selected_header_group_id() {
                         app.toggle_group_collapse(&group);
+                    } else if let Some(parent) = app.selected_fold_parent() {
+                        app.toggle_parent_fold(&parent);
                     }
                 }
                 Target::Filter(index) => {
@@ -778,6 +789,35 @@ mod tests {
             )
             .await;
         }
+    }
+
+    #[tokio::test]
+    async fn clicking_a_parents_arrow_folds_its_sub_tasks() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Epics;
+        let mut child = Ticket::for_test("DEMO-2", "To Do");
+        child.parent_key = Some("DEMO-1".into());
+        app.cache.epics = vec![crate::cache::Epic {
+            key: "EPIC-9".into(),
+            summary: "Epic".into(),
+            children: vec![Ticket::for_test("DEMO-1", "To Do"), child],
+        }];
+        // The epic header is row 0, then the parent, then its sub-task.
+        assert_eq!(app.item_count(), 3);
+        draw(&app, &config);
+        click(&mut app, &mut config, &tx, |t| matches!(t, Target::Fold(1))).await;
+        assert!(app.is_parent_folded("DEMO-1"));
+        assert_eq!(app.item_count(), 2);
+        assert!(!app.is_collapsed(Tab::Epics, "EPIC-9"));
+
+        draw(&app, &config);
+        click(&mut app, &mut config, &tx, |t| matches!(t, Target::Fold(1))).await;
+        assert!(!app.is_parent_folded("DEMO-1"));
+        assert_eq!(app.item_count(), 3);
     }
 
     #[tokio::test]

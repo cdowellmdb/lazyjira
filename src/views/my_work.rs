@@ -5,11 +5,12 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    fold_indicator, group_marker, highlight_row, panel, status_color, truncate,
+    fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
+    KEY_WIDTH,
 };
 
 fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
-    let key_w = 14usize;
+    let key_w = KEY_WIDTH;
     let mut summary_w = 34usize;
     let mut epic_w = 24usize;
     let mut labels_w = 22usize;
@@ -134,6 +135,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 "[ ]"
             };
+            let (key_cell, summary) =
+                ticket_cells(app, group.family.get(index).copied(), ticket, marker);
 
             let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
             let labels_str = if ticket.labels.is_empty() {
@@ -143,13 +146,10 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             };
 
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {:<key_w$}", format!("{} {}", marker, ticket.key)),
-                    base,
-                ),
+                Span::styled(format!("  {:<key_w$}", key_cell), base),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
                 Span::styled(
-                    format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
+                    format!("{:<summary_w$}", truncate(&summary, summary_w)),
                     base,
                 ),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),

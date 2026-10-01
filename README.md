@@ -12,6 +12,7 @@ lazyjira runs on top of the [`jira` CLI](https://github.com/ankitpokhrel/jira-cl
 - Mouse controls for tabs, rows, scrolling, forms, pickers, and action menus
 - Tickets grouped by status, with one-key status focus and a Done toggle
 - Epic progress bars, with an optional list of the epics you care about
+- Sub-tasks listed under their parent in every tab, including inside their epic
 - Ticket detail with formatted description, comments, labels, assignee, epic, and activity history
 - Create, comment on, assign, edit, and move tickets without leaving the terminal
 - Cursor editing, multiline paste, and external editors for ticket content
@@ -25,7 +26,7 @@ lazyjira runs on top of the [`jira` CLI](https://github.com/ankitpokhrel/jira-cl
 ## Requirements
 
 - The [`jira` CLI](https://github.com/ankitpokhrel/jira-cli) on your `PATH` and logged in (`jira init`). Running `jira me` should print your email.
-- `JIRA_API_TOKEN` set in your environment, as jira-cli normally uses it. Moves go through Jira's REST API with jira-cli's `server` and `auth_type` settings and this token.
+- `JIRA_API_TOKEN` set in your environment, as jira-cli normally uses it. Moves and sub-task nesting go through Jira's REST API with jira-cli's `server` and `auth_type` settings and this token.
 - macOS (Apple Silicon or Intel) or Linux x86_64. Windows is not supported.
 - A stable Rust toolchain, only if you build from source.
 
@@ -138,18 +139,18 @@ Saved filter and preference changes rewrite this file, and any comments you adde
 | `U` | Open bulk CSV upload |
 | `c` | Create ticket |
 | `S` | Preferences: teammates, pinned epics, Done visibility, starting tab |
-| `z/Z` | Fold current group / fold all groups |
+| `z/Z` | Fold the current group, or a parent's sub-tasks when a parent or one of its sub-tasks is selected / fold all groups |
 | `d` | Toggle visibility of done statuses (`statuses.done`) |
 | `f/F` | Focus the next / previous status in My Work or Team, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that) |
 | `r` | Refresh |
 | `?` | Keybindings help |
 | `q` | Quit |
 
-Each tab remembers its selection, search, status focus, and folded groups during the session. Refresh keeps the loaded list visible and follows the selected ticket even when other rows are added or reordered.
+Each tab remembers its selection, search, status focus, and folded groups during the session. A folded parent shows `▶` and how many sub-tasks are hidden. Refresh keeps the loaded list visible and follows the selected ticket even when other rows are added or reordered.
 
 ### Mouse
 
-Click a tab or row to select it; click the selected row again to open it. Click checkboxes to mark tickets or groups and fold arrows to expand or collapse groups. The wheel navigates lists and scrolls details, help, and editors.
+Click a tab or row to select it; click the selected row again to open it. Click checkboxes to mark tickets or groups and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
 
 Click the red **[×]** in the top-left of ticket or epic detail to close the popup, including from its history and move menus.
 
@@ -175,7 +176,7 @@ Descriptions and comments render Jira's wiki markup: headings, bold/italic/strik
 | `Up/Down`, `j/k` | Scroll |
 | `PgUp/PgDn`, `Space` | Scroll a page |
 | `g/G`, `Home/End` | Jump to top / bottom |
-| `[` / `]` | Previous / next ticket in the list (previous / next epic in an epic's detail) |
+| `Left/Right` | Previous / next ticket in the list (previous / next epic in an epic's detail) |
 | `z` | Zoom to full screen (toggle) |
 | `o` | Open in browser |
 | `m` | Move status |
@@ -205,7 +206,7 @@ A bulk move loads every selected ticket's transitions, then offers the statuses 
 | `n` | New filter |
 | `e` | Edit filter |
 | `x` | Delete filter |
-| `z/Z` | Fold current status group / fold all status groups |
+| `z/Z` | Fold the current status group, or a parent's sub-tasks when a parent or one of its sub-tasks is selected / fold all status groups |
 | `Space`, `A`, `u`, `B` | Select and bulk actions (results pane) |
 | `U` | Open bulk CSV upload |
 
@@ -239,7 +240,8 @@ The preview also warns about summaries that match an existing ticket or repeat w
 - jira-cli omits empty descriptions when editing. Use the browser action to clear an existing description.
 - The Unassigned tab queries the `Assigned Teams` custom field. It doesn't work on Jira instances that don't have that field.
 - A move sends one transition. Reaching a status that is several transitions away takes several moves, and transitions that require fields other than a resolution fail with Jira's error; press `o` to finish those in the browser.
-- Moves need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read.
+- Moves and sub-task nesting need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read. Without it, sub-tasks show as ordinary rows.
+- A sub-task is indented under its parent only when the parent is in the same group (for example the same epic, or the same status in My Work). Elsewhere its summary starts with the parent's key, like `DSCI-3244 › ...`.
 - New tickets, from the create form or a CSV, can only be `Task`, `Bug`, or `Story`.
 
 ## Development
