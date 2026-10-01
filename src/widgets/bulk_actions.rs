@@ -1,25 +1,24 @@
+use crossterm::event::KeyCode;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 use crate::app::App;
 use crate::bulk_actions::{BulkAction, BulkState, BulkSummary, BulkTarget};
 use crate::bulk_plan;
+use crate::mouse::Target;
+use crate::views::common::{panel, status_color};
 
 use super::form;
+use super::ticket_detail::{option_style, render_footer, render_menu};
 
-fn render_option(lines: &mut Vec<Line>, label: &str, selected: bool) {
-    let prefix = if selected { "> " } else { "  " };
-    let style = if selected {
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Reset)
-    };
+/// An option drawn like the detail overlay's menus: the selected one on a highlight bar.
+fn render_option(lines: &mut Vec<Line<'static>>, label: &str, selected: bool, color: Color) {
+    let prefix = if selected { "› " } else { "  " };
     lines.push(Line::from(Span::styled(
         format!("{}{}", prefix, label),
-        style,
+        option_style(color, selected),
     )));
 }
 
@@ -59,7 +58,7 @@ fn sample_keys(targets: &[String]) -> String {
 
 /// A titled list of "KEY: reason" lines, if there are any.
 fn push_ticket_reasons(
-    lines: &mut Vec<Line>,
+    lines: &mut Vec<Line<'static>>,
     title: &'static str,
     color: Color,
     reasons: &[(String, String)],
@@ -82,7 +81,7 @@ fn hint(text: &'static str) -> Line<'static> {
     Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
 }
 
-fn render_result(lines: &mut Vec<Line>, summary: &BulkSummary) {
+fn render_result(lines: &mut Vec<Line<'static>>, summary: &BulkSummary) {
     let action = match summary.action {
         BulkAction::Move => "Bulk Move",
         BulkAction::Assign => "Bulk Assign",
@@ -106,12 +105,6 @@ fn render_result(lines: &mut Vec<Line>, summary: &BulkSummary) {
 
     push_ticket_reasons(lines, "Failures:", Color::Red, &summary.failed_details);
     push_ticket_reasons(lines, "Skipped:", Color::Yellow, &summary.skipped);
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "[j/k] scroll  [Enter/Esc] close",
-        Style::default().fg(Color::DarkGray),
-    )));
 }
 
 pub fn render(f: &mut ratatui::Frame, app: &App) {
@@ -125,12 +118,48 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         BulkState::Running { .. } => ("Bulk Action Running", 60, 34),
         _ => ("Bulk Actions", 58, 54),
     };
-    let inner = form::render_modal_frame(f, app, title, percent_x, percent_y);
+    // Framed like the ticket detail: a [×] that closes it, then the title.
+    let area = form::centered_rect(percent_x, percent_y, f.area());
+    f.render_widget(Clear, area);
+    let block = panel().title(Line::from(vec![
+        Span::styled(
+            " [×] ",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {} ", title),
+            Style::default()
+                .fg(Color::Reset)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    let inner = block.inner(area);
+    app.text_selection.borrow_mut().area = inner;
+    f.render_widget(block, area);
+    if area.width > 2 {
+        app.mouse_targets.borrow_mut().push((
+            Rect::new(area.x + 1, area.y, 5.min(area.width - 2), 1),
+            Target::Key(KeyCode::Esc),
+        ));
+    }
 
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(""));
+    let mut lines: Vec<Line<'static>> = Vec::new();
     let mut scroll = 0;
     let mut choices = Vec::new();
+    let choose = [("j/k", "choose"), ("Enter", "next"), ("Esc", "cancel")];
+    let hints: &[(&str, &str)] = match state {
+        BulkState::AssignPicker { .. } => &[
+            ("type", "filter"),
+            ("↑↓", "choose"),
+            ("Enter", "next"),
+            ("Esc", "cancel"),
+        ],
+        BulkState::MoveLoading { .. } => &[("Esc", "cancel")],
+        BulkState::Confirm { .. } => &[("Enter", "run"), ("y", "run"), ("Esc", "cancel")],
+        BulkState::Running { .. } => &[("Esc", "close")],
+        BulkState::Result { .. } => &[("j/k", "scroll"), ("Enter", "close"), ("Esc", "close")],
+        _ => &choose,
+    };
 
     match state {
         BulkState::ActionPicker { targets, selected } => {
@@ -138,22 +167,15 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             lines.push(Line::from(format!("Keys: {}", sample_keys(targets))));
             lines.push(Line::from(""));
             choices.push((lines.len(), 0));
-            render_option(&mut lines, "Move tickets", *selected == 0);
+            render_option(&mut lines, "Move tickets", *selected == 0, Color::Reset);
             choices.push((lines.len(), 1));
-            render_option(&mut lines, "Assign tickets", *selected == 1);
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "[j/k] choose  [Enter] next  [Esc] cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
+            render_option(&mut lines, "Assign tickets", *selected == 1, Color::Reset);
         }
         BulkState::MoveLoading { targets, .. } => {
             lines.push(Line::from(format!(
                 "Loading the transitions of {} tickets from Jira…",
                 targets.len()
             )));
-            lines.push(Line::from(""));
-            lines.push(hint("[Esc] cancel"));
         }
         BulkState::MoveStatusPicker {
             targets,
@@ -169,7 +191,12 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             for (i, (destination, count)) in destinations.iter().enumerate() {
                 let label = format!("{} ({} of {} tickets)", destination, count, targets.len());
                 choices.push((lines.len(), i));
-                render_option(&mut lines, &label, i == *selected);
+                render_option(
+                    &mut lines,
+                    &label,
+                    i == *selected,
+                    status_color(destination, app.status_rules()),
+                );
             }
             let failed: Vec<(&String, &String)> = fetched
                 .iter()
@@ -185,8 +212,6 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                 );
                 lines.extend(Text::styled(text, Style::default().fg(Color::Red)).lines);
             }
-            lines.push(Line::from(""));
-            lines.push(hint("[j/k] choose status  [Enter] next  [Esc] cancel"));
         }
         BulkState::MoveResolutionPicker {
             targets,
@@ -200,13 +225,12 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             for (i, choice) in plan.resolution_choices().iter().enumerate() {
                 let name = choice.as_ref().map_or("No resolution", |r| r.name.as_str());
                 choices.push((lines.len(), i));
-                render_option(&mut lines, name, i == *selected);
+                render_option(&mut lines, name, i == *selected, Color::Reset);
             }
             lines.push(Line::from(""));
             lines.push(hint(
                 "Tickets that require a different resolution will be skipped.",
             ));
-            lines.push(hint("[j/k] choose resolution  [Enter] next  [Esc] cancel"));
         }
         BulkState::AssignPicker {
             targets,
@@ -232,6 +256,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                     &mut lines,
                     &format!("{} ({})", member.name, member.email),
                     i == *selected,
+                    Color::Reset,
                 );
             }
             if app.cache.team_members.is_empty() {
@@ -240,11 +265,6 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                     Style::default().fg(Color::DarkGray),
                 )));
             }
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Type to filter  [↑↓] choose  [Enter] next  [Esc] cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
         }
         BulkState::Confirm {
             targets,
@@ -266,11 +286,6 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                 plan.jobs.len(),
                 plan.skipped.len()
             )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "[Enter/y] run  [Esc] cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
         }
         BulkState::Running {
             targets, target, ..
@@ -285,10 +300,9 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             lines.push(Line::from(format!("Action: {}", target_label(target))));
             lines.push(Line::from(format!("Tickets: {}", targets.len())));
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Processing in background. Press Esc to close this modal.",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(hint(
+                "Processing in background. Closing this keeps it running.",
+            ));
         }
         BulkState::Result {
             summary,
@@ -299,11 +313,6 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         }
     }
 
-    let areas = ratatui::layout::Layout::vertical([
-        ratatui::layout::Constraint::Min(0),
-        ratatui::layout::Constraint::Length(1),
-    ])
-    .split(inner);
     let selected = match state {
         BulkState::ActionPicker { selected, .. }
         | BulkState::MoveStatusPicker { selected, .. }
@@ -311,42 +320,16 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         | BulkState::AssignPicker { selected, .. } => Some(*selected),
         _ => None,
     };
-    if let Some(line) = choices
-        .iter()
-        .find(|(_, index)| Some(*index) == selected)
-        .map(|(line, _)| *line)
-    {
-        scroll = line.saturating_sub(areas[0].height.saturating_sub(1) as usize) as u16;
-    }
-    for (line, index) in &choices {
-        if let Some(y) = line
-            .checked_sub(scroll as usize)
-            .filter(|y| *y < areas[0].height as usize)
-        {
-            app.mouse_targets.borrow_mut().push((
-                ratatui::layout::Rect::new(areas[0].x, areas[0].y + y as u16, areas[0].width, 1),
-                crate::mouse::Target::Choose {
-                    field: 0,
-                    index: *index,
-                },
-            ));
+    match selected {
+        Some(selected) => render_menu(f, app, inner, lines, (&choices, selected), hints),
+        None => {
+            let body = render_footer(f, inner, hints, app);
+            f.render_widget(
+                Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .scroll((scroll, 0)),
+                body,
+            );
         }
     }
-    let body = Paragraph::new(lines).scroll((scroll, 0));
-    f.render_widget(
-        if choices.is_empty() {
-            body.wrap(Wrap { trim: false })
-        } else {
-            body
-        },
-        areas[0],
-    );
-    use crossterm::event::KeyCode;
-    let buttons = match state {
-        BulkState::Confirm { .. } => vec![("Run", KeyCode::Enter), ("Cancel", KeyCode::Esc)],
-        BulkState::Running { .. } | BulkState::MoveLoading { .. } => vec![("Close", KeyCode::Esc)],
-        BulkState::Result { .. } => vec![("Close", KeyCode::Enter)],
-        _ => vec![("Next", KeyCode::Enter), ("Cancel", KeyCode::Esc)],
-    };
-    form::buttons(f, app, areas[1], &buttons);
 }

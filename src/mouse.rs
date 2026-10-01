@@ -498,7 +498,20 @@ pub async fn handle(
                         editor.cancel_selection();
                     }
                 }
-                Target::Choose { field, index } => choose(app, field, index),
+                Target::Choose { field, index } => {
+                    // Like a list row: clicking the menu option that's already chosen takes it.
+                    if menu_choice(app) == Some(index) {
+                        crate::handle_key(
+                            app,
+                            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                            tx,
+                            config,
+                        )
+                        .await;
+                    } else {
+                        choose(app, field, index);
+                    }
+                }
                 Target::CloseDetail => app.close_detail(),
                 Target::Copy => copy_selected(app),
                 Target::Key(KeyCode::Char('S')) => {
@@ -511,6 +524,31 @@ pub async fn handle(
             }
         }
         _ => {}
+    }
+}
+
+/// The chosen option of the menu on top (bulk actions, or the detail's move and resolution
+/// pickers), where Enter takes it. Forms' pickers aren't menus: Enter there submits the form.
+fn menu_choice(app: &App) -> Option<usize> {
+    if app.settings.is_some() || app.create_ticket.is_some() || app.assign_state.is_some() {
+        return None;
+    }
+    match (&app.bulk_state, &app.detail_mode) {
+        (
+            Some(
+                BulkState::ActionPicker { selected, .. }
+                | BulkState::MoveStatusPicker { selected, .. }
+                | BulkState::MoveResolutionPicker { selected, .. }
+                | BulkState::AssignPicker { selected, .. },
+            ),
+            _,
+        ) => Some(*selected),
+        (Some(_), _) => None,
+        (None, DetailMode::MovePicker(picker)) if app.is_detail_open() => Some(picker.selected),
+        (None, DetailMode::ResolutionPicker { selected, .. }) if app.is_detail_open() => {
+            Some(*selected)
+        }
+        _ => None,
     }
 }
 
@@ -792,6 +830,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bulk_actions_take_clicks_on_options_hints_and_close() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "To Do")];
+        app.selected_index = 1;
+        crate::bulk_actions::open(&mut app);
+        draw(&app, &config);
+        click(&mut app, &mut config, &tx, |t| {
+            matches!(t, Target::Choose { index: 1, .. })
+        })
+        .await;
+        assert!(matches!(
+            app.bulk_state,
+            Some(BulkState::ActionPicker { selected: 1, .. })
+        ));
+        // Clicking the chosen option again takes it, like a list row.
+        draw(&app, &config);
+        click(&mut app, &mut config, &tx, |t| {
+            matches!(t, Target::Choose { index: 1, .. })
+        })
+        .await;
+        assert!(matches!(
+            app.bulk_state,
+            Some(BulkState::AssignPicker { .. })
+        ));
+        // Back to the first step to try the Enter hint.
+        app.bulk_state = Some(BulkState::ActionPicker {
+            targets: vec!["DEMO-1".into()],
+            selected: 1,
+        });
+        draw(&app, &config);
+        click(&mut app, &mut config, &tx, |t| {
+            matches!(t, Target::Key(KeyCode::Enter))
+        })
+        .await;
+        assert!(matches!(
+            app.bulk_state,
+            Some(BulkState::AssignPicker { .. })
+        ));
+
+        // The [×] in the title closes it, like the ticket detail's.
+        draw(&app, &config);
+        let close = app
+            .mouse_targets
+            .borrow()
+            .iter()
+            .find(|(_, t)| matches!(t, Target::Key(KeyCode::Esc)))
+            .unwrap()
+            .0;
+        let buffer = draw(&app, &config);
+        assert_eq!(buffer[(close.x + 1, close.y)].symbol(), "[");
+        click(&mut app, &mut config, &tx, |t| {
+            matches!(t, Target::Key(KeyCode::Esc))
+        })
+        .await;
+        assert!(app.bulk_state.is_none());
+    }
+
+    #[tokio::test]
     async fn clicking_a_parents_arrow_folds_its_sub_tasks() {
         let mut config: AppConfig =
             toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
@@ -934,16 +1034,9 @@ mod tests {
             Some(BulkState::AssignPicker { .. })
         ));
         draw(&app, &config);
+        // The assignee is already chosen, so clicking it takes it.
         click(&mut app, &mut config, &tx, |t| {
             matches!(t, Target::Choose { index: 0, .. })
-        })
-        .await;
-        assert!(matches!(
-            app.bulk_state,
-            Some(BulkState::AssignPicker { .. })
-        ));
-        click(&mut app, &mut config, &tx, |t| {
-            matches!(t, Target::Key(KeyCode::Enter))
         })
         .await;
         assert!(matches!(app.bulk_state, Some(BulkState::Confirm { .. })));

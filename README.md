@@ -150,7 +150,7 @@ Each tab remembers its selection, search, status focus, and folded groups during
 
 ### Mouse
 
-Click a tab or row to select it; click the selected row again to open it. Click checkboxes to mark tickets or groups and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
+Click a tab or row to select it; click the selected row again to open it. Menus (bulk actions, and the move and resolution pickers in ticket detail) work the same way: click an option to choose it, and click it again to take it. Click checkboxes to mark tickets or groups and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
 
 Click the red **[×]** in the top-left of ticket or epic detail to close the popup, including from its history and move menus.
 
