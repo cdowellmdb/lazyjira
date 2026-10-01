@@ -36,7 +36,7 @@ Type@150ms "jjjjjj"
 Sleep 1.5s
 Type "G"
 Sleep 1.5s
-Type "]"
+Right
 Sleep 1.5s
 Type "z"
 Sleep 1.5s

@@ -11,6 +11,7 @@ mod move_picker;
 mod moves;
 mod settings;
 mod setup;
+mod subtasks;
 mod transitions;
 mod views;
 mod widgets;
@@ -1427,8 +1428,8 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backg
                 KeyCode::Home | KeyCode::Char('g') => app.scroll_detail_to(false),
                 KeyCode::End | KeyCode::Char('G') => app.scroll_detail_to(true),
                 KeyCode::Char('z') => app.detail_fullscreen = !app.detail_fullscreen,
-                KeyCode::Char('[') | KeyCode::Char(']') => {
-                    if let Some(key) = app.step_detail(key == KeyCode::Char(']')) {
+                KeyCode::Left | KeyCode::Right => {
+                    if let Some(key) = app.step_detail(key == KeyCode::Right) {
                         spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
                     }
                 }
@@ -2056,9 +2057,7 @@ fn handle_filter_keys(
         }
         KeyCode::Char('z') => {
             if app.filter_focus == FilterFocus::Results {
-                if let Some(group_id) = app.selected_group_id() {
-                    app.toggle_group_collapse(&group_id);
-                }
+                app.toggle_fold_at_cursor();
             }
         }
         KeyCode::Char('Z') => {
@@ -2192,11 +2191,7 @@ async fn handle_main_keys(
                 spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
             }
         }
-        KeyCode::Char('z') => {
-            if let Some(group_id) = app.selected_group_id() {
-                app.toggle_group_collapse(&group_id);
-            }
-        }
+        KeyCode::Char('z') => app.toggle_fold_at_cursor(),
         KeyCode::Char('Z') => {
             app.toggle_all_groups_collapse();
         }
@@ -2388,6 +2383,7 @@ mod tests {
             labels: Vec::new(),
             epic_key: None,
             epic_name: None,
+            parent_key: None,
             detail_loaded: false,
             activity: Vec::new(),
         }

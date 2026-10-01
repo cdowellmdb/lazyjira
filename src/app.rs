@@ -1,5 +1,6 @@
 use crate::bulk_actions::BulkState;
 use crate::cache::Cache;
+use crate::subtasks::{nest, Family};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
@@ -25,6 +26,9 @@ pub(crate) struct VisibleGroup<'a, H> {
     pub index: usize,
     pub total: usize,
     pub tickets: Option<Vec<(usize, &'a crate::cache::Ticket)>>,
+    /// The rows (by index) that are a parent with sub-tasks, or a sub-task under its parent.
+    /// The sub-tasks of a folded parent have no row, but `total` still counts them.
+    pub family: HashMap<usize, Family>,
 }
 
 #[derive(Debug, Clone)]
@@ -234,6 +238,7 @@ struct VisibleKeysState {
 struct VisibleKeysCache {
     state: Option<VisibleKeysState>,
     items: Vec<VisibleItem>,
+    families: HashMap<usize, Family>,
     group_ticket_keys: HashMap<String, Vec<String>>,
 }
 
@@ -333,6 +338,8 @@ pub struct App {
     pub collapsed_my_work: HashSet<String>,
     pub collapsed_team: HashSet<String>,
     pub collapsed_epics: HashSet<String>,
+    /// Parents whose sub-tasks are folded away, wherever they're drawn under them.
+    pub collapsed_parents: HashSet<String>,
     pub collapsed_unassigned: HashSet<String>,
     pub collapsed_filters: HashSet<String>,
     /// Optional epic focus order used by the Epics tab; empty means show all epics.
@@ -395,6 +402,7 @@ impl App {
             collapsed_my_work: HashSet::new(),
             collapsed_team: HashSet::new(),
             collapsed_epics: HashSet::new(),
+            collapsed_parents: HashSet::new(),
             collapsed_unassigned: HashSet::new(),
             collapsed_filters: HashSet::new(),
             epics_i_care_about_rank: HashMap::new(),
@@ -560,6 +568,7 @@ impl App {
         let cache = self.visible_keys_cache.get_mut();
         cache.state = None;
         cache.items.clear();
+        cache.families.clear();
         cache.group_ticket_keys.clear();
         if let Some((selected, group)) = position {
             self.restore_position(Some(&selected), group.as_deref(), self.selected_index);
@@ -700,7 +709,10 @@ impl App {
         }
     }
 
-    fn compute_visible_items_for_tab(&self, tab: Tab) -> Vec<VisibleItem> {
+    fn compute_visible_items_for_tab(
+        &self,
+        tab: Tab,
+    ) -> (Vec<VisibleItem>, HashMap<usize, Family>) {
         match tab {
             Tab::MyWork => Self::group_items(self.my_work_visible_by_status()),
             Tab::Team => Self::group_items(self.team_visible_tickets_by_member()),
@@ -713,21 +725,31 @@ impl App {
     fn index_groups<'a, H>(
         &self,
         tab: Tab,
-        groups: impl IntoIterator<Item = (String, H, Vec<&'a crate::cache::Ticket>)>,
+        groups: impl IntoIterator<Item = (String, H, Vec<(&'a crate::cache::Ticket, Option<Family>)>)>,
     ) -> Vec<VisibleGroup<'a, H>> {
         let mut next_index = 0;
         groups
             .into_iter()
-            .map(|(id, header, tickets)| {
+            .map(|(id, header, rows)| {
                 let index = next_index;
                 next_index += 1;
-                let total = tickets.len();
+                let total = rows.len();
+                let mut family = HashMap::new();
                 let tickets = (!self.is_collapsed(tab, &id)).then(|| {
-                    tickets
-                        .into_iter()
-                        .map(|ticket| {
+                    rows.into_iter()
+                        .filter(|(ticket, role)| {
+                            !(*role == Some(Family::Child)
+                                && ticket
+                                    .parent_key
+                                    .as_ref()
+                                    .is_some_and(|parent| self.collapsed_parents.contains(parent)))
+                        })
+                        .map(|(ticket, role)| {
                             let index = next_index;
                             next_index += 1;
+                            if let Some(role) = role {
+                                family.insert(index, role);
+                            }
                             (index, ticket)
                         })
                         .collect()
@@ -738,24 +760,29 @@ impl App {
                     index,
                     total,
                     tickets,
+                    family,
                 }
             })
             .collect()
     }
 
-    fn group_items<H>(groups: Vec<VisibleGroup<'_, H>>) -> Vec<VisibleItem> {
-        groups
-            .into_iter()
-            .flat_map(|group| {
-                std::iter::once(VisibleItem::GroupHeader(group.id)).chain(
-                    group
-                        .tickets
-                        .into_iter()
-                        .flatten()
-                        .map(|(_, ticket)| VisibleItem::Ticket(ticket.key.clone())),
-                )
-            })
-            .collect()
+    fn group_items<H>(
+        groups: Vec<VisibleGroup<'_, H>>,
+    ) -> (Vec<VisibleItem>, HashMap<usize, Family>) {
+        let mut families = HashMap::new();
+        let mut items = Vec::new();
+        for group in groups {
+            items.push(VisibleItem::GroupHeader(group.id));
+            items.extend(
+                group
+                    .tickets
+                    .into_iter()
+                    .flatten()
+                    .map(|(_, ticket)| VisibleItem::Ticket(ticket.key.clone())),
+            );
+            families.extend(group.family);
+        }
+        (items, families)
     }
 
     fn ensure_visible_keys_cache(&self) {
@@ -767,11 +794,12 @@ impl App {
             }
         }
 
-        let items = self.compute_visible_items_for_tab(state.active_tab);
+        let (items, families) = self.compute_visible_items_for_tab(state.active_tab);
         let group_ticket_keys = Self::build_group_ticket_keys(&items);
         let mut cache = self.visible_keys_cache.borrow_mut();
         cache.state = Some(state);
         cache.items = items;
+        cache.families = families;
         cache.group_ticket_keys = group_ticket_keys;
     }
 
@@ -915,7 +943,7 @@ impl App {
             Tab::Epics,
             visible
                 .into_iter()
-                .map(|(epic, tickets)| (epic.key.clone(), epic, tickets)),
+                .map(|(epic, tickets)| (epic.key.clone(), epic, nest(tickets))),
         )
     }
 
@@ -985,7 +1013,7 @@ impl App {
             Tab::Unassigned,
             visible
                 .into_iter()
-                .map(|(key, summary, tickets)| (key.clone(), (key, summary), tickets)),
+                .map(|(key, summary, tickets)| (key.clone(), (key, summary), nest(tickets))),
         )
     }
 
@@ -995,7 +1023,7 @@ impl App {
             self.status_rules
                 .group(&self.filter_results)
                 .into_iter()
-                .map(|(status, tickets)| (status.clone(), status, tickets)),
+                .map(|(status, tickets)| (status.clone(), status, nest(tickets))),
         )
     }
 
@@ -1017,7 +1045,7 @@ impl App {
             Tab::MyWork,
             self.my_work_by_status(|status| self.status_visible(status))
                 .into_iter()
-                .map(|(status, tickets)| (status.clone(), status, tickets)),
+                .map(|(status, tickets)| (status.clone(), status, nest(tickets))),
         )
     }
 
@@ -1050,7 +1078,7 @@ impl App {
                     (
                         member.email.clone(),
                         (member, active_count),
-                        active.into_iter().chain(done).collect(),
+                        nest(active).into_iter().chain(nest(done)).collect(),
                     )
                 }),
         )
@@ -1310,6 +1338,54 @@ impl App {
             }
         }
         self.clamp_selection();
+    }
+
+    pub fn is_parent_folded(&self, key: &str) -> bool {
+        self.collapsed_parents.contains(key)
+    }
+
+    /// The parent that `z` folds for the selected row: the ticket itself when it has sub-tasks
+    /// drawn under it, or its parent when it is one of them. `None` for headers and other rows.
+    pub fn selected_fold_parent(&self) -> Option<String> {
+        self.ensure_visible_keys_cache();
+        let cache = self.visible_keys_cache.borrow();
+        let VisibleItem::Ticket(key) = cache.items.get(self.selected_index)? else {
+            return None;
+        };
+        match cache.families.get(&self.selected_index)? {
+            Family::Parent(_) => Some(key.clone()),
+            Family::Child => self.find_ticket(key)?.parent_key.clone(),
+        }
+    }
+
+    /// Folds `parent`'s sub-tasks, or shows them again, and leaves the selection on the parent:
+    /// a folded sub-task has no row to stay on.
+    pub fn toggle_parent_fold(&mut self, parent: &str) {
+        self.ensure_visible_keys_cache();
+        let parent_row = {
+            let cache = self.visible_keys_cache.borrow();
+            let upto = (self.selected_index + 1).min(cache.items.len());
+            cache.items[..upto]
+                .iter()
+                .rposition(|item| matches!(item, VisibleItem::Ticket(key) if key == parent))
+        };
+        if !self.collapsed_parents.remove(parent) {
+            self.collapsed_parents.insert(parent.to_string());
+        }
+        self.mark_cache_changed();
+        if let Some(row) = parent_row {
+            self.selected_index = row;
+        }
+        self.clamp_selection();
+    }
+
+    /// What `z` folds: the parent of the selected row if it has one, else its group.
+    pub fn toggle_fold_at_cursor(&mut self) {
+        if let Some(parent) = self.selected_fold_parent() {
+            self.toggle_parent_fold(&parent);
+        } else if let Some(group) = self.selected_group_id() {
+            self.toggle_group_collapse(&group);
+        }
     }
 
     pub fn toggle_all_groups_collapse(&mut self) {
@@ -1690,6 +1766,9 @@ impl App {
             if detail.epic_name.is_some() {
                 ticket.epic_name = detail.epic_name.clone();
             }
+            if detail.parent_key.is_some() {
+                ticket.parent_key = detail.parent_key.clone();
+            }
             if !detail.activity.is_empty() {
                 ticket.activity = detail.activity.clone();
             }
@@ -1840,6 +1919,7 @@ mod tests {
             labels: Vec::new(),
             epic_key: None,
             epic_name: None,
+            parent_key: None,
             detail_loaded: false,
             activity: Vec::new(),
         }
@@ -1952,6 +2032,79 @@ mod tests {
         app.filter_results = tickets;
         app.mark_cache_changed();
         app
+    }
+
+    fn family_app() -> App {
+        let mut first = ticket("AMP-2", "First sub-task");
+        first.parent_key = Some("AMP-1".into());
+        let mut second = ticket("AMP-3", "Second sub-task");
+        second.parent_key = Some("AMP-1".into());
+        epics_app(vec![Epic {
+            key: "AMP-100".to_string(),
+            summary: "Auth".to_string(),
+            children: vec![
+                ticket("AMP-1", "Parent"),
+                first,
+                second,
+                ticket("AMP-4", "Alone"),
+            ],
+        }])
+    }
+
+    fn row_of(app: &mut App, key: &str) {
+        app.selected_index = (0..app.item_count())
+            .find(|&i| {
+                app.selected_index = i;
+                app.selected_ticket_key().as_deref() == Some(key)
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn folding_a_parent_hides_its_sub_tasks_and_keeps_the_totals() {
+        let mut app = family_app();
+        // The epic header, the parent, its two sub-tasks, and the other ticket.
+        assert_eq!(app.item_count(), 5);
+
+        // `z` on a sub-task folds its parent and moves the selection up to it.
+        row_of(&mut app, "AMP-3");
+        app.toggle_fold_at_cursor();
+        assert_eq!(app.item_count(), 3);
+        assert_eq!(app.selected_ticket_key().as_deref(), Some("AMP-1"));
+        assert!(app.is_parent_folded("AMP-1"));
+        assert_eq!(app.epics_visible_epics()[0].total, 4);
+        assert!(!app.is_collapsed(Tab::Epics, "AMP-100"));
+
+        // `z` on the folded parent shows them again, and the selection stays on it.
+        app.toggle_fold_at_cursor();
+        assert_eq!(app.item_count(), 5);
+        assert_eq!(app.selected_ticket_key().as_deref(), Some("AMP-1"));
+    }
+
+    #[test]
+    fn z_on_a_ticket_with_no_family_folds_its_group() {
+        let mut app = family_app();
+        row_of(&mut app, "AMP-4");
+        assert_eq!(app.selected_fold_parent(), None);
+        app.toggle_fold_at_cursor();
+        assert!(app.is_collapsed(Tab::Epics, "AMP-100"));
+        assert!(app.collapsed_parents.is_empty());
+    }
+
+    #[test]
+    fn a_fold_survives_a_refresh_and_a_sub_task_with_no_parent_row_isnt_hidden() {
+        let mut app = family_app();
+        row_of(&mut app, "AMP-1");
+        app.toggle_fold_at_cursor();
+        let cache = app.cache.clone();
+        app.replace_cache(cache, 0);
+        assert_eq!(app.item_count(), 3);
+
+        // The parent isn't in the list (say a search matches only the sub-task): it stays visible.
+        app.collapsed_parents.insert("AMP-9".into());
+        app.cache.epics[0].children[3].parent_key = Some("AMP-9".into());
+        app.mark_cache_changed();
+        assert_eq!(app.item_count(), 3);
     }
 
     #[test]

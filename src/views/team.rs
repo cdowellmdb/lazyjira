@@ -5,11 +5,12 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    fold_indicator, group_marker, highlight_row, panel, status_color, truncate,
+    fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
+    KEY_WIDTH,
 };
 
 fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
-    let key_w = 14usize;
+    let key_w = KEY_WIDTH;
     let status_w = 15usize;
     let mut summary_w = 28usize;
     let mut epic_w = 20usize;
@@ -94,7 +95,10 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             lines.push(Line::from(""));
             continue;
         };
-        let (active, done) = tickets.split_at(active_count);
+        // Folded sub-tasks have no row, so the split is by status rather than by `active_count`.
+        let split =
+            tickets.partition_point(|(_, ticket)| !app.status_rules().is_done(&ticket.status));
+        let (active, done) = tickets.split_at(split);
 
         lines.push(Line::from(Span::styled(
             format!("{} {} {}", marker, indicator, member.name),
@@ -149,17 +153,16 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     "[ ]"
                 };
+                let (key_cell, summary) =
+                    ticket_cells(app, group.family.get(index).copied(), ticket, marker);
 
                 lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("  {:<key_w$}", format!("{} {}", marker, ticket.key)),
-                        base,
-                    ),
+                    Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
-                        format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
+                        format!("{:<summary_w$}", truncate(&summary, summary_w)),
                         base,
                     ),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
@@ -222,17 +225,16 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     "[ ]"
                 };
+                let (key_cell, summary) =
+                    ticket_cells(app, group.family.get(index).copied(), ticket, marker);
 
                 lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("    {:<key_w$}", format!("{} {}", marker, ticket.key)),
-                        base,
-                    ),
+                    Span::styled(format!("    {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
-                        format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
+                        format!("{:<summary_w$}", truncate(&summary, summary_w)),
                         base,
                     ),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),

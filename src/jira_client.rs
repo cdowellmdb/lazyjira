@@ -9,6 +9,8 @@ use tokio::time::timeout;
 
 use crate::cache::{ActivityEntry, ActivityKind, Cache, Epic, TeamMember, Ticket};
 use crate::config::AppConfig;
+use crate::jira_rest::Subtask;
+use crate::subtasks;
 
 /// The ticket's page in the Jira web UI.
 pub fn browse_url(key: &str) -> Result<String> {
@@ -82,6 +84,15 @@ pub fn name_from_email(email: &str) -> String {
         .join(" ")
 }
 
+/// The sub-tasks among `tickets` and under them, from Jira's REST search. Empty when Jira can't
+/// be asked (no `JIRA_API_TOKEN`, offline), which leaves rows flat until the next refresh.
+async fn load_subtasks<'a>(tickets: impl Iterator<Item = &'a Ticket>) -> Vec<Subtask> {
+    let mut keys: Vec<String> = tickets.map(|ticket| ticket.key.clone()).collect();
+    keys.sort();
+    keys.dedup();
+    crate::jira_rest::subtasks(&keys).await.unwrap_or_default()
+}
+
 /// Parse a line of tab-separated ticket output into a Ticket.
 /// Expected columns: key, status, assignee, summary
 /// Summary is last because the jira CLI uses tab-padding for alignment,
@@ -126,6 +137,7 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
         labels: Vec::new(),
         epic_key: None,
         epic_name: None,
+        parent_key: None,
         detail_loaded: false,
         activity: Vec::new(),
     })
@@ -270,15 +282,19 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    // A sub-task's parent is its parent ticket, not an epic.
+    let parent = fields["parent"]["key"].as_str().map(|s| s.to_string());
+    let (parent_key, epic_parent) = if fields["issuetype"]["subtask"].as_bool() == Some(true) {
+        (parent, None)
+    } else {
+        (None, parent)
+    };
     let epic_key = fields["customfield_12551"]
         .as_array()
         .and_then(|a| a.first())
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .or_else(|| {
-            // Try parent field for epic link
-            fields["parent"]["key"].as_str().map(|s| s.to_string())
-        });
+        .or(epic_parent);
 
     let mut activity = Vec::new();
 
@@ -374,6 +390,7 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
         labels,
         epic_key,
         epic_name: None,
+        parent_key,
         detail_loaded: true,
         activity,
     })
@@ -594,6 +611,9 @@ async fn fetch_epics(config: &AppConfig) -> Result<Vec<Epic>> {
             dropped
         );
     }
+
+    let found = load_subtasks(epics.iter().flat_map(|epic| &epic.children)).await;
+    subtasks::add_to_epics(&mut epics, &found);
 
     Ok(epics)
 }
@@ -904,6 +924,8 @@ async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result
         hydrate_tickets_from_details_cache(&mut epic.children, &details_by_key);
     }
     reconcile_epic_child_statuses(&mut epics, &my_tickets, &team_tickets);
+    let found = load_subtasks(my_tickets.iter().chain(&team_tickets)).await;
+    subtasks::set_parents(my_tickets.iter_mut().chain(&mut team_tickets), &found);
 
     Ok(Cache {
         my_tickets,
@@ -969,7 +991,10 @@ pub async fn edit_ticket(
 
 /// Run an arbitrary JQL query and return matching tickets.
 pub async fn fetch_jql_query(config: &AppConfig, jql: &str) -> Result<Vec<Ticket>> {
-    fetch_tickets_for_query(config, jql).await
+    let mut tickets = fetch_tickets_for_query(config, jql).await?;
+    let found = load_subtasks(tickets.iter()).await;
+    subtasks::set_parents(tickets.iter_mut(), &found);
+    Ok(tickets)
 }
 
 /// Create a new ticket via `jira issue create`, with optional body and labels.
@@ -1050,6 +1075,7 @@ mod tests {
             labels: Vec::new(),
             epic_key: None,
             epic_name: None,
+            parent_key: None,
             detail_loaded: false,
             activity: Vec::new(),
         }

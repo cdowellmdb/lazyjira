@@ -18,7 +18,7 @@ const FIELD_WIDTH: usize = 10;
 
 const VIEW_HINTS: &[(&str, &str)] = &[
     ("↑↓", "scroll"),
-    ("[ ]", "prev/next"),
+    ("←→", "prev/next"),
     ("m", "move"),
     ("C", "comment"),
     ("a", "assign"),
@@ -31,7 +31,7 @@ const VIEW_HINTS: &[(&str, &str)] = &[
 
 const EPIC_HINTS: &[(&str, &str)] = &[
     ("↑↓", "scroll"),
-    ("[ ]", "prev/next"),
+    ("←→", "prev/next"),
     ("o", "browser"),
     ("z", "zoom"),
     ("Esc", "close"),
@@ -241,14 +241,14 @@ fn render_footer(f: &mut ratatui::Frame, area: Rect, hints: &[(&str, &str)], app
                         crate::mouse::Target::Key(key),
                     ));
                 }
-                if span.content == "[\u{a0}]" {
+                if span.content == "←→" {
                     app.mouse_targets.borrow_mut().push((
                         Rect::new(x, footer_area.y + row as u16, 1, 1),
-                        crate::mouse::Target::Key(crossterm::event::KeyCode::Char('[')),
+                        crate::mouse::Target::Key(crossterm::event::KeyCode::Left),
                     ));
                     app.mouse_targets.borrow_mut().push((
-                        Rect::new(x + 2, footer_area.y + row as u16, 1, 1),
-                        crate::mouse::Target::Key(crossterm::event::KeyCode::Char(']')),
+                        Rect::new(x + 1, footer_area.y + row as u16, 1, 1),
+                        crate::mouse::Target::Key(crossterm::event::KeyCode::Right),
                     ));
                 }
             }
@@ -792,6 +792,7 @@ mod tests {
             labels: vec!["DSCI".to_string(), "data-science".to_string()],
             epic_key: None,
             epic_name: None,
+            parent_key: None,
             detail_loaded: true,
             activity: vec![
                 comment("2026-09-02T10:00:00.000+0000", "Eliza Spang", "Second *reply*"),

@@ -128,4 +128,67 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn sub_tasks_sit_under_their_parent_or_name_it() {
+        let rows_of = |app: &App, tab: Tab| -> Vec<String> {
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    match tab {
+                        Tab::MyWork => my_work::render(frame, area, app),
+                        _ => epics::render(frame, area, app),
+                    }
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..30)
+                .map(|y| {
+                    (0..120)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect()
+        };
+        let row = |rows: &[String], key: &str| rows.iter().position(|r| r.contains(key)).unwrap();
+        let column = |rows: &[String], key: &str| rows[row(rows, key)].find(key).unwrap();
+
+        let parent = Ticket::for_test("DEMO-1", "In Progress");
+        let plain = Ticket::for_test("DEMO-2", "In Progress");
+        let mut subtask = Ticket::for_test("DEMO-3", "Closed");
+        subtask.parent_key = Some("DEMO-1".into());
+
+        let mut app = App::new();
+        app.loading = false;
+        app.show_done = true;
+        app.active_tab = Tab::Epics;
+        app.cache.epics = vec![Epic {
+            key: "EPIC-9".into(),
+            summary: "Epic".into(),
+            // Closed would sort last, but the sub-task belongs under its parent.
+            children: vec![parent.clone(), plain.clone(), subtask.clone()],
+        }];
+        let rows = rows_of(&app, Tab::Epics);
+        assert_eq!(row(&rows, "DEMO-3"), row(&rows, "DEMO-1") + 1);
+        assert!(row(&rows, "DEMO-2") > row(&rows, "DEMO-3"));
+        assert_eq!(column(&rows, "DEMO-3"), column(&rows, "DEMO-1") + 2);
+        assert!(rows[row(&rows, "DEMO-1")].contains("DEMO-1 ▼"));
+
+        // Folded, the parent says how many sub-tasks are hidden and they have no row.
+        app.collapsed_parents.insert("DEMO-1".into());
+        app.mark_cache_changed();
+        let rows = rows_of(&app, Tab::Epics);
+        assert!(rows[row(&rows, "DEMO-1")].contains("DEMO-1 ▶"));
+        assert!(rows[row(&rows, "DEMO-1")].contains("(1 sub-task) DEMO-1"));
+        assert!(!rows.iter().any(|r| r.contains("DEMO-3")));
+        app.collapsed_parents.clear();
+        app.mark_cache_changed();
+
+        // In My Work the parent is in another status group, so the sub-task names it instead.
+        app.active_tab = Tab::MyWork;
+        app.cache.my_tickets = vec![parent, plain, subtask];
+        let rows = rows_of(&app, Tab::MyWork);
+        assert_eq!(column(&rows, "DEMO-3"), column(&rows, "DEMO-1"));
+        assert!(rows[row(&rows, "DEMO-3")].contains("DEMO-1 › DEMO-3"));
+    }
 }

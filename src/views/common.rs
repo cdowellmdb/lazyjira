@@ -2,8 +2,14 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
+use crate::app::App;
 use crate::app::GroupSelectionState;
-use crate::cache::{Status, StatusRules};
+use crate::cache::{Status, StatusRules, Ticket};
+use crate::subtasks::Family;
+
+/// Width of a row's checkbox-and-key cell: the checkbox, a key of up to ten characters, and the
+/// indent of a sub-task drawn under its parent.
+pub const KEY_WIDTH: usize = 16;
 
 pub fn panel() -> Block<'static> {
     Block::default()
@@ -67,4 +73,34 @@ pub fn group_marker(state: GroupSelectionState) -> &'static str {
         GroupSelectionState::Partial => "[~]",
         GroupSelectionState::All => "[x]",
     }
+}
+
+/// A ticket row's key and summary cells, given its place in a parent's family. A sub-task under
+/// its parent is indented, and a parent shows whether its sub-tasks are folded, with how many are
+/// hidden. A sub-task whose parent is elsewhere leads its summary with the parent's key.
+pub fn ticket_cells(
+    app: &App,
+    family: Option<Family>,
+    ticket: &Ticket,
+    marker: &str,
+) -> (String, String) {
+    let folded = app.is_parent_folded(&ticket.key);
+    let key = match family {
+        Some(Family::Child) => format!("  {} {}", marker, ticket.key),
+        Some(Family::Parent(_)) => {
+            format!("{} {} {}", marker, ticket.key, fold_indicator(folded))
+        }
+        None => format!("{} {}", marker, ticket.key),
+    };
+    let summary = match (family, &ticket.parent_key) {
+        (Some(Family::Parent(count)), _) if folded => format!(
+            "({} sub-task{}) {}",
+            count,
+            if count == 1 { "" } else { "s" },
+            ticket.summary
+        ),
+        (None, Some(parent)) => format!("{} › {}", parent, ticket.summary),
+        _ => ticket.summary.clone(),
+    };
+    (key, summary)
 }

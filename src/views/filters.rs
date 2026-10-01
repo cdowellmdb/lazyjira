@@ -5,7 +5,8 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, FilterFocus};
 use crate::views::common::{
-    fold_indicator, group_marker, highlight_row, panel, status_color, truncate,
+    fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
+    KEY_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -117,7 +118,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        let key_w = 14usize;
+        let key_w = KEY_WIDTH;
         let status_w = 14usize;
         let inner = panel().inner(area).width as usize;
         let fixed = 2 + key_w + 3 + status_w + 3 + 3;
@@ -191,6 +192,8 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     "[ ]"
                 };
+                let (key_cell, summary) =
+                    ticket_cells(app, group.family.get(index).copied(), ticket, marker);
 
                 let base = if is_selected {
                     Style::default().bg(Color::DarkGray)
@@ -207,10 +210,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 };
 
                 lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("  {:<key_w$}", format!("{} {}", marker, ticket.key)),
-                        base,
-                    ),
+                    Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<status_w$}", truncate(ticket.status.as_str(), status_w)),
@@ -218,7 +218,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     ),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
-                        format!("{:<summary_w$}", truncate(&ticket.summary, summary_w)),
+                        format!("{:<summary_w$}", truncate(&summary, summary_w)),
                         base,
                     ),
                 ]));

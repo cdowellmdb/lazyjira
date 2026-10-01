@@ -1,5 +1,5 @@
-//! The Jira REST calls behind moves, which jira-cli can't make: listing a ticket's transitions
-//! with their fields, and sending one transition by id.
+//! The Jira REST calls jira-cli can't make: listing a ticket's transitions with their fields,
+//! sending one transition by id, and reading which sub-tasks sit under which parent.
 //!
 //! Uses jira-cli's `server`, `auth_type` and `login` settings and the `JIRA_API_TOKEN`
 //! environment variable, so no extra setup is needed where jira-cli already works.
@@ -23,6 +23,23 @@ pub async fn get_transitions(key: &str) -> Result<Vec<Transition>> {
 /// Sends transition `id` for `key`, with a resolution only when `resolution_id` is given.
 pub async fn transition(key: &str, id: &str, resolution_id: Option<&str>) -> Result<()> {
     shared()?.transition(key, id, resolution_id).await
+}
+
+/// A sub-task as Jira's search returns it, with the ticket it belongs to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Subtask {
+    pub key: String,
+    pub parent_key: String,
+    pub summary: String,
+    pub status: String,
+    pub assignee: Option<String>,
+    pub assignee_email: Option<String>,
+    pub labels: Vec<String>,
+}
+
+/// The sub-tasks among `keys` and the sub-tasks under them, each with its parent.
+pub async fn subtasks(keys: &[String]) -> Result<Vec<Subtask>> {
+    shared()?.subtasks(keys).await
 }
 
 /// The client for this session, built on first use. `JIRA_API_TOKEN` can't change while the app
@@ -123,16 +140,18 @@ impl JiraRest {
         })
     }
 
-    fn transitions_request(&self, method: Method, key: &str, query: &str) -> RequestBuilder {
-        let url = format!(
-            "{}/rest/api/2/issue/{}/transitions{}",
-            self.server, key, query
-        );
-        let request = self.http.request(method, url);
+    fn request(&self, method: Method, path: &str) -> RequestBuilder {
+        let request = self
+            .http
+            .request(method, format!("{}/rest/api/2/{}", self.server, path));
         match &self.auth {
             Auth::Bearer(token) => request.bearer_auth(token),
             Auth::Basic { login, token } => request.basic_auth(login, Some(token)),
         }
+    }
+
+    fn transitions_request(&self, method: Method, key: &str, query: &str) -> RequestBuilder {
+        self.request(method, &format!("issue/{}/transitions{}", key, query))
     }
 
     async fn transitions(&self, key: &str) -> Result<Vec<Transition>> {
@@ -154,6 +173,98 @@ impl JiraRest {
         successful_body(response).await?;
         Ok(())
     }
+
+    /// Searches `KEYS_PER_SEARCH` keys at a time, following Jira's pages.
+    async fn subtasks(&self, keys: &[String]) -> Result<Vec<Subtask>> {
+        let mut found = Vec::new();
+        for chunk in keys.chunks(KEYS_PER_SEARCH) {
+            let Some(jql) = subtasks_jql(chunk) else {
+                continue;
+            };
+            let mut start_at = 0;
+            loop {
+                let response = self
+                    .request(Method::POST, "search")
+                    .json(&search_body(&jql, start_at))
+                    .send()
+                    .await
+                    .context("Couldn't reach Jira")?;
+                let (page, total) = parse_subtasks(&successful_body(response).await?)?;
+                start_at += page.len();
+                let done = page.is_empty() || start_at >= total;
+                found.extend(page);
+                if done {
+                    break;
+                }
+            }
+        }
+        Ok(found)
+    }
+}
+
+const KEYS_PER_SEARCH: usize = 50;
+const SEARCH_PAGE_SIZE: usize = 100;
+
+/// JQL for the sub-tasks among `keys` and under them. Keys that don't look like Jira keys are
+/// left out so they can't break the query; `None` when none are left.
+fn subtasks_jql(keys: &[String]) -> Option<String> {
+    let keys: Vec<&str> = keys
+        .iter()
+        .map(String::as_str)
+        .filter(|key| {
+            !key.is_empty()
+                && key
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
+        .collect();
+    if keys.is_empty() {
+        return None;
+    }
+    let list = keys.join(",");
+    Some(format!(
+        "(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()"
+    ))
+}
+
+fn search_body(jql: &str, start_at: usize) -> Value {
+    json!({
+        "jql": jql,
+        "startAt": start_at,
+        "maxResults": SEARCH_PAGE_SIZE,
+        "fields": ["summary", "status", "assignee", "labels", "parent"],
+    })
+}
+
+/// One page of search results: its sub-tasks (an issue with no parent is skipped) and the total
+/// number of matches.
+fn parse_subtasks(body: &str) -> Result<(Vec<Subtask>, usize)> {
+    let json: Value = serde_json::from_str(body).context("Jira's search answer isn't JSON")?;
+    let text = |value: &Value| value.as_str().map(str::to_string);
+    let subtasks = json["issues"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|issue| {
+            let fields = &issue["fields"];
+            Some(Subtask {
+                key: text(&issue["key"])?,
+                parent_key: text(&fields["parent"]["key"])?,
+                summary: text(&fields["summary"]).unwrap_or_default(),
+                status: text(&fields["status"]["name"]).unwrap_or_default(),
+                assignee: text(&fields["assignee"]["displayName"]),
+                assignee_email: text(&fields["assignee"]["emailAddress"]),
+                labels: fields["labels"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(text)
+                    .collect(),
+            })
+        })
+        .collect();
+    let total = json["total"].as_u64().unwrap_or(0) as usize;
+    Ok((subtasks, total))
 }
 
 /// `$JIRA_CONFIG_FILE`, else `~/.config/.jira/.config.yml`, as jira-cli does.
@@ -275,6 +386,60 @@ mod tests {
             transition_body("805", Some("101")),
             json!({ "transition": { "id": "805" }, "fields": { "resolution": { "id": "101" } } })
         );
+    }
+
+    #[test]
+    fn subtask_search_covers_sub_tasks_among_and_under_the_keys() {
+        let keys = |keys: &[&str]| keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            subtasks_jql(&keys(&["DSCI-1", "DSCI-2"])).unwrap(),
+            "(key in (DSCI-1,DSCI-2) OR parent in (DSCI-1,DSCI-2)) \
+             AND issuetype in subTaskIssueTypes()"
+        );
+        // Anything that isn't shaped like a key is dropped rather than put in the query.
+        assert_eq!(
+            subtasks_jql(&keys(&["DSCI-1", "x\") OR 1=1", ""])).unwrap(),
+            "(key in (DSCI-1) OR parent in (DSCI-1)) AND issuetype in subTaskIssueTypes()"
+        );
+        assert_eq!(subtasks_jql(&keys(&["no good"])), None);
+        assert_eq!(subtasks_jql(&[]), None);
+    }
+
+    #[test]
+    fn parses_sub_tasks_with_their_parent_and_skips_issues_without_one() {
+        let body = r#"{"total": 3, "issues": [
+            {"key": "DSCI-3265", "fields": {"summary": "Run AX", "status": {"name": "On Deck"},
+              "assignee": {"displayName": "Alex", "emailAddress": "alex@example.com"},
+              "labels": ["mage"], "parent": {"key": "DSCI-3244"}}},
+            {"key": "DSCI-3266", "fields": {"summary": "Pins", "status": {"name": "Closed"},
+              "assignee": null, "labels": [], "parent": {"key": "DSCI-3244"}}},
+            {"key": "DSCI-1", "fields": {"summary": "Not a sub-task", "parent": null}}]}"#;
+        let (subtasks, total) = parse_subtasks(body).unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(
+            subtasks,
+            vec![
+                Subtask {
+                    key: "DSCI-3265".into(),
+                    parent_key: "DSCI-3244".into(),
+                    summary: "Run AX".into(),
+                    status: "On Deck".into(),
+                    assignee: Some("Alex".into()),
+                    assignee_email: Some("alex@example.com".into()),
+                    labels: vec!["mage".into()],
+                },
+                Subtask {
+                    key: "DSCI-3266".into(),
+                    parent_key: "DSCI-3244".into(),
+                    summary: "Pins".into(),
+                    status: "Closed".into(),
+                    assignee: None,
+                    assignee_email: None,
+                    labels: vec![],
+                },
+            ]
+        );
+        assert!(parse_subtasks("<html>").is_err());
     }
 
     #[test]

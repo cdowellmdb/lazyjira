@@ -1,0 +1,5 @@
+# Read sub-task parents over Jira REST
+
+Lazyjira reads which sub-tasks sit under which parent with Jira's REST search, one request per fifty tickets, on every refresh of My Work and Team, the Epics tab and a saved filter. jira-cli's list output has no parent column and no JSON mode, and a ticket's detail is cached until it is opened, so a parent taken from either would stay stale after a ticket is re-parented. The search returns each sub-task's parent in the same read, and also the sub-tasks under an epic's children, which Jira doesn't link to the epic itself and which would otherwise vanish from the epic when a child becomes a sub-task. The REST adapter and token are the ones moves already use, so hierarchy needs `JIRA_API_TOKEN`; without it, or when the search fails, rows stay flat until the next refresh. This extends [ADR 0001](0001-use-jira-cli-and-rest-transitions.md): ticket lists, details, creation and edits still go through jira-cli.
+
+Recorded from [the implementation](../../src/subtasks.rs) and [the REST search](../../src/jira_rest.rs).

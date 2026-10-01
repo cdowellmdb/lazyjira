@@ -29,6 +29,10 @@ A value describing how a ticket was resolved, offered or required by a transitio
 **Epic**:
 A Jira issue grouping related child tickets, with progress measured by how many children count as done.
 
+**Sub-task**:
+A Jira issue that belongs to a parent ticket. Views show it under its parent when the parent is in the same group, and otherwise lead its summary with the parent's key. Epic progress counts sub-tasks of an epic's children as part of the epic.
+_Avoid_: Child ticket when referring to a ticket in an epic; that is an epic's child, not a sub-task.
+
 **Team roster**:
 The people included in the Team view. Membership is distinct from a ticket's Assigned Teams value.
 

@@ -30,7 +30,8 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/mouse.rs** — Hit targets registered by renderers and mouse event handling
 - **src/setup.rs** — First-run setup screen (project key, team name); imports the legacy `team.yml` roster
 - **src/jira_client.rs** — Shells out to `jira` CLI, parses output, reads/writes local caches
-- **src/jira_rest.rs** — Jira REST client for moves (list a ticket's transitions, send one by id), using jira-cli's config and `JIRA_API_TOKEN`
+- **src/jira_rest.rs** — Jira REST client for moves (list a ticket's transitions, send one by id) and the sub-task search, using jira-cli's config and `JIRA_API_TOKEN`
+- **src/subtasks.rs** — Sub-task hierarchy: `nest` orders rows so a sub-task follows its parent, `is_nested` tells renderers which rows are drawn under one, and `set_parents`/`add_to_epics` apply a search's parent links to tickets and epics
 - **src/transitions.rs** — Transition model and parsing, and the rules for matching shortcuts and resolutions
 - **src/move_picker.rs** — Single-ticket move picker state and keys; returns the Jira call to make instead of making it
 - **src/bulk_plan.rs** — What a bulk move/assign sends for each ticket, and why others are skipped
@@ -68,6 +69,13 @@ Use `App::switch_tab` to restore each tab's position, search, and status focus. 
 
 Renderers register mouse targets for the rows actually drawn, after scrolling. `ui` clears targets before each overlay, so covered controls cannot receive clicks. Mouse actions share keyboard handlers and preserve confirmation steps. Text fields use the existing `tui-textarea` dependency and `widgets::form` helpers.
 
+### Sub-tasks nest under their parent
+`Ticket::parent_key` names a sub-task's parent. It comes from Jira's REST search (`jira_rest::subtasks`, [ADR 0004](docs/adr/0004-read-subtask-parents-over-rest.md)) on every list read: `fetch_with_scope` (My Work, Team), `fetch_epics` and `fetch_jql_query` (filters). Never take it from the detail cache: `hydrate_ticket_from_details_cache` skips it so a re-parented ticket doesn't keep its old parent, and only a freshly fetched detail reaches it, through `enrich_ticket`. A failed search leaves rows flat.
+
+The Epics fetch also adds the sub-tasks of an epic's children to that epic's `children` (`subtasks::add_to_epics`), because Jira doesn't link a sub-task to the epic. They count in epic progress. Each tab passes its rows through `subtasks::nest` when building `VisibleGroup`s; Team nests its active and done rows separately, so a sub-task never moves between them. Renderers get a row's key and summary from `views::common::ticket_cells`: a sub-task whose parent is in the same rows is indented, and one whose parent isn't (a different status group, another assignee) leads its summary with the parent's key. `fetch_ticket_detail` reads a sub-task's `parent` as `parent_key`, never as an epic.
+
+Folding a parent adds its key to `App::collapsed_parents` (one set for every tab). `nest` tags each row with its `Family` (a parent with a sub-task count, or a child); `index_groups` drops the children of folded parents from the rows but keeps them in `total`, and `VisibleGroup::family` carries the tags to renderers and to `selected_fold_parent`. So row counts that must include hidden rows (Team's header counts) come from `total`, never from `tickets.len()`, and Team splits active from done by status, not position. `z` goes through `App::toggle_fold_at_cursor`: the selected parent or sub-task folds its parent, anything else folds its group.
+
 ### Current UX behavior
 - Team view includes the current user (if not in the `[team]` config, inferred from `jira me` email).
 - My Work and Team include a separate Labels column.
@@ -77,7 +85,7 @@ Renderers register mouse targets for the rows actually drawn, after scrolling. `
 - Epics child rows are sorted by status with Done at the bottom.
 - Epics show an accurate progress bar and percentage complete.
 - The detail overlay shows the ticket's fields, its description (Jira markup, via `widgets/markup.rs`) and its comments, oldest first. The body is pre-wrapped to the overlay's width, so its line count is its height: the renderer records the scroll limit in `App::detail_scroll_max` for the scroll keys.
-- In the detail overlay, `[`/`]` step to the previous/next ticket in the list under it (epics, for an epic's detail) and move the list selection with it (`App::step_detail`). `z` toggles full screen.
+- In the detail overlay, Left/Right step to the previous/next ticket in the list under it (epics, for an epic's detail) and move the list selection with it (`App::step_detail`). `z` toggles full screen.
 
 ## Configuration
 
@@ -85,7 +93,7 @@ Renderers register mouse targets for the rows actually drawn, after scrolling. `
 - **Browser URLs:** derive them when opened with `jira_client::browse_url`, using jira-cli's `server` through `jira_rest::server_url`. URLs are not stored in tickets or caches.
 - **Unassigned tab:** queries the `Assigned Teams` custom field using `jira.team_name`.
 - **Legacy roster:** `~/.claude/skills/jira/team.yml` is only read once, during first-run setup, to seed `[team]`.
-- **Auth:** Via existing `jira` CLI authentication (`~/.config/.jira/.config.yml`, or `$JIRA_CONFIG_FILE`). Moves call Jira's REST API with that file's `server`, `auth_type` and `login`, and `JIRA_API_TOKEN`.
+- **Auth:** Via existing `jira` CLI authentication (`~/.config/.jira/.config.yml`, or `$JIRA_CONFIG_FILE`). Moves and the sub-task search call Jira's REST API with that file's `server`, `auth_type` and `login`, and `JIRA_API_TOKEN`.
 - **Caches:** full snapshot in `~/.cache/lazyjira/`; epics and ticket-detail caches in the system temp dir. All are per project. A cache that fails to parse is ignored and refetched, which is how format changes are handled: tickets store their status as `status_name`, so caches from before real status names are refetched once.
 
 ## Dependencies
@@ -101,7 +109,7 @@ Renderers register mouse targets for the rows actually drawn, after scrolling. `
 
 ## Demo recording
 
-`docs/demo/record.sh` re-records `docs/images/demo.gif` with VHS. It runs the app with a throwaway `HOME`/`TMPDIR` and puts `docs/demo/bin/jira` (a fake `jira` CLI with made-up data) first on `PATH`. Never record against a real Jira instance. If you change which `jira` subcommands, flags, or columns the app uses, update the fake CLI to match. Moves use the REST API rather than the CLI, so the demo doesn't show them.
+`docs/demo/record.sh` re-records `docs/images/demo.gif` with VHS. It runs the app with a throwaway `HOME`/`TMPDIR` and puts `docs/demo/bin/jira` (a fake `jira` CLI with made-up data) first on `PATH`. Never record against a real Jira instance. If you change which `jira` subcommands, flags, or columns the app uses, update the fake CLI to match. Moves and sub-task nesting use the REST API rather than the CLI, so the demo doesn't show them.
 
 ## Notes
 
