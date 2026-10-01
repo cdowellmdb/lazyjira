@@ -102,7 +102,7 @@ pub const PRESETS: &[(&str, Theme)] = &[
     (
         "solarized-light",
         preset(
-            0xfdf6e3, 0x586e75, 0x93a1a1, 0x657b83, 0xeee8d5, 0x2aa198, 0xb58900, 0xdc322f,
+            0xfdf6e3, 0x586e75, 0x657b83, 0x586e75, 0xeee8d5, 0x2aa198, 0xb58900, 0xdc322f,
             0x859900, 0x268bd2, 0xd33682,
         ),
     ),
@@ -124,19 +124,18 @@ pub fn names(custom: &BTreeMap<String, Theme>) -> Vec<String> {
         .collect()
 }
 
-/// The theme called `name`. A custom theme replaces a preset of the same name; an unknown name
-/// is the default.
+/// The theme called `name`, ignoring case. A custom theme replaces a preset of the same name,
+/// but not the default, which is always the terminal's colors; an unknown name is the default.
 pub fn resolve(name: &str, custom: &BTreeMap<String, Theme>) -> Theme {
+    if name.eq_ignore_ascii_case(DEFAULT) {
+        return Theme::default();
+    }
     custom
-        .get(name)
-        .copied()
-        .or_else(|| {
-            PRESETS
-                .iter()
-                .find(|(preset, _)| *preset == name)
-                .map(|(_, theme)| *theme)
-        })
-        .unwrap_or_default()
+        .iter()
+        .map(|(name, theme)| (name.as_str(), theme))
+        .chain(PRESETS.iter().map(|(name, theme)| (*name, theme)))
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        .map_or_else(Theme::default, |(_, theme)| *theme)
 }
 
 impl Theme {
@@ -161,9 +160,6 @@ impl Theme {
 
     /// Recolors a drawn frame. Run it once, after everything is drawn.
     pub fn apply(&self, buffer: &mut Buffer) {
-        if *self == Theme::default() {
-            return;
-        }
         for cell in &mut buffer.content {
             if let Some(fg) = self.role(cell.fg, false) {
                 cell.fg = fg;
@@ -200,7 +196,11 @@ mod tests {
         .unwrap();
         assert_eq!(resolve("nord", &custom).accent, Some(Color::Rgb(255, 0, 0)));
         assert_eq!(resolve("nord", &custom).background, None);
+        assert_eq!(resolve("Catppuccin", &custom), PRESETS[3].1);
         assert_eq!(resolve("missing", &custom), Theme::default());
+        let custom_default: BTreeMap<String, Theme> =
+            toml::from_str("[default]\naccent = 'red'\n").unwrap();
+        assert_eq!(resolve(DEFAULT, &custom_default), Theme::default());
         let mut buffer = Buffer::empty(Rect::new(0, 0, 2, 1));
         buffer.set_string(0, 0, "ab", Style::default().fg(Color::DarkGray));
         resolve("mine", &custom).apply(&mut buffer);

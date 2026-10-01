@@ -133,7 +133,7 @@ accent = "#4fd1c5"
 | `filters` | empty | Saved JQL filters for the Filters tab. |
 | `preferences.show_done` | `true` | Whether Done tickets are visible. Updated when you press `d` or save preferences. |
 | `preferences.start_tab` | `"My Work"` | Starting tab: `My Work`, `Team`, `Epics`, `Unassigned`, or `Filters`. |
-| `preferences.theme` | `"default"` | Color theme: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin`, `solarized-light`, or a custom theme's name. An unknown name uses the default. |
+| `preferences.theme` | `"default"` | Color theme: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin`, `solarized-light`, or a custom theme's name, in any case. An unknown name uses the default. |
 | `themes.<name>` | empty | Custom themes. See [Themes](#themes). |
 
 ### Themes
@@ -142,7 +142,7 @@ accent = "#4fd1c5"
 
 Pick a theme in preferences (`S`). The app recolors as you move through the list; **Save** keeps it and **Cancel** goes back. The `default` theme uses your terminal's own colors. The other presets set their own background and need a terminal with true color.
 
-To make your own, add a `[themes.<name>]` table and pick it in preferences. Each role takes a hex color (`"#4fd1c5"`) or a color name (`"red"`, `"light-blue"`). Roles you leave out keep your terminal's color, and a custom theme named after a preset replaces it.
+To make your own, add a `[themes.<name>]` table and pick it in preferences. Each role takes a hex color (`"#4fd1c5"`) or a color name (`"red"`, `"light-blue"`). Roles you leave out keep your terminal's color. A custom theme named after a preset replaces the whole preset, so copy the preset's colors from [`src/theme.rs`](src/theme.rs) if you only want to change a few.
 
 | Role | Used for |
 |------|----------|

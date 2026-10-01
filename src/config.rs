@@ -195,6 +195,10 @@ pub fn load_config() -> Result<Option<AppConfig>> {
 
 /// Write the config to disk, creating the directory if needed.
 pub fn save_config(config: &AppConfig) -> Result<()> {
+    // Tests save through the same key handlers the app uses; keep them off the real config.
+    if cfg!(test) {
+        return Ok(());
+    }
     let dir = config_dir()?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create config directory: {}", dir.display()))?;

@@ -415,7 +415,7 @@ impl App {
 
     pub fn focus_field(&mut self, field: usize) {
         if let Some(state) = &mut self.settings {
-            state.focused_field = field.min(4);
+            state.focused_field = field.min(crate::settings::FIELDS - 1);
         } else if let Some(state) = &mut self.filter_edit {
             state.focused_field = field.min(1);
         } else if let Some(state) = &mut self.create_ticket {

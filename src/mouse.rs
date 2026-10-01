@@ -1065,5 +1065,13 @@ mod tests {
         .await;
         assert!(app.settings.is_some());
         assert_eq!(app.search.as_deref(), Some("search stays here"));
+
+        draw(&app, &config);
+        click(&mut app, &mut config, &tx, |t| {
+            matches!(t, Target::Choose { field: 4, index: 2 })
+        })
+        .await;
+        assert_eq!(app.focused_field(), Some(4));
+        assert_eq!(app.settings.as_ref().map(|state| state.theme), Some(2));
     }
 }
