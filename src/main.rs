@@ -1535,9 +1535,7 @@ async fn handle_search_keys(
                     app.toggle_group_collapse(&group_id);
                 }
             } else if let Some(key) = app.selected_ticket_key() {
-                let detail_loaded = app.is_ticket_detail_loaded(&key);
-                app.open_detail(key.clone());
-                if !detail_loaded && app.begin_detail_fetch(&key) {
+                if let Some(key) = app.open_fresh_detail(key) {
                     spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
                 }
             }
@@ -2110,9 +2108,7 @@ fn handle_filter_keys(
                         app.toggle_group_collapse(&group_id);
                     }
                 } else if let Some(key) = app.selected_ticket_key() {
-                    let detail_loaded = app.is_ticket_detail_loaded(&key);
-                    app.open_detail(key.clone());
-                    if !detail_loaded && app.begin_detail_fetch(&key) {
+                    if let Some(key) = app.open_fresh_detail(key) {
                         spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
                     }
                 }
@@ -2222,9 +2218,7 @@ async fn handle_main_keys(
                     app.toggle_group_collapse(&group_id);
                 }
             } else if let Some(key) = app.selected_ticket_key() {
-                let detail_loaded = app.is_ticket_detail_loaded(&key);
-                app.open_detail(key.clone());
-                if !detail_loaded && app.begin_detail_fetch(&key) {
+                if let Some(key) = app.open_fresh_detail(key) {
                     spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
                 }
             }
@@ -2690,8 +2684,8 @@ mod tests {
         assert!(app.detail_ticket_key.is_none());
     }
 
-    #[test]
-    fn enter_on_filter_ticket_opens_detail() {
+    #[tokio::test]
+    async fn enter_on_filter_ticket_opens_detail() {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::Filters;
