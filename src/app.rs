@@ -665,10 +665,12 @@ impl App {
         self.detail_ticket_key.is_some() || self.detail_epic_key.is_some()
     }
 
-    pub fn is_ticket_detail_loaded(&self, key: &str) -> bool {
-        self.find_ticket(key)
-            .map(|t| t.detail_loaded)
-            .unwrap_or(false)
+    /// Opens `key`'s detail and returns the key when its fetch should start: always, unless one
+    /// is already running. A cached detail shows at once, but Jira's copy may have changed since
+    /// (the cache is never invalidated otherwise), so it's replaced when the fetch lands.
+    pub fn open_fresh_detail(&mut self, key: String) -> Option<String> {
+        self.open_detail(key.clone());
+        self.begin_detail_fetch(&key).then_some(key)
     }
 
     /// Team members sorted by active ticket count (most active first).
@@ -1671,7 +1673,7 @@ impl App {
 
     /// Shows the next (or previous) ticket's detail, or epic's when an epic
     /// is shown, and selects its row. Returns the ticket's key when its detail
-    /// still needs fetching.
+    /// fetch should start (see `open_fresh_detail`).
     pub fn step_detail(&mut self, forward: bool) -> Option<String> {
         let keys = self.detail_step_keys();
         let target = if forward {
@@ -1685,9 +1687,7 @@ impl App {
             self.open_epic_detail(key);
             None
         } else {
-            self.open_detail(key.clone());
-            let needs_fetch = !self.is_ticket_detail_loaded(&key) && self.begin_detail_fetch(&key);
-            needs_fetch.then_some(key)
+            self.open_fresh_detail(key)
         }
     }
 
@@ -1986,6 +1986,25 @@ mod tests {
         // Its fetch is already running.
         app.step_detail(true);
         assert_eq!(app.step_detail(false), None);
+    }
+
+    #[test]
+    fn opening_a_loaded_detail_still_fetches_jiras_copy() {
+        let mut app = my_work_app(&[("DSCI-1", "In Progress")]);
+        app.cache.my_tickets[0].detail_loaded = true;
+        // The cached detail shows at once, and its fetch starts anyway: Jira's may be newer.
+        assert_eq!(
+            app.open_fresh_detail("DSCI-1".into()),
+            Some("DSCI-1".into())
+        );
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("DSCI-1"));
+        // Not twice while one is running.
+        assert_eq!(app.open_fresh_detail("DSCI-1".into()), None);
+        app.end_detail_fetch("DSCI-1");
+        assert_eq!(
+            app.open_fresh_detail("DSCI-1".into()),
+            Some("DSCI-1".into())
+        );
     }
 
     #[test]

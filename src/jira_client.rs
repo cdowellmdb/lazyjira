@@ -44,6 +44,10 @@ pub struct StartupCacheSnapshot {
 
 /// Run a CLI command and return stdout as a String.
 async fn run_cmd(program: &str, args: &[&str]) -> Result<String> {
+    // Tests must never reach the real Jira through jira-cli, as `jira_rest` refuses to as well.
+    if cfg!(test) {
+        anyhow::bail!("tests don't run {}", program);
+    }
     let output = Command::new(program)
         .args(args)
         .output()
