@@ -36,7 +36,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 ## Requirements
 
 - The [`jira` CLI](https://github.com/ankitpokhrel/jira-cli) on your `PATH` and logged in (`jira init`). Running `jira me` should print your email.
-- `JIRA_API_TOKEN` set in your environment, as jira-cli normally uses it. Moves and sub-task nesting go through Jira's REST API with jira-cli's `server` and `auth_type` settings and this token.
+- `JIRA_API_TOKEN` set in your environment, as jira-cli normally uses it. Ticket lists (My Work, Team, Unassigned and filters) and moves go through Jira's REST API with jira-cli's `server`, `auth_type` and `epic.link` settings and this token.
 - macOS (Apple Silicon or Intel) or Linux x86_64. Windows is not supported.
 - A stable Rust toolchain, only if you build from source.
 
@@ -279,7 +279,7 @@ The preview also warns about summaries that match an existing ticket or repeat w
 - jira-cli omits empty descriptions when editing. Use the browser action to clear an existing description.
 - The Unassigned tab queries the `Assigned Teams` custom field. It doesn't work on Jira instances that don't have that field.
 - A move sends one transition. Reaching a status that is several transitions away takes several moves, and transitions that require fields other than a resolution fail with Jira's error; press `o` to finish those in the browser.
-- Moves and sub-task nesting need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read. Without it, sub-tasks show as ordinary rows.
+- Ticket lists and moves need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read. Without it a refresh fails with an error and the last saved data stays on screen; with no saved data lazyjira exits with the error.
 - A sub-task is indented under its parent only when the parent is in the same group (for example the same epic, or the same status in My Work). Elsewhere its summary starts with the parent's key, like `DSCI-3244 › ...`.
 - New tickets, from the create form or a CSV, can only be `Task`, `Bug`, or `Story`.
 
@@ -294,6 +294,6 @@ A pre-commit hook in `.githooks/` runs `cargo fmt --check` and `cargo clippy --a
 
 `lazyjira --dev` rebuilds and runs the lazyjira checkout in your current directory (or a parent directory). `--dev-release` does the same with an optimized build. The command prints which manifest it builds. Outside a checkout, it falls back to the source directory the binary was built from, if that directory still exists.
 
-To re-record the demo GIF, install [VHS](https://github.com/charmbracelet/vhs) and run `docs/demo/record.sh`. It uses a fake `jira` CLI and a throwaway `HOME`, so no real Jira data ends up in the recording.
+To re-record the demo GIF, install [VHS](https://github.com/charmbracelet/vhs) and run `docs/demo/record.sh`. It uses a fake `jira` CLI, a fake Jira REST search endpoint and a throwaway `HOME`, so no real Jira data ends up in the recording.
 
 Releases are published by pushing a `v*` tag. See [`docs/RELEASING.md`](docs/RELEASING.md).
