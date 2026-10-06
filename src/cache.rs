@@ -247,6 +247,10 @@ pub enum ActivityKind {
     },
 }
 
+/// What a ticket's status reads as when Jira's answer has none. It isn't a real status, so it
+/// shows plainly instead of passing as To Do, and a detail read never copies it over a real one.
+pub const UNKNOWN_STATUS: &str = "Unknown";
+
 /// A single Jira ticket.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Ticket {

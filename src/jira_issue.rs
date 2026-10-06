@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::cache::{normalize_email, ActivityEntry, ActivityKind, Ticket};
+use crate::cache::{normalize_email, ActivityEntry, ActivityKind, Ticket, UNKNOWN_STATUS};
 
 /// One page of a search answer.
 #[derive(Debug)]
@@ -64,8 +64,7 @@ pub fn ticket_from_issue(issue: &Value, epic_link_field: Option<&str>) -> Option
     Some(Ticket {
         key: text(&issue["key"])?,
         summary: text(&fields["summary"]).unwrap_or_default(),
-        // Not a real status, so a read that lacks one shows plainly instead of passing as To Do.
-        status: text(&fields["status"]["name"]).unwrap_or_else(|| "Unknown".to_string()),
+        status: text(&fields["status"]["name"]).unwrap_or_else(|| UNKNOWN_STATUS.to_string()),
         assignee: text(&fields["assignee"]["displayName"]),
         assignee_email: text(&fields["assignee"]["emailAddress"])
             .as_deref()

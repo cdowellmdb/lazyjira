@@ -9,7 +9,7 @@ A Jira issue with a key, summary, status, and optional assignee, labels, descrip
 _Avoid_: Task when referring to every ticket type; task is one type of ticket.
 
 **Status**:
-The name Jira gives a ticket's current workflow position, such as In Progress or Resolved.
+The name Jira gives a ticket's current workflow position, such as In Progress or Resolved. A read whose answer has no status shows Unknown, which is never a real status.
 _Avoid_: Transition when referring to the ticket's current position.
 
 **Done**:
