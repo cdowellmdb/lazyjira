@@ -1,10 +1,13 @@
-//! The Jira REST calls lazyjira makes itself: the paginated search every list read and the detail prefetch use,
-//! listing a ticket's transitions with their fields, sending one transition by id, and reading
-//! which sub-tasks sit under which parent (still used for epics).
+//! The Jira REST calls lazyjira makes itself: the paginated search every list read and the
+//! detail prefetch use, listing a ticket's transitions with their fields, and sending one
+//! transition by id.
 //!
-//! Uses jira-cli's `server`, `auth_type` and `login` settings and the `JIRA_API_TOKEN`
-//! environment variable, so no extra setup is needed where jira-cli already works.
+//! Uses jira-cli's `server`, `auth_type`, `login` and `epic.link` settings and the
+//! `JIRA_API_TOKEN` environment variable, so no extra setup is needed where jira-cli already
+//! works. The search is `POST /rest/api/2/search`, which Jira Server and Data Center serve
+//! (see ADR 0005).
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -28,23 +31,6 @@ pub async fn transition(key: &str, id: &str, resolution_id: Option<&str>) -> Res
     shared()?.transition(key, id, resolution_id).await
 }
 
-/// A sub-task as Jira's search returns it, with the ticket it belongs to.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Subtask {
-    pub key: String,
-    pub parent_key: String,
-    pub summary: String,
-    pub status: String,
-    pub assignee: Option<String>,
-    pub assignee_email: Option<String>,
-    pub labels: Vec<String>,
-}
-
-/// The sub-tasks among `keys` and the sub-tasks under them, each with its parent.
-pub async fn subtasks(keys: &[String]) -> Result<Vec<Subtask>> {
-    shared()?.subtasks(keys).await
-}
-
 /// The tickets matching `jql` with `fields` filled in, following Jira's pages. The Epic Link
 /// field from jira-cli's config is requested as well, so `epic_key` is read when the ticket has
 /// one.
@@ -66,31 +52,30 @@ fn shared() -> Result<&'static JiraRest> {
         .map_err(|e| anyhow!("{}", e))
 }
 
-fn missing_token_error() -> anyhow::Error {
-    anyhow!(
-        "JIRA_API_TOKEN is not set. lazyjira reads tickets and sends moves through Jira's \
-         REST API and needs the same token as jira-cli"
-    )
-}
-
 /// The top-level jira-cli settings lazyjira needs. The rest of the file is ignored.
 #[derive(Deserialize)]
 struct JiraCliConfig {
     server: String,
     auth_type: Option<String>,
     login: Option<String>,
-    #[serde(default)]
+}
+
+/// jira-cli's `epic` settings, read apart from `JiraCliConfig` so that an odd `epic` section
+/// costs the Epic Link field and nothing else.
+#[derive(Deserialize)]
+struct EpicConfig {
     epic: Option<EpicSettings>,
 }
 
-/// jira-cli's `epic` settings: `link` is the id of the Epic Link custom field.
+/// `link` is the id of the Epic Link custom field.
 #[derive(Deserialize)]
 struct EpicSettings {
     link: Option<String>,
 }
 
 /// The id of the Epic Link custom field (`customfield_10857` on one instance, something else on
-/// another), as jira-cli's config names it. Read once; `None` when the config doesn't say.
+/// another), as jira-cli's config names it. Read once; `None` when the config doesn't say, as
+/// for team-managed projects, whose epics are found through `parent` instead.
 pub fn epic_link_field() -> Option<String> {
     static FIELD: OnceLock<Option<String>> = OnceLock::new();
     FIELD
@@ -102,7 +87,7 @@ pub fn epic_link_field() -> Option<String> {
 }
 
 fn configured_epic_link(yaml: &str) -> Option<String> {
-    let config: JiraCliConfig = serde_yaml::from_str(yaml).ok()?;
+    let config: EpicConfig = serde_yaml::from_str(yaml).ok()?;
     config.epic?.link.filter(|link| !link.trim().is_empty())
 }
 
@@ -135,8 +120,6 @@ struct JiraRest {
     /// Base URL without a trailing slash, e.g. `https://jira.example.com`.
     server: String,
     auth: Auth,
-    /// See [`epic_link_field`].
-    epic_link: Option<String>,
 }
 
 impl JiraRest {
@@ -147,7 +130,12 @@ impl JiraRest {
         let token = std::env::var("JIRA_API_TOKEN")
             .ok()
             .filter(|token| !token.trim().is_empty())
-            .ok_or_else(missing_token_error)?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "JIRA_API_TOKEN is not set. lazyjira reads tickets and sends moves through \
+                     Jira's REST API and needs the same token as jira-cli"
+                )
+            })?;
         Self::new(&yaml, token).with_context(|| format!("Using {}", path.display()))
     }
 
@@ -178,7 +166,6 @@ impl JiraRest {
             http,
             server: configured_server(config_yaml)?,
             auth,
-            epic_link: configured_epic_link(config_yaml),
         })
     }
 
@@ -217,61 +204,59 @@ impl JiraRest {
     }
 
     async fn search(&self, jql: &str, fields: &[&str]) -> Result<Vec<Ticket>> {
-        let fields = search_fields(fields, self.epic_link.as_deref());
-        self.search_pages(jql, &fields, |body| {
-            parse_search_page(body, self.epic_link.as_deref())
-        })
+        let epic_link = epic_link_field();
+        let fields: Vec<&str> = fields.iter().copied().chain(epic_link.as_deref()).collect();
+        let fields = &fields;
+        read_pages(
+            |start_at| async move {
+                let response = self
+                    .request(Method::POST, "search")
+                    .json(&search_body(jql, fields, start_at))
+                    .send()
+                    .await
+                    .context("Couldn't reach Jira")?;
+                successful_body(response).await
+            },
+            epic_link.as_deref(),
+        )
         .await
     }
+}
 
-    /// Searches `KEYS_PER_SEARCH` keys at a time, following Jira's pages.
-    async fn subtasks(&self, keys: &[String]) -> Result<Vec<Subtask>> {
-        let mut found = Vec::new();
-        for chunk in keys.chunks(KEYS_PER_SEARCH) {
-            if let Some(jql) = subtasks_jql(chunk) {
-                found.extend(
-                    self.search_pages(&jql, &SUBTASK_FIELDS, parse_subtasks)
-                        .await?,
-                );
-            }
-        }
-        Ok(found)
-    }
-
-    /// Everything `jql` matches, a page at a time. `parse` reads one page's body into its items
-    /// and the total number of matches.
-    async fn search_pages<T>(
-        &self,
-        jql: &str,
-        fields: &[&str],
-        parse: impl Fn(&str) -> Result<(Vec<T>, usize)>,
-    ) -> Result<Vec<T>> {
-        let mut found = Vec::new();
-        let mut start_at = 0;
-        loop {
-            let response = self
-                .request(Method::POST, "search")
-                .json(&search_body(jql, fields, start_at))
-                .send()
-                .await
-                .context("Couldn't reach Jira")?;
-            let (page, total) = parse(&successful_body(response).await?)?;
-            let next = next_start(start_at, page.len(), total);
-            found.extend(page);
-            match next {
-                Some(next) => start_at = next,
-                None => return Ok(found),
-            }
+/// Everything a search matches, a page at a time. `fetch(start_at)` asks Jira for the page that
+/// starts there and returns its body.
+async fn read_pages<F, Fut>(mut fetch: F, epic_link: Option<&str>) -> Result<Vec<Ticket>>
+where
+    F: FnMut(usize) -> Fut,
+    Fut: Future<Output = Result<String>>,
+{
+    let mut found = Vec::new();
+    let mut start_at = 0;
+    loop {
+        let page = parse_search_page(&fetch(start_at).await?, epic_link)?;
+        let next = next_start(start_at, page.sent, page.total);
+        found.extend(page.tickets);
+        match next {
+            Some(next) => start_at = next,
+            None => return Ok(found),
         }
     }
 }
 
 /// How many keys one `key in (…)`, `parent in (…)` or `"Epic Link" in (…)` search holds.
 pub const KEYS_PER_SEARCH: usize = 50;
-/// Jira allows up to 1000 a page, and a server that allows fewer is followed by what it sends
-/// (`next_start`). Pages of 100 cost three round-trips for a team of 270 tickets, 500 only one.
+/// What a page asks for. A server that allows fewer (Jira Server and Data Center cap it at
+/// `jira.search.views.default.max`, 1000 by default) is followed by what it sends, see
+/// `next_start`. Pages of 100 cost three round-trips for a team of 270 tickets, 500 only one.
 const SEARCH_PAGE_SIZE: usize = 500;
-const SUBTASK_FIELDS: [&str; 5] = ["summary", "status", "assignee", "labels", "parent"];
+
+/// Whether `key` looks like a Jira key, safe to put in a JQL list.
+pub fn is_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
 
 /// `keys` as the inside of a JQL list (`A-1,B-2`). Keys that don't look like Jira keys are left
 /// out so they can't break the query; `None` when none are left.
@@ -279,27 +264,15 @@ pub fn key_list(keys: &[String]) -> Option<String> {
     let keys: Vec<&str> = keys
         .iter()
         .map(String::as_str)
-        .filter(|key| {
-            !key.is_empty()
-                && key
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        })
+        .filter(|key| is_key(key))
         .collect();
     (!keys.is_empty()).then(|| keys.join(","))
 }
 
-/// JQL for the sub-tasks among `keys` and under them; `None` when `key_list` leaves no keys.
-fn subtasks_jql(keys: &[String]) -> Option<String> {
-    let list = key_list(keys)?;
-    Some(format!(
-        "(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()"
-    ))
-}
-
-/// `fields` and, when the instance has one, the Epic Link custom field.
-fn search_fields<'a>(fields: &[&'a str], epic_link: Option<&'a str>) -> Vec<&'a str> {
-    fields.iter().copied().chain(epic_link).collect()
+/// `text` as a JQL string literal, quotes included: a `"` or `\` in it can't end the string or
+/// change the query.
+pub fn jql_quote(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn search_body(jql: &str, fields: &[&str], start_at: usize) -> Value {
@@ -311,43 +284,12 @@ fn search_body(jql: &str, fields: &[&str], start_at: usize) -> Value {
     })
 }
 
-/// Where the next page starts after one of `page_len` items at `start_at`, `None` once all
-/// `total` matches are read. Follows what the server sent, since it can cap a page below
+/// Where the next page starts after one of `sent` issues at `start_at`, `None` once all `total`
+/// matches are read. Follows what the server sent, since it can cap a page below
 /// `SEARCH_PAGE_SIZE`, and stops on an empty page rather than asking for it again.
-fn next_start(start_at: usize, page_len: usize, total: usize) -> Option<usize> {
-    let next = start_at + page_len;
-    (page_len > 0 && next < total).then_some(next)
-}
-
-/// One page of search results: its sub-tasks (an issue with no parent is skipped) and the total
-/// number of matches.
-fn parse_subtasks(body: &str) -> Result<(Vec<Subtask>, usize)> {
-    let json: Value = serde_json::from_str(body).context("Jira's search answer isn't JSON")?;
-    let text = |value: &Value| value.as_str().map(str::to_string);
-    let subtasks = json["issues"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|issue| {
-            let fields = &issue["fields"];
-            Some(Subtask {
-                key: text(&issue["key"])?,
-                parent_key: text(&fields["parent"]["key"])?,
-                summary: text(&fields["summary"]).unwrap_or_default(),
-                status: text(&fields["status"]["name"]).unwrap_or_default(),
-                assignee: text(&fields["assignee"]["displayName"]),
-                assignee_email: text(&fields["assignee"]["emailAddress"]),
-                labels: fields["labels"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(text)
-                    .collect(),
-            })
-        })
-        .collect();
-    let total = json["total"].as_u64().unwrap_or(0) as usize;
-    Ok((subtasks, total))
+fn next_start(start_at: usize, sent: usize, total: usize) -> Option<usize> {
+    let next = start_at + sent;
+    (sent > 0 && next < total).then_some(next)
 }
 
 /// `$JIRA_CONFIG_FILE`, else `~/.config/.jira/.config.yml`, as jira-cli does.
@@ -436,18 +378,12 @@ mod tests {
     }
 
     #[test]
-    fn the_client_keeps_the_epic_link_field_for_its_searches() {
-        let with_link = CONFIG.replace(
-            "epic:\n  name: customfield_1\n",
-            "epic:\n  name: customfield_10858\n  link: customfield_10857\n",
-        );
-        let client = JiraRest::new(&with_link, "t0ken".to_string()).unwrap();
-        assert_eq!(client.epic_link.as_deref(), Some("customfield_10857"));
-        assert_eq!(
-            search_fields(&["summary", "status"], client.epic_link.as_deref()),
-            ["summary", "status", "customfield_10857"]
-        );
-        assert_eq!(search_fields(&["summary"], None), ["summary"]);
+    fn an_odd_epic_section_costs_the_epic_link_and_nothing_else() {
+        let odd = CONFIG.replace("epic:\n  name: customfield_1\n", "epic: not-a-mapping\n");
+        assert_eq!(configured_epic_link(&odd), None);
+        // Moves and browser links still work.
+        assert!(JiraRest::new(&odd, "t0ken".to_string()).is_ok());
+        assert_eq!(configured_server(&odd).unwrap(), "https://jira.example.com");
     }
 
     #[test]
@@ -463,27 +399,114 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_search_follows_pages_until_the_total_is_read() {
-        // Exactly one full page: no second request.
-        assert_eq!(next_start(0, 500, 500), None);
-        // One more match than a page holds: the second page starts at the 501st.
-        assert_eq!(next_start(0, 500, 501), Some(500));
-        assert_eq!(next_start(500, 1, 501), None);
-        // A server that caps pages below ours is followed by what it actually sent.
-        assert_eq!(next_start(0, 50, 120), Some(50));
-        assert_eq!(next_start(50, 50, 120), Some(100));
-        assert_eq!(next_start(100, 20, 120), None);
-        // An empty page ends the search even if the total says more, rather than looping.
-        assert_eq!(next_start(40, 0, 120), None);
+    /// A Jira that answers each page `start_at` asks for with `answer(start_at)`: a body with
+    /// `total` matches, `keys` of them here, the keys numbered from `start_at + 1`.
+    fn page_body(start_at: usize, total: usize, keys: usize) -> String {
+        let issues: Vec<_> = (1..=keys)
+            .map(|n| json!({"key": format!("DEMO-{}", start_at + n), "fields": {}}))
+            .collect();
+        json!({"total": total, "issues": issues}).to_string()
+    }
+
+    /// Runs `read_pages` against `answer`, returning the offsets asked for and the keys found.
+    async fn read(answer: impl Fn(usize) -> Result<String>) -> Result<(Vec<usize>, Vec<String>)> {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let found = read_pages(
+            |start_at| {
+                asked.borrow_mut().push(start_at);
+                let body = answer(start_at);
+                async move { body }
+            },
+            None,
+        )
+        .await?;
+        let keys = found.into_iter().map(|ticket| ticket.key).collect();
+        Ok((asked.into_inner(), keys))
+    }
+
+    #[tokio::test]
+    async fn a_search_asks_for_the_next_page_where_the_last_one_ended() {
+        // Jira capping pages at 50 of 120 matches: three pages, in order, none repeated.
+        let (asked, keys) = read(|start| Ok(page_body(start, 120, (120 - start).min(50))))
+            .await
+            .unwrap();
+        assert_eq!(asked, [0, 50, 100]);
+        assert_eq!(keys.len(), 120);
+        assert_eq!(
+            (keys[0].as_str(), keys[119].as_str()),
+            ("DEMO-1", "DEMO-120")
+        );
+
+        // Exactly one full page of matches is one request, not a second empty one.
+        let (asked, keys) = read(|start| Ok(page_body(start, 500, 500))).await.unwrap();
+        assert_eq!((asked, keys.len()), (vec![0], 500));
+        // One more match than a page holds: a second request for the 501st alone.
+        let (asked, keys) =
+            read(|start| Ok(page_body(start, 501, if start == 0 { 500 } else { 1 })))
+                .await
+                .unwrap();
+        assert_eq!((asked, keys.len()), (vec![0, 500], 501));
+    }
+
+    #[tokio::test]
+    async fn a_page_with_an_issue_that_has_no_key_still_moves_the_offset_by_what_jira_sent() {
+        // Three matches; the first page's second issue has no key, so only two can be read.
+        let first = json!({"total": 3, "issues": [
+            {"key": "DEMO-1", "fields": {}}, {"fields": {}}]})
+        .to_string();
+        let (asked, keys) = read(|start| match start {
+            0 => Ok(first.clone()),
+            _ => Ok(page_body(start, 3, 1)),
+        })
+        .await
+        .unwrap();
+        assert_eq!(asked, [0, 2]);
+        assert_eq!(keys, ["DEMO-1", "DEMO-3"]);
+    }
+
+    #[tokio::test]
+    async fn an_empty_page_ends_the_search_and_a_missing_total_fails_it() {
+        // The total promises more than Jira has: stop rather than ask for the same page forever.
+        let (asked, keys) =
+            read(|start| Ok(page_body(start, 120, if start == 0 { 50 } else { 0 })))
+                .await
+                .unwrap();
+        assert_eq!((asked, keys.len()), (vec![0, 50], 50));
+
+        // No total: an error, not the first page passed off as the whole list.
+        let error = read(|_| Ok(r#"{"issues": []}"#.to_string()))
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("no total"), "{error:#}");
+        // A failed request is the search's failure, whichever page it was.
+        let error = read(|start| match start {
+            0 => Ok(page_body(0, 120, 50)),
+            _ => Err(anyhow!("Jira answered 503.")),
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "Jira answered 503.");
     }
 
     #[test]
-    fn a_missing_token_says_what_it_is_needed_for() {
-        // Setup errors are kept for the session, so they must name every read that needs the token.
-        let error = format!("{:#}", missing_token_error());
-        assert!(error.starts_with("JIRA_API_TOKEN is not set"));
-        assert!(error.contains("reads tickets"));
+    fn jql_quote_keeps_a_value_inside_its_string() {
+        assert_eq!(jql_quote("Platform Team"), "\"Platform Team\"");
+        assert_eq!(jql_quote(r#"say "hi""#), r#""say \"hi\"""#);
+        assert_eq!(jql_quote(r"back\slash"), r#""back\\slash""#);
+        // The backslash is escaped before the quote, so an escaped quote can't be forged.
+        assert_eq!(jql_quote(r#"\""#), r#""\\\"""#);
+    }
+
+    #[test]
+    fn only_keys_shaped_like_jira_keys_reach_a_jql_list() {
+        let keys = |keys: &[&str]| keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            key_list(&keys(&["DSCI-1", "x\") OR 1=1", "", "AB_2"])).as_deref(),
+            Some("DSCI-1,AB_2")
+        );
+        assert_eq!(key_list(&keys(&["no good"])), None);
+        assert_eq!(key_list(&[]), None);
+        assert!(is_key("DSCI-3244") && !is_key("DSCI 1") && !is_key(""));
     }
 
     #[test]
@@ -539,60 +562,6 @@ mod tests {
             transition_body("805", Some("101")),
             json!({ "transition": { "id": "805" }, "fields": { "resolution": { "id": "101" } } })
         );
-    }
-
-    #[test]
-    fn subtask_search_covers_sub_tasks_among_and_under_the_keys() {
-        let keys = |keys: &[&str]| keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            subtasks_jql(&keys(&["DSCI-1", "DSCI-2"])).unwrap(),
-            "(key in (DSCI-1,DSCI-2) OR parent in (DSCI-1,DSCI-2)) \
-             AND issuetype in subTaskIssueTypes()"
-        );
-        // Anything that isn't shaped like a key is dropped rather than put in the query.
-        assert_eq!(
-            subtasks_jql(&keys(&["DSCI-1", "x\") OR 1=1", ""])).unwrap(),
-            "(key in (DSCI-1) OR parent in (DSCI-1)) AND issuetype in subTaskIssueTypes()"
-        );
-        assert_eq!(subtasks_jql(&keys(&["no good"])), None);
-        assert_eq!(subtasks_jql(&[]), None);
-    }
-
-    #[test]
-    fn parses_sub_tasks_with_their_parent_and_skips_issues_without_one() {
-        let body = r#"{"total": 3, "issues": [
-            {"key": "DSCI-3265", "fields": {"summary": "Run AX", "status": {"name": "On Deck"},
-              "assignee": {"displayName": "Alex", "emailAddress": "alex@example.com"},
-              "labels": ["mage"], "parent": {"key": "DSCI-3244"}}},
-            {"key": "DSCI-3266", "fields": {"summary": "Pins", "status": {"name": "Closed"},
-              "assignee": null, "labels": [], "parent": {"key": "DSCI-3244"}}},
-            {"key": "DSCI-1", "fields": {"summary": "Not a sub-task", "parent": null}}]}"#;
-        let (subtasks, total) = parse_subtasks(body).unwrap();
-        assert_eq!(total, 3);
-        assert_eq!(
-            subtasks,
-            vec![
-                Subtask {
-                    key: "DSCI-3265".into(),
-                    parent_key: "DSCI-3244".into(),
-                    summary: "Run AX".into(),
-                    status: "On Deck".into(),
-                    assignee: Some("Alex".into()),
-                    assignee_email: Some("alex@example.com".into()),
-                    labels: vec!["mage".into()],
-                },
-                Subtask {
-                    key: "DSCI-3266".into(),
-                    parent_key: "DSCI-3244".into(),
-                    summary: "Pins".into(),
-                    status: "Closed".into(),
-                    assignee: None,
-                    assignee_email: None,
-                    labels: vec![],
-                },
-            ]
-        );
-        assert!(parse_subtasks("<html>").is_err());
     }
 
     #[test]

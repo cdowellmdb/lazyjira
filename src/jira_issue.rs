@@ -7,21 +7,35 @@ use serde_json::Value;
 
 use crate::cache::{normalize_email, ActivityEntry, ActivityKind, Ticket};
 
-/// One page of a search answer: its tickets (an issue with no key is skipped) and the total
-/// number of matches.
-pub fn parse_search_page(
-    body: &str,
-    epic_link_field: Option<&str>,
-) -> Result<(Vec<Ticket>, usize)> {
+/// One page of a search answer.
+#[derive(Debug)]
+pub struct SearchPage {
+    /// The page's tickets; an issue with no key is skipped.
+    pub tickets: Vec<Ticket>,
+    /// How many issues Jira sent, skipped ones included: where the next page starts.
+    pub sent: usize,
+    /// How many issues match the whole search.
+    pub total: usize,
+}
+
+/// Reads one page of a search answer. An answer with no `total` or `issues` is an error: a
+/// missing total would end the search after this page and pass the rest off as complete.
+pub fn parse_search_page(body: &str, epic_link_field: Option<&str>) -> Result<SearchPage> {
     let json: Value = serde_json::from_str(body).context("Jira's search answer isn't JSON")?;
-    let tickets = json["issues"]
+    let issues = json["issues"]
         .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|issue| ticket_from_issue(issue, epic_link_field))
-        .collect();
-    let total = json["total"].as_u64().unwrap_or(0) as usize;
-    Ok((tickets, total))
+        .context("Jira's search answer has no issues")?;
+    let total = json["total"]
+        .as_u64()
+        .context("Jira's search answer has no total")?;
+    Ok(SearchPage {
+        tickets: issues
+            .iter()
+            .filter_map(|issue| ticket_from_issue(issue, epic_link_field))
+            .collect(),
+        sent: issues.len(),
+        total: total as usize,
+    })
 }
 
 /// The ticket in a Jira issue, `None` when it has no key. Only fields the issue holds are read:
@@ -48,7 +62,8 @@ pub fn ticket_from_issue(issue: &Value, epic_link_field: Option<&str>) -> Option
     Some(Ticket {
         key: text(&issue["key"])?,
         summary: text(&fields["summary"]).unwrap_or_default(),
-        status: text(&fields["status"]["name"]).unwrap_or_else(|| "To Do".to_string()),
+        // Not a real status, so a read that lacks one shows plainly instead of passing as To Do.
+        status: text(&fields["status"]["name"]).unwrap_or_else(|| "Unknown".to_string()),
         assignee: text(&fields["assignee"]["displayName"]),
         assignee_email: text(&fields["assignee"]["emailAddress"])
             .as_deref()
@@ -312,8 +327,7 @@ mod tests {
               "issuetype": {"name": "Sub-task", "subtask": true},
               "parent": {"key": "DEMO-20", "fields": {"issuetype": {"name": "Story"}}},
               "description": null, "comment": {"total": 0, "comments": []}}}]}"#;
-        let (tickets, total) = parse_search_page(body, EPIC_LINK).unwrap();
-        assert_eq!(total, 2);
+        let tickets = parse_search_page(body, EPIC_LINK).unwrap().tickets;
 
         let story = &tickets[0];
         assert_eq!(story.description.as_deref(), Some("h2. Why\nBecause."));
@@ -340,15 +354,34 @@ mod tests {
     }
 
     #[test]
-    fn a_search_page_gives_its_tickets_and_the_total() {
+    fn a_search_page_gives_its_tickets_how_many_issues_it_held_and_the_total() {
         let body = r#"{"startAt": 0, "maxResults": 100, "total": 250, "issues": [
             {"key": "DEMO-1", "fields": {"summary": "One", "status": {"name": "To Do"}}},
             {"fields": {"summary": "No key"}},
             {"key": "DEMO-2", "fields": {"summary": "Two", "status": {"name": "Done"}}}]}"#;
-        let (tickets, total) = parse_search_page(body, EPIC_LINK).unwrap();
-        assert_eq!(total, 250);
-        let keys: Vec<_> = tickets.iter().map(|t| t.key.as_str()).collect();
+        let page = parse_search_page(body, EPIC_LINK).unwrap();
+        assert_eq!(page.total, 250);
+        // The next page starts after what Jira sent, not after what could be read.
+        assert_eq!(page.sent, 3);
+        let keys: Vec<_> = page.tickets.iter().map(|t| t.key.as_str()).collect();
         assert_eq!(keys, ["DEMO-1", "DEMO-2"]);
         assert!(parse_search_page("<html>", EPIC_LINK).is_err());
+    }
+
+    #[test]
+    fn an_answer_without_a_total_or_issues_is_an_error_not_a_short_list() {
+        // Without a total a search would stop after its first page, and read as complete.
+        let no_total = r#"{"issues": [{"key": "DEMO-1", "fields": {}}]}"#;
+        let error = format!("{:#}", parse_search_page(no_total, EPIC_LINK).unwrap_err());
+        assert!(error.contains("no total"), "{error}");
+        let no_issues = r#"{"total": 3}"#;
+        let error = format!("{:#}", parse_search_page(no_issues, EPIC_LINK).unwrap_err());
+        assert!(error.contains("no issues"), "{error}");
+    }
+
+    #[test]
+    fn a_ticket_with_no_status_in_the_answer_reads_as_unknown_not_to_do() {
+        let ticket = parse(json!({"key": "DEMO-15", "fields": {"summary": "No status"}}));
+        assert_eq!(ticket.status, "Unknown");
     }
 }

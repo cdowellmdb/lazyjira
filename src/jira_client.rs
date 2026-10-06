@@ -12,7 +12,7 @@ use tokio::time::timeout;
 use crate::cache::{Cache, Epic, TeamMember, Ticket};
 use crate::config::AppConfig;
 use crate::jira_issue::ticket_from_issue;
-use crate::jira_rest::Subtask;
+use crate::jira_rest::{is_key, jql_quote, key_list, KEYS_PER_SEARCH};
 use crate::subtasks;
 
 /// The ticket's page in the Jira web UI.
@@ -91,13 +91,29 @@ pub fn name_from_email(email: &str) -> String {
         .join(" ")
 }
 
-/// The sub-tasks among `tickets` and under them, from Jira's REST search. Empty when Jira can't
-/// be asked (no `JIRA_API_TOKEN`, offline), which leaves rows flat until the next refresh.
-async fn load_subtasks<'a>(tickets: impl Iterator<Item = &'a Ticket>) -> Vec<Subtask> {
+/// The searches that find the sub-tasks among `keys` and under them, `KEYS_PER_SEARCH` keys to a
+/// search. A chunk with no usable key sends no search.
+fn subtasks_jqls(keys: &[String]) -> Vec<String> {
+    keys.chunks(KEYS_PER_SEARCH)
+        .filter_map(key_list)
+        .map(|list| {
+            format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
+        })
+        .collect()
+}
+
+/// The sub-tasks among `tickets` and under them. Jira doesn't link a sub-task to its parent's
+/// epic, so the epic children's search can't find them.
+async fn load_subtasks<'a>(tickets: impl Iterator<Item = &'a Ticket>) -> Result<Vec<Ticket>> {
     let mut keys: Vec<String> = tickets.map(|ticket| ticket.key.clone()).collect();
     keys.sort();
     keys.dedup();
-    crate::jira_rest::subtasks(&keys).await.unwrap_or_default()
+    let mut found = Vec::new();
+    // ponytail: one search after another, as with the children's.
+    for jql in subtasks_jqls(&keys) {
+        found.extend(crate::jira_rest::search(&jql, LIST_FIELDS).await?);
+    }
+    Ok(found)
 }
 
 /// Fetch full ticket detail as JSON via `jira issue view KEY --raw`.
@@ -112,20 +128,9 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
     Ok(ticket)
 }
 
-/// What the detail overlay shows, plus the list fields `enrich_ticket` copies over the row. The
-/// Epic Link field is added by the search.
-const DETAIL_FIELDS: &[&str] = &[
-    "summary",
-    "status",
-    "assignee",
-    "reporter",
-    "description",
-    "comment",
-    "labels",
-    "parent",
-    "issuetype",
-    "updated",
-];
+/// What a detail adds to a list row's fields: what the detail overlay shows. `enrich_ticket`
+/// copies the rest over the row.
+const DETAIL_ONLY_FIELDS: &[&str] = &["reporter", "description", "comment"];
 
 /// Reads the details of `keys` over Jira's REST search, a chunk of tickets per request instead
 /// of a `jira issue view` process each. See `read_details`.
@@ -133,21 +138,28 @@ pub async fn fetch_ticket_details(
     keys: &[String],
     deliver: impl FnMut(String, Result<Ticket, String>),
 ) {
+    let fields = [LIST_FIELDS, DETAIL_ONLY_FIELDS].concat();
     read_details(
         keys,
-        |jql| async move { crate::jira_rest::search(&jql, DETAIL_FIELDS).await },
+        |jql| {
+            let fields = &fields;
+            async move { crate::jira_rest::search(&jql, fields).await }
+        },
         deliver,
     )
     .await
 }
 
-/// Tickets read by one search. Jira answers up to `SEARCH_PAGE_SIZE` a page, so a chunk of this
-/// size is always a single page.
-const DETAILS_PER_SEARCH: usize = 50;
+/// A ticket read with the detail fields, which only a detail read gets, so it counts as loaded.
+fn as_detail(mut ticket: Ticket) -> Ticket {
+    ticket.detail_loaded = true;
+    ticket
+}
 
-/// Reads the details of `keys`, `DETAILS_PER_SEARCH` at a time, with `search`, which runs a JQL
-/// query. Each key's outcome goes to `deliver` as its chunk is read. A chunk that fails fails
-/// only its keys, so the rest are still read and the failed ones are asked for again later.
+/// Reads the details of `keys`, `KEYS_PER_SEARCH` at a time (usually one page of results), with
+/// `search`, which runs a JQL query. Each key's outcome goes to `deliver` as its chunk is read.
+/// A chunk that fails fails only its keys, so the rest are still read and the failed ones are
+/// asked for again later.
 // ponytail: one chunk after another; read a few at once if a cold start of thousands of
 // tickets is too slow.
 async fn read_details<S, F>(
@@ -158,31 +170,33 @@ async fn read_details<S, F>(
     S: Fn(String) -> F,
     F: Future<Output = Result<Vec<Ticket>>>,
 {
-    for chunk in keys.chunks(DETAILS_PER_SEARCH) {
-        let found = match crate::jira_rest::key_list(chunk) {
-            Some(list) => search(format!("key in ({list})")).await,
-            None => Ok(Vec::new()),
-        };
-        let mut found = found
-            .map(|tickets| {
+    for chunk in keys.chunks(KEYS_PER_SEARCH) {
+        let found = match key_list(chunk) {
+            Some(list) => search(format!("key in ({list})")).await.map(|tickets| {
                 tickets
                     .into_iter()
                     .map(|ticket| (ticket.key.clone(), ticket))
                     .collect::<HashMap<_, _>>()
-            })
-            .map_err(|e| format!("{:#}", e));
-        for key in chunk {
-            let result = match &mut found {
-                Ok(found) => found
-                    .remove(key)
-                    .map(|mut ticket| {
-                        ticket.detail_loaded = true;
-                        ticket
-                    })
-                    .ok_or_else(|| "Jira didn't return this ticket".to_string()),
-                Err(e) => Err(e.clone()),
-            };
-            deliver(key.clone(), result);
+            }),
+            None => Ok(HashMap::new()),
+        };
+        match found {
+            Ok(mut found) => {
+                for key in chunk {
+                    let result = match found.remove(key) {
+                        Some(ticket) => Ok(as_detail(ticket)),
+                        None if is_key(key) => Err("Jira didn't return this ticket".to_string()),
+                        None => Err(format!("{key:?} isn't a ticket key")),
+                    };
+                    deliver(key.clone(), result);
+                }
+            }
+            Err(e) => {
+                let error = format!("{:#}", e);
+                for key in chunk {
+                    deliver(key.clone(), Err(error.clone()));
+                }
+            }
         }
     }
 }
@@ -201,13 +215,13 @@ const LIST_FIELDS: &[&str] = &[
 
 /// The one search behind My Work, Team and Unassigned: the active tickets of everyone in
 /// `assignee_emails`, plus those done inside the window for the full scope, and the active
-/// tickets nobody has taken that are the team's by Assigned Teams. jira-cli used to add the
-/// project and an order; a REST search needs both spelled out. The order keeps pages stable
-/// while tickets change underneath them.
+/// tickets nobody has taken that are the team's by Assigned Teams. A REST search needs the
+/// project and an order spelled out. The order keeps pages stable while tickets change
+/// underneath them.
 fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchScope) -> String {
     let assignees = assignee_emails
         .iter()
-        .map(|email| format!("\"{}\"", email))
+        .map(|email| jql_quote(email))
         .collect::<Vec<_>>()
         .join(", ");
     let active = config.active_status_clause();
@@ -220,10 +234,11 @@ fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchSco
         ),
     };
     format!(
-        "project = \"{}\" AND ((assignee in ({assignees}) AND {statuses}) \
-         OR (assignee is EMPTY AND \"Assigned Teams\" = \"{}\" AND status in {active})) \
+        "project = {} AND ((assignee in ({assignees}) AND {statuses}) \
+         OR (assignee is EMPTY AND \"Assigned Teams\" = {} AND status in {active})) \
          ORDER BY key",
-        config.jira.project, config.jira.team_name
+        jql_quote(&config.jira.project),
+        jql_quote(&config.jira.team_name)
     )
 }
 
@@ -306,21 +321,24 @@ fn key_order(a: &str, b: &str) -> std::cmp::Ordering {
 /// search. The order keeps pages stable while tickets change underneath them.
 fn epic_children_jqls(project: &str, epic_keys: &[String], has_epic_link: bool) -> Vec<String> {
     epic_keys
-        .chunks(crate::jira_rest::KEYS_PER_SEARCH)
-        .filter_map(crate::jira_rest::key_list)
+        .chunks(KEYS_PER_SEARCH)
+        .filter_map(key_list)
         .map(|list| {
             let link = if has_epic_link {
                 format!("\"Epic Link\" in ({list}) OR ")
             } else {
                 String::new()
             };
-            format!("project = \"{project}\" AND ({link}parent in ({list})) ORDER BY key")
+            format!(
+                "project = {} AND ({link}parent in ({list})) ORDER BY key",
+                jql_quote(project)
+            )
         })
         .collect()
 }
 
-/// `jql` limited to `project`, with an order, as `jira issue list -q` made it. A filter's own
-/// ORDER BY is kept (after the project, outside the parentheses); without one, newest first.
+/// A saved filter's `jql` limited to `project`, with an order. The filter's own ORDER BY is
+/// kept (after the project, outside the parentheses); without one, newest first.
 fn scoped_jql(project: &str, jql: &str) -> String {
     // ponytail: the last "order by" is taken as the clause, so one inside a quoted string
     // fails the query; parse JQL properly if filters ever need it.
@@ -329,17 +347,21 @@ fn scoped_jql(project: &str, jql: &str) -> String {
         Some(at) => (jql[..at].trim(), jql[at..].trim()),
         None => (jql.trim(), "ORDER BY created DESC"),
     };
+    let project = jql_quote(project);
     if condition.is_empty() {
-        format!("project = \"{project}\" {order}")
+        format!("project = {project} {order}")
     } else {
-        format!("project = \"{project}\" AND ({condition}) {order}")
+        format!("project = {project} AND ({condition}) {order}")
     }
 }
 
-/// All the project's epics. Like the lists, jira-cli used to add the project; the order keeps
-/// pages stable while epics change underneath them.
+/// All the project's epics, in an order that keeps pages stable while epics change underneath
+/// them.
 fn epics_jql(project: &str) -> String {
-    format!("project = \"{project}\" AND issuetype = Epic ORDER BY key")
+    format!(
+        "project = {} AND issuetype = Epic ORDER BY key",
+        jql_quote(project)
+    )
 }
 
 /// What an epic row needs from the epic list; the epic's children come from their own search.
@@ -379,8 +401,9 @@ fn group_by_epic(mut listed: Vec<Ticket>, mut found: Vec<Ticket>) -> Vec<Epic> {
 }
 
 /// Fetch all epics and their children: one search for the epics, one per `KEYS_PER_SEARCH`
-/// epics for their children, and the sub-tasks of those children (see `load_subtasks`). A
-/// failed search fails the refresh, so the last epics stay on screen.
+/// epics for their children, and one per `KEYS_PER_SEARCH` children for their sub-tasks (see
+/// `load_subtasks`). Any failed search fails the refresh, so the last epics stay on screen
+/// instead of epics with fewer sub-tasks, and a different progress, replacing them.
 async fn fetch_epics(config: &AppConfig) -> Result<Vec<Epic>> {
     use crate::jira_rest::{epic_link_field, search};
 
@@ -394,7 +417,7 @@ async fn fetch_epics(config: &AppConfig) -> Result<Vec<Epic>> {
     }
 
     let mut epics = group_by_epic(listed, found);
-    let subtasks = load_subtasks(epics.iter().flat_map(|epic| &epic.children)).await;
+    let subtasks = load_subtasks(epics.iter().flat_map(|epic| &epic.children)).await?;
     subtasks::add_to_epics(&mut epics, &subtasks);
     Ok(epics)
 }
@@ -972,7 +995,9 @@ mod tests {
         let body = r#"{"total": 1, "issues": [{"key": "AMP-1", "fields": {
             "summary": "One", "status": {"name": "To Do"},
             "assignee": {"displayName": "Sam C.", "emailAddress": "SAM.CHEN@example.com"}}}]}"#;
-        let (found, _) = crate::jira_issue::parse_search_page(body, None).unwrap();
+        let found = crate::jira_issue::parse_search_page(body, None)
+            .unwrap()
+            .tickets;
 
         let (_, team) = bucket_tickets(found, &mut members, "me@example.com");
 
@@ -1138,6 +1163,12 @@ mod tests {
         {"key": "AMP-6", "fields": {"summary": "Six", "status": {"name": "Done"},
           "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-999"}}]}"#;
 
+    fn children_page() -> Vec<Ticket> {
+        crate::jira_issue::parse_search_page(CHILDREN_PAGE, Some("customfield_10857"))
+            .unwrap()
+            .tickets
+    }
+
     fn epic_tickets(rows: &[(&str, &str)]) -> Vec<Ticket> {
         rows.iter()
             .map(|(key, summary)| Ticket {
@@ -1147,22 +1178,16 @@ mod tests {
             .collect()
     }
 
-    fn subtask(key: &str, parent: &str, status: &str) -> crate::jira_rest::Subtask {
-        crate::jira_rest::Subtask {
-            key: key.to_string(),
-            parent_key: parent.to_string(),
-            summary: key.to_string(),
-            status: status.to_string(),
-            assignee: None,
-            assignee_email: None,
-            labels: vec![],
+    fn subtask(key: &str, parent: &str, status: &str) -> Ticket {
+        Ticket {
+            parent_key: Some(parent.to_string()),
+            ..test_ticket(key, status)
         }
     }
 
     #[test]
     fn children_are_grouped_under_the_epic_they_name_with_one_copy_each() {
-        let (found, _) =
-            crate::jira_issue::parse_search_page(CHILDREN_PAGE, Some("customfield_10857")).unwrap();
+        let found = children_page();
         // The epic search can answer out of order, and a page boundary can repeat an epic.
         let listed = epic_tickets(&[
             ("AMP-300", "Quiet"),
@@ -1197,8 +1222,7 @@ mod tests {
 
     #[test]
     fn epic_progress_counts_the_children_and_sub_tasks_it_did_before() {
-        let (found, _) =
-            crate::jira_issue::parse_search_page(CHILDREN_PAGE, Some("customfield_10857")).unwrap();
+        let found = children_page();
         let listed = epic_tickets(&[
             ("AMP-100", "Checkout"),
             ("AMP-200", "Search"),
@@ -1481,41 +1505,24 @@ mod tests {
     async fn details_are_searched_fifty_keys_at_a_time() {
         // Exactly 50 keys fit one search.
         let (searches, delivered) = read(&keys(1..=50), has_all).await;
-        assert_eq!(searches.len(), 1);
-        assert_eq!(searches[0].matches("DEMO-").count(), 50);
+        assert_eq!(searches, [format!("key in ({})", keys(1..=50).join(","))]);
         assert_eq!(delivered.len(), 50);
 
         // The 51st key starts a second search that holds only it.
         let (searches, delivered) = read(&keys(1..=51), has_all).await;
-        assert_eq!(searches.len(), 2);
-        assert_eq!(searches[0].matches("DEMO-").count(), 50);
-        assert!(!searches[0].contains("DEMO-51"));
-        assert_eq!(searches[1], "key in (DEMO-51)");
+        assert_eq!(
+            searches,
+            [
+                format!("key in ({})", keys(1..=50).join(",")),
+                "key in (DEMO-51)".to_string()
+            ]
+        );
         assert_eq!(delivered.len(), 51);
         assert!(delivered.iter().all(|(_, result)| result.is_ok()));
 
         // Nothing to read, nothing to search.
         let (searches, delivered) = read(&[], has_all).await;
         assert!(searches.is_empty() && delivered.is_empty());
-    }
-
-    #[test]
-    fn a_detail_search_asks_for_everything_the_detail_overlay_shows() {
-        // `enrich_ticket` copies status and labels over the row, and the overlay shows the rest;
-        // `issuetype` and `parent` keep a sub-task's parent from being read as an epic.
-        for field in [
-            "summary",
-            "status",
-            "assignee",
-            "reporter",
-            "description",
-            "comment",
-            "labels",
-            "parent",
-            "issuetype",
-        ] {
-            assert!(DETAIL_FIELDS.contains(&field), "{field}");
-        }
     }
 
     #[tokio::test]
@@ -1551,11 +1558,63 @@ mod tests {
             delivered[1].1.as_ref().unwrap_err(),
             "Jira didn't return this ticket"
         );
-        assert!(delivered[2].1.is_err());
+        assert_eq!(
+            delivered[2].1.as_ref().unwrap_err(),
+            "\"x\\\") OR 1=1\" isn't a ticket key"
+        );
 
         // A chunk of nothing but malformed keys makes no search at all.
         let (searches, delivered) = read(&["no good".into()], has_all).await;
         assert!(searches.is_empty());
-        assert!(delivered[0].1.is_err());
+        assert_eq!(
+            delivered[0].1.as_ref().unwrap_err(),
+            "\"no good\" isn't a ticket key"
+        );
+    }
+
+    #[test]
+    fn sub_tasks_are_searched_fifty_keys_at_a_time() {
+        let sub_task_search = |list: String| {
+            format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
+        };
+        // Exactly 50 keys: one search holding all of them.
+        let fifty = subtasks_jqls(&epic_keys(50));
+        assert_eq!(fifty, [sub_task_search(epic_keys(50).join(","))]);
+        // 51 keys: a second search that holds only the 51st.
+        let more = subtasks_jqls(&epic_keys(51));
+        assert_eq!(
+            more,
+            [
+                sub_task_search(epic_keys(50).join(",")),
+                sub_task_search("AMP-51".to_string())
+            ]
+        );
+        // Anything that isn't shaped like a key stays out; nothing left, no search.
+        let keys = vec!["AMP-1".to_string(), "x\") OR 1=1".to_string()];
+        assert_eq!(subtasks_jqls(&keys), [sub_task_search("AMP-1".to_string())]);
+        assert!(subtasks_jqls(&["no good".to_string()]).is_empty());
+        assert!(subtasks_jqls(&[]).is_empty());
+    }
+
+    #[test]
+    fn jql_built_from_config_cannot_be_broken_by_a_quote_in_it() {
+        let mut config = test_config();
+        config.jira.team_name = r#"Team "A""#.into();
+        config.statuses.active = vec![r#"On "Hold""#.into()];
+        let jql = lists_jql(&config, &["a@example.com"], TicketFetchScope::ActiveOnly);
+        assert!(jql.contains(r#""Assigned Teams" = "Team \"A\"""#), "{jql}");
+        assert!(jql.contains(r#"status in ("On \"Hold\"")"#), "{jql}");
+        assert_eq!(
+            epics_jql(r#"A"B"#),
+            r#"project = "A\"B" AND issuetype = Epic ORDER BY key"#
+        );
+        assert_eq!(
+            scoped_jql(r#"A"B"#, "type = Bug"),
+            r#"project = "A\"B" AND (type = Bug) ORDER BY created DESC"#
+        );
+        assert_eq!(
+            epic_children_jqls(r#"A"B"#, &epic_keys(1), false),
+            [r#"project = "A\"B" AND (parent in (AMP-1)) ORDER BY key"#]
+        );
     }
 }

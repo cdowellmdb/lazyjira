@@ -151,7 +151,7 @@ impl AppConfig {
             .statuses
             .active
             .iter()
-            .map(|s| format!("\"{}\"", s))
+            .map(|s| crate::jira_rest::jql_quote(s))
             .collect();
         format!("({})", quoted.join(", "))
     }
@@ -161,7 +161,7 @@ impl AppConfig {
             .statuses
             .done
             .iter()
-            .map(|s| format!("\"{}\"", s))
+            .map(|s| crate::jira_rest::jql_quote(s))
             .collect();
         format!("({})", quoted.join(", "))
     }
