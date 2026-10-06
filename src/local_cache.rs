@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
 use crate::cache::{Cache, Epic, Ticket};
@@ -121,11 +121,9 @@ pub fn load_my_email(project: &str) -> Option<String> {
 }
 
 /// Remembers `email` for later refreshes. Not being able to write the file only costs the next
-/// refresh a `jira me`, so that's a warning rather than an error that fails this one.
+/// refresh a `jira me`, so it neither fails this refresh nor prints (the screen is the app's).
 pub fn remember_my_email(project: &str, email: &str) {
-    if let Err(e) = write_cache_file(&cache_path(MY_EMAIL_PREFIX, project), &email) {
-        eprintln!("Warning: failed to remember your email: {:#}", e);
-    }
+    let _ = write_cache_file(&cache_path(MY_EMAIL_PREFIX, project), &email);
 }
 
 /// Fills in what only a ticket's detail has: description, reporter and activity, and whether
@@ -155,11 +153,21 @@ fn hydrate_ticket_from_details_cache(
 #[derive(Clone)]
 pub struct DetailCache {
     by_key: Arc<Mutex<HashMap<String, Ticket>>>,
-    changed: mpsc::UnboundedSender<()>,
+    changed: mpsc::UnboundedSender<Signal>,
+}
+
+/// What the writer is told: a detail was recorded, or the app is closing (the writer answers on
+/// the sender once it has saved).
+enum Signal {
+    Changed,
+    Close(oneshot::Sender<()>),
 }
 
 /// How long details must stop changing before the writer saves them.
 const FLUSH_AFTER_IDLE: Duration = Duration::from_millis(750);
+
+/// How long closing waits for the writer to finish saving.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 impl DetailCache {
     /// Read the details cache file once, and start the task that writes it back.
@@ -179,7 +187,7 @@ impl DetailCache {
         Self::new(HashMap::new()).0
     }
 
-    fn new(by_key: HashMap<String, Ticket>) -> (Self, mpsc::UnboundedReceiver<()>) {
+    fn new(by_key: HashMap<String, Ticket>) -> (Self, mpsc::UnboundedReceiver<Signal>) {
         let (changed, rx) = mpsc::unbounded_channel();
         let details = DetailCache {
             by_key: Arc::new(Mutex::new(by_key)),
@@ -191,7 +199,18 @@ impl DetailCache {
     /// Keep a freshly fetched detail. False when the writer has stopped, so it won't reach disk.
     pub fn record(&self, detail: Ticket) -> bool {
         lock_details(&self.by_key).insert(detail.key.clone(), detail);
-        self.changed.send(()).is_ok()
+        self.changed.send(Signal::Changed).is_ok()
+    }
+
+    /// Saves any details not yet saved and waits (up to `CLOSE_TIMEOUT`) for the write, for when
+    /// the app closes: details recorded in the last moments are still inside their quiet
+    /// period then. Clones elsewhere (a refresh still running) don't matter, so it doesn't rely
+    /// on the writer's channel closing.
+    pub async fn close(&self) {
+        let (done, saved) = oneshot::channel();
+        if self.changed.send(Signal::Close(done)).is_ok() {
+            let _ = timeout(CLOSE_TIMEOUT, saved).await;
+        }
     }
 
     /// Fill a list read's tickets, including epic children, with the details already fetched.
@@ -215,29 +234,54 @@ fn lock_details(
     by_key.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Serializes `by_key` and hands the text to `write`. The lock is held only while serializing,
-/// so recording and hydrating, which the UI waits on, never wait for the disk.
-fn flush_details(
-    by_key: &Mutex<HashMap<String, Ticket>>,
-    write: impl FnOnce(&str) -> Result<()>,
-) -> Result<()> {
-    let json = serde_json::to_string(&*lock_details(by_key))
-        .context("Failed to serialize the details cache")?;
-    write(&json)
+/// Saves the details to `path`. A failure costs only a refetch next run, and the screen is the
+/// app's, so it isn't printed.
+fn save_details(path: &Path, by_key: &Mutex<HashMap<String, Ticket>>) {
+    // The guard lives for this statement only: the disk write below never holds the lock that
+    // recording and hydrating, which the UI waits on, take.
+    let Ok(json) = serde_json::to_string(&*lock_details(by_key)) else {
+        return;
+    };
+    let _ = write_cache_text(path, &json);
 }
 
-/// Write the details once they've stayed unchanged for `idle`, and once more when the app closes
-/// the channel.
+/// Saves the details once they've stayed unchanged for `idle`, at once when the app closes, and
+/// when the channel closes. Nothing is written while nothing has changed since the last save.
 async fn write_details(
     path: PathBuf,
     by_key: Arc<Mutex<HashMap<String, Ticket>>>,
-    mut changed: mpsc::UnboundedReceiver<()>,
+    mut signals: mpsc::UnboundedReceiver<Signal>,
     idle: Duration,
 ) {
-    while changed.recv().await.is_some() {
-        while let Ok(Some(())) = timeout(idle, changed.recv()).await {}
-        if let Err(e) = flush_details(&by_key, |json| write_cache_text(&path, json)) {
-            eprintln!("Warning: failed to persist details cache: {:#}", e);
+    let mut unsaved = false;
+    loop {
+        let signal = if unsaved {
+            match timeout(idle, signals.recv()).await {
+                Ok(signal) => signal,
+                Err(_quiet) => {
+                    save_details(&path, &by_key);
+                    unsaved = false;
+                    continue;
+                }
+            }
+        } else {
+            signals.recv().await
+        };
+        match signal {
+            Some(Signal::Changed) => unsaved = true,
+            Some(Signal::Close(done)) => {
+                if unsaved {
+                    save_details(&path, &by_key);
+                }
+                let _ = done.send(());
+                return;
+            }
+            None => {
+                if unsaved {
+                    save_details(&path, &by_key);
+                }
+                return;
+            }
         }
     }
 }
@@ -250,13 +294,31 @@ mod tests {
         Ticket::for_test(key, status)
     }
 
-    /// Removes the cache files a test wrote, even when it fails.
+    /// How many `Remove`s are alive. The test cache directory goes with the last one, and the
+    /// lock makes a test starting up wait out a removal, so it never loses the directory it is
+    /// about to write into.
+    static LIVE: Mutex<usize> = Mutex::new(0);
+
+    /// Removes the cache files a test wrote, even when it fails, and the test cache directory
+    /// once no test is using it. Made before the test writes anything.
     struct Remove(Vec<PathBuf>);
+
+    impl Remove {
+        fn new(paths: Vec<PathBuf>) -> Self {
+            *LIVE.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+            Remove(paths)
+        }
+    }
 
     impl Drop for Remove {
         fn drop(&mut self) {
             for path in &self.0 {
                 let _ = std::fs::remove_file(path);
+            }
+            let mut live = LIVE.lock().unwrap_or_else(PoisonError::into_inner);
+            *live -= 1;
+            if *live == 0 {
+                let _ = std::fs::remove_dir(cache_dir());
             }
         }
     }
@@ -355,7 +417,7 @@ mod tests {
     #[test]
     fn my_email_is_remembered_per_project() {
         let (a, b) = (project("EMAIL_A"), project("EMAIL_B"));
-        let _remove = Remove(vec![cache_path(MY_EMAIL_PREFIX, &a)]);
+        let _remove = Remove::new(vec![cache_path(MY_EMAIL_PREFIX, &a)]);
         assert_eq!(load_my_email(&a), None);
         remember_my_email(&a, "me@example.com");
 
@@ -368,18 +430,18 @@ mod tests {
         // A file from before emails were normalized, or edited by hand.
         let project = project("EMAIL_CASE");
         let path = cache_path(MY_EMAIL_PREFIX, &project);
-        let _remove = Remove(vec![path.clone()]);
+        let _remove = Remove::new(vec![path.clone()]);
         write_cache_file(&path, &" Me@Example.COM ").unwrap();
 
         assert_eq!(load_my_email(&project).as_deref(), Some("me@example.com"));
     }
 
     #[test]
-    fn an_email_that_cannot_be_saved_is_a_warning_not_a_failure() {
+    fn an_email_that_cannot_be_saved_is_only_not_remembered() {
         // A file stands where the cache directory for this project would be made.
         let project = project("BLOCKED");
         let blocker = cache_path(MY_EMAIL_PREFIX, &format!("{project}-dir"));
-        let _remove = Remove(vec![blocker.clone()]);
+        let _remove = Remove::new(vec![blocker.clone()]);
         std::fs::create_dir_all(blocker.parent().unwrap()).unwrap();
         std::fs::write(&blocker, "in the way").unwrap();
         let unwritable = format!("{project}-dir.json/x");
@@ -423,7 +485,7 @@ mod tests {
         }];
         // Where the epics cache lived before it moved: straight in the system temp dir.
         let old = std::env::temp_dir().join(format!("lazyjira_epics_cache_{project}.json"));
-        let _remove = Remove(vec![old.clone(), cache_path(EPICS_CACHE_PREFIX, &project)]);
+        let _remove = Remove::new(vec![old.clone(), cache_path(EPICS_CACHE_PREFIX, &project)]);
         std::fs::write(&old, serde_json::to_string(&epics).unwrap()).unwrap();
 
         assert!(load_epics_cache(&project).is_empty());
@@ -465,27 +527,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn recording_and_hydrating_never_wait_for_the_disk() {
-        let (details, _changed) = DetailCache::new(HashMap::new());
-        details.record(test_ticket("DEMO-1", "To Do"));
-
-        let mut written = None;
-        flush_details(&details.by_key, |json| {
-            // The writer is mid-write here: the lock must already be free.
-            assert!(
-                details.by_key.try_lock().is_ok(),
-                "the lock is held while writing"
-            );
-            written = Some(json.to_string());
-            Ok(())
-        })
-        .unwrap();
-
-        let saved: HashMap<String, Ticket> = serde_json::from_str(&written.unwrap()).unwrap();
-        assert_eq!(saved.keys().collect::<Vec<_>>(), ["DEMO-1"]);
-    }
-
     fn saved_keys(path: &Path) -> Vec<String> {
         let mut keys: Vec<String> = read_cache_file::<HashMap<String, Ticket>>(path)
             .unwrap_or_default()
@@ -495,35 +536,37 @@ mod tests {
         keys
     }
 
-    #[tokio::test]
-    async fn details_are_saved_once_they_stop_changing() {
+    #[tokio::test(start_paused = true)]
+    async fn details_are_saved_once_none_has_changed_for_the_quiet_period() {
         let path = cache_path(DETAILS_CACHE_PREFIX, &project("QUIET"));
-        let _remove = Remove(vec![path.clone()]);
+        let _remove = Remove::new(vec![path.clone()]);
         let (details, changed) = DetailCache::new(HashMap::new());
         let writer = tokio::spawn(write_details(
             path.clone(),
             details.by_key.clone(),
             changed,
-            Duration::from_millis(30),
+            FLUSH_AFTER_IDLE,
         ));
+        let ms = Duration::from_millis;
+        assert_eq!(FLUSH_AFTER_IDLE, ms(750));
 
-        details.record(test_ticket("DEMO-1", "To Do"));
-        details.record(test_ticket("DEMO-2", "To Do"));
-        // Not closed: the save has to come from the quiet period alone.
-        let mut waited = 0;
-        while saved_keys(&path).len() < 2 && waited < 100 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            waited += 1;
+        // Details keep arriving 1 ms inside the quiet period, for four times the period in all:
+        // each one starts it over, so nothing is saved.
+        for n in 1..=4 {
+            details.record(test_ticket(&format!("DEMO-{n}"), "To Do"));
+            tokio::time::sleep(FLUSH_AFTER_IDLE - ms(1)).await;
+            assert!(saved_keys(&path).is_empty(), "saved after {n} details");
         }
-
-        assert_eq!(saved_keys(&path), ["DEMO-1", "DEMO-2"]);
+        // 750 ms after the last one it is saved, with all four.
+        tokio::time::sleep(ms(2)).await;
+        assert_eq!(saved_keys(&path), ["DEMO-1", "DEMO-2", "DEMO-3", "DEMO-4"]);
         writer.abort();
     }
 
     #[tokio::test]
     async fn details_are_saved_when_the_app_closes_even_before_they_go_quiet() {
         let path = cache_path(DETAILS_CACHE_PREFIX, &project("CLOSING"));
-        let _remove = Remove(vec![path.clone()]);
+        let _remove = Remove::new(vec![path.clone()]);
         let (details, changed) = DetailCache::new(HashMap::new());
         // A quiet period far longer than the test: only closing can trigger this save.
         let writer = tokio::spawn(write_details(
@@ -541,5 +584,46 @@ mod tests {
             .unwrap();
 
         assert_eq!(saved_keys(&path), ["DEMO-1"]);
+    }
+
+    #[tokio::test]
+    async fn closing_saves_at_once_even_while_a_refresh_still_holds_the_cache() {
+        let path = cache_path(DETAILS_CACHE_PREFIX, &project("CLOSE"));
+        let _remove = Remove::new(vec![path.clone()]);
+        let (details, changed) = DetailCache::new(HashMap::new());
+        // A quiet period far longer than the test: only closing can trigger this save.
+        let writer = tokio::spawn(write_details(
+            path.clone(),
+            details.by_key.clone(),
+            changed,
+            Duration::from_secs(3600),
+        ));
+        // A refresh in flight holds a clone, so the channel doesn't close with `details`.
+        let _refresh = details.clone();
+
+        details.record(test_ticket("DEMO-1", "To Do"));
+        details.close().await;
+
+        assert_eq!(saved_keys(&path), ["DEMO-1"]);
+        writer.await.expect("the writer stops once it has saved");
+    }
+
+    #[tokio::test]
+    async fn closing_with_nothing_unsaved_writes_nothing() {
+        let path = cache_path(DETAILS_CACHE_PREFIX, &project("IDLE"));
+        let _remove = Remove::new(vec![path.clone()]);
+        let (details, changed) = DetailCache::new(HashMap::new());
+        tokio::spawn(write_details(
+            path.clone(),
+            details.by_key.clone(),
+            changed,
+            Duration::from_secs(3600),
+        ));
+
+        details.close().await;
+
+        assert!(!path.exists());
+        // Closing a cache whose writer is gone doesn't wait for it.
+        details.close().await;
     }
 }
