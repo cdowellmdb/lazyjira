@@ -1217,8 +1217,9 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
 
     // Status bar
     let status_line = if let Some(ref flash) = app.flash {
+        // One line: the terminal drops a line break, which would run Jira's messages together.
         Line::from(Span::styled(
-            flash.as_str(),
+            flash.lines().collect::<Vec<_>>().join("; "),
             Style::default().fg(Color::Red),
         ))
     } else if let Some(ref search) = app.search {
@@ -2342,6 +2343,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_multi_line_error_reads_as_one_line_in_the_status_bar() {
+        use ratatui::backend::TestBackend;
+
+        let mut app = App::new();
+        app.flash = Some(
+            "Refresh failed: Jira answered 400 Bad Request.\nError in the JQL Query".to_string(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+
+        terminal.draw(|f| ui(f, &app, &sample_config())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let text: String = (0..100).map(|x| buffer[(x, 11)].symbol()).collect();
+        assert!(
+            text.contains("400 Bad Request.; Error in the JQL Query"),
+            "{text}"
+        );
     }
 
     #[test]
