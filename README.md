@@ -14,7 +14,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 - Step through tickets in the detail view with `←`/`→`, and press `z` for full screen
 - Fold status groups and a parent's sub-tasks; `f` focuses one status, `d` hides Done
 - Opens instantly from a local cache, then refreshes from Jira without losing your place
-- Ticket detail renders Jira markup and shows comments and activity history
+- Ticket detail renders Jira markup and shows comments; `h` lists them newest first
 - Epic progress bars, with an optional list of the epics you care about
 
 **Change tickets safely**

@@ -465,9 +465,9 @@ fn comment_lines(ticket: &Ticket, width: usize) -> Vec<Line<'static>> {
         .activity
         .iter()
         .rev()
-        .filter_map(|entry| match &entry.kind {
-            ActivityKind::Comment { body } => Some((entry, body)),
-            _ => None,
+        .map(|entry| {
+            let ActivityKind::Comment { body } = &entry.kind;
+            (entry, body)
         })
         .collect();
 

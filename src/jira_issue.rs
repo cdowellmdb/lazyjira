@@ -1,8 +1,6 @@
 //! Jira's issue JSON as a [`Ticket`]. A search result and a single issue share one shape
 //! (`{key, fields: {..}}`, holding only the fields asked for), so one pure parser reads both.
-//! Neither asks for the changelog (nor did `jira issue view --raw`, which this replaced), so
-//! Activity holds comments only; field changes appear for an issue that carries
-//! `changelog.histories`.
+//! Neither read asks for the changelog, so a ticket's activity is its comments.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -86,68 +84,26 @@ pub fn ticket_from_issue(issue: &Value, epic_link_field: Option<&str>) -> Option
     })
 }
 
-/// Field changes (`changelog.histories`, present when the issue was fetched with the changelog)
-/// and comments, newest first.
+/// A ticket's comments, newest first.
 fn activity(issue: &Value) -> Vec<ActivityEntry> {
-    let text = |value: &Value| value.as_str().map(str::to_string);
-    let author = |entry: &Value| {
-        (
-            entry["author"]["displayName"]
+    let mut activity: Vec<ActivityEntry> = issue["fields"]["comment"]["comments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|comment| ActivityEntry {
+            timestamp: comment["created"].as_str().unwrap_or("").to_string(),
+            author: comment["author"]["displayName"]
                 .as_str()
                 .unwrap_or("Unknown")
                 .to_string(),
-            text(&entry["author"]["emailAddress"]),
-        )
-    };
-    let mut activity = Vec::new();
-
-    for history in issue["changelog"]["histories"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        let (author, author_email) = author(history);
-        for item in history["items"].as_array().into_iter().flatten() {
-            let field = item["field"].as_str().unwrap_or("");
-            let from = item["fromString"].as_str().unwrap_or("").to_string();
-            let to = item["toString"].as_str().unwrap_or("").to_string();
-            let kind = match field {
-                "status" => ActivityKind::StatusChange { from, to },
-                "assignee" => ActivityKind::AssigneeChange {
-                    from: Some(from).filter(|s| !s.is_empty()),
-                    to: Some(to).filter(|s| !s.is_empty()),
-                },
-                _ => ActivityKind::FieldChange {
-                    field: field.to_string(),
-                    from,
-                    to,
-                },
-            };
-            activity.push(ActivityEntry {
-                timestamp: history["created"].as_str().unwrap_or("").to_string(),
-                author: author.clone(),
-                author_email: author_email.clone(),
-                kind,
-            });
-        }
-    }
-
-    for comment in issue["fields"]["comment"]["comments"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        let (author, author_email) = author(comment);
-        activity.push(ActivityEntry {
-            timestamp: comment["created"].as_str().unwrap_or("").to_string(),
-            author,
-            author_email,
+            author_email: comment["author"]["emailAddress"]
+                .as_str()
+                .map(str::to_string),
             kind: ActivityKind::Comment {
                 body: comment["body"].as_str().unwrap_or("").to_string(),
             },
-        });
-    }
-
+        })
+        .collect();
     activity.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     activity
 }
@@ -259,52 +215,33 @@ mod tests {
     }
 
     #[test]
-    fn reads_description_reporter_and_activity_newest_first() {
+    fn reads_description_reporter_and_comments_newest_first() {
         let ticket = parse(json!({"key": "DEMO-14",
             "fields": {
                 "summary": "Detail", "status": {"name": "In Progress"},
                 "reporter": {"displayName": "Priya Shah"},
                 "description": "h2. Context",
                 "comment": {"comments": [
+                    {"created": "2026-09-15T09:12:00.000+0000",
+                     "author": {"displayName": "Alex Rivera"},
+                     "body": "Started."},
                     {"created": "2026-09-22T13:30:00.000+0000",
                      "author": {"displayName": "Priya Shah", "emailAddress": "priya@example.com"},
                      "body": "Looks good."}
                 ]}
-            },
-            "changelog": {"histories": [
-                {"created": "2026-09-15T09:12:00.000+0000",
-                 "author": {"displayName": "Alex Rivera"},
-                 "items": [
-                    {"field": "status", "fromString": "To Do", "toString": "In Progress"},
-                    {"field": "assignee", "fromString": "", "toString": "Alex Rivera"},
-                    {"field": "priority", "fromString": "Low", "toString": "High"}
-                 ]}
-            ]}
+            }
         }));
         assert_eq!(ticket.reporter.as_deref(), Some("Priya Shah"));
         assert_eq!(ticket.description.as_deref(), Some("h2. Context"));
-        assert_eq!(ticket.activity.len(), 4);
-        match &ticket.activity[0].kind {
-            ActivityKind::Comment { body } => assert_eq!(body, "Looks good."),
-            other => panic!("newest entry should be the comment, got {other:?}"),
-        }
+        assert_eq!(ticket.activity.len(), 2);
+        let ActivityKind::Comment { body } = &ticket.activity[0].kind;
+        assert_eq!(body, "Looks good.");
         assert_eq!(
             ticket.activity[0].author_email.as_deref(),
             Some("priya@example.com")
         );
-        assert!(matches!(
-            &ticket.activity[1].kind,
-            ActivityKind::StatusChange { from, to } if from == "To Do" && to == "In Progress"
-        ));
-        assert!(matches!(
-            &ticket.activity[2].kind,
-            ActivityKind::AssigneeChange { from: None, to: Some(to) } if to == "Alex Rivera"
-        ));
-        assert!(matches!(
-            &ticket.activity[3].kind,
-            ActivityKind::FieldChange { field, .. } if field == "priority"
-        ));
         assert_eq!(ticket.activity[1].author, "Alex Rivera");
+        assert_eq!(ticket.activity[1].author_email, None);
     }
 
     #[test]
@@ -342,7 +279,6 @@ mod tests {
             .iter()
             .map(|entry| match &entry.kind {
                 ActivityKind::Comment { body } => body.as_str(),
-                other => panic!("expected only comments, got {other:?}"),
             })
             .collect();
         assert_eq!(bodies, ["Third", "Second", "First"]);

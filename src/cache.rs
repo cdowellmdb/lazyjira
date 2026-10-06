@@ -217,7 +217,7 @@ fn name_key(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
-/// A single entry in a ticket's activity history (changelog or comment).
+/// A single entry in a ticket's activity: a comment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityEntry {
     pub timestamp: String,
@@ -226,25 +226,11 @@ pub struct ActivityEntry {
     pub kind: ActivityKind,
 }
 
-/// The type of activity: status change, comment, assignee change, or generic field change.
+/// What an activity entry is. Comments are all Jira's search and issue reads give (neither asks
+/// for the changelog). It stays an enum so caches written so far still load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActivityKind {
-    StatusChange {
-        from: String,
-        to: String,
-    },
-    Comment {
-        body: String,
-    },
-    AssigneeChange {
-        from: Option<String>,
-        to: Option<String>,
-    },
-    FieldChange {
-        field: String,
-        from: String,
-        to: String,
-    },
+    Comment { body: String },
 }
 
 /// What a ticket's status reads as when Jira's answer has none. It isn't a real status, so it
