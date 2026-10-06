@@ -2,8 +2,9 @@
 """Fake `jira` CLI that serves made-up tickets for recording the README demo.
 
 Only covers the subcommands and output formats lazyjira calls in
-src/jira_client.rs. Writes (comment, assign, edit, create) succeed
-without changing anything. Moves go through Jira's REST API, not this CLI.
+src/jira_client.rs: `me` and `issue view`. Writes (comment, assign, edit, create) succeed
+without changing anything. Lists, epics and moves go through Jira's REST API, which
+fake_jira_rest.py serves from this file's data.
 """
 
 import json
@@ -81,6 +82,13 @@ def all_tickets():
         for key, status, assignee, summary, labels, parent in SUBTASKS
     ]
     return [ticket_dict(row) for row in TICKETS] + subtasks
+
+
+def epic_tickets():
+    return [
+        ticket_dict((key, "Epic", status, None, summary, [], None))
+        for key, status, summary in EPICS
+    ]
 
 
 def values(group):
@@ -173,30 +181,11 @@ def evaluate(ticket, expr):
 
 def run_query(jql):
     jql = re.split(r"\border\s+by\b", jql, flags=re.I)[0]
-    return [t for t in all_tickets() if evaluate(t, jql)]
-
-
-def flag(args, name):
-    if name in args:
-        idx = args.index(name)
-        if idx + 1 < len(args):
-            return args[idx + 1]
-    return None
-
-
-def issue_list(args):
-    paginate = flag(args, "--paginate") or "0:100"
-    if int(paginate.split(":")[0]) > 0:
-        return
-
-    if flag(args, "-t") == "Epic":
-        for key, status, summary in EPICS:
-            print(f"{key}\t{status}\t{summary}")
-        return
-
-    for t in run_query(flag(args, "-q") or ""):
-        assignee = TEAM.get(t["assignee"], "") if t["assignee"] else ""
-        print(f"{t['key']}\t{t['status']}\t{assignee}\t{t['summary']}")
+    # Epics are only found by asking for the type, so the epic search can list them without
+    # them turning up, unassigned, in every other list.
+    asks_for_epics = re.search(r'issuetype\s*=\s*"?epic\b', jql, re.I)
+    issues = all_tickets() + (epic_tickets() if asks_for_epics else [])
+    return [t for t in issues if evaluate(t, jql)]
 
 
 def person(email):
@@ -296,8 +285,6 @@ def issue_view(key):
 def main(args):
     if args == ["me"]:
         print(ME)
-    elif args[:2] == ["issue", "list"]:
-        issue_list(args[2:])
     elif args[:2] == ["issue", "view"] and len(args) >= 3:
         issue_view(args[2])
     elif args[:2] == ["issue", "create"]:
