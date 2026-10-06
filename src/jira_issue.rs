@@ -2,9 +2,27 @@
 //! (`{key, fields: {..}}`, the search holding only the fields it asked for), so one pure parser
 //! reads both.
 
+use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::cache::{ActivityEntry, ActivityKind, Ticket};
+
+/// One page of a search answer: its tickets (an issue with no key is skipped) and the total
+/// number of matches.
+pub fn parse_search_page(
+    body: &str,
+    epic_link_field: Option<&str>,
+) -> Result<(Vec<Ticket>, usize)> {
+    let json: Value = serde_json::from_str(body).context("Jira's search answer isn't JSON")?;
+    let tickets = json["issues"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|issue| ticket_from_issue(issue, epic_link_field))
+        .collect();
+    let total = json["total"].as_u64().unwrap_or(0) as usize;
+    Ok((tickets, total))
+}
 
 /// The ticket in a Jira issue, `None` when it has no key. Only fields the issue holds are read:
 /// a list search leaves description, reporter and activity empty and `detail_loaded` false, and
@@ -268,5 +286,18 @@ mod tests {
             ActivityKind::FieldChange { field, .. } if field == "priority"
         ));
         assert_eq!(ticket.activity[1].author, "Alex Rivera");
+    }
+
+    #[test]
+    fn a_search_page_gives_its_tickets_and_the_total() {
+        let body = r#"{"startAt": 0, "maxResults": 100, "total": 250, "issues": [
+            {"key": "DEMO-1", "fields": {"summary": "One", "status": {"name": "To Do"}}},
+            {"fields": {"summary": "No key"}},
+            {"key": "DEMO-2", "fields": {"summary": "Two", "status": {"name": "Done"}}}]}"#;
+        let (tickets, total) = parse_search_page(body, EPIC_LINK).unwrap();
+        assert_eq!(total, 250);
+        let keys: Vec<_> = tickets.iter().map(|t| t.key.as_str()).collect();
+        assert_eq!(keys, ["DEMO-1", "DEMO-2"]);
+        assert!(parse_search_page("<html>", EPIC_LINK).is_err());
     }
 }

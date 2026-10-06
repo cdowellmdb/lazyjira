@@ -1755,8 +1755,16 @@ impl App {
             if detail.assignee.is_some() {
                 ticket.assignee = detail.assignee.clone();
             }
-            if detail.assignee_email.is_some() {
-                ticket.assignee_email = detail.assignee_email.clone();
+            // Team groups by exact email, so the same address in Jira's spelling keeps the
+            // roster's.
+            if let Some(email) = &detail.assignee_email {
+                let same = ticket
+                    .assignee_email
+                    .as_deref()
+                    .is_some_and(|own| own.eq_ignore_ascii_case(email));
+                if !same {
+                    ticket.assignee_email = Some(email.clone());
+                }
             }
             if detail.reporter.is_some() {
                 ticket.reporter = detail.reporter.clone();
@@ -2906,5 +2914,30 @@ mod tests {
         app.toggle_show_done(); // hides closed tickets
         assert!(app.is_ticket_selected("AMP-31"));
         assert!(!app.is_ticket_selected("AMP-32"));
+    }
+
+    #[test]
+    fn a_detail_fetch_keeps_the_rosters_spelling_of_the_assignees_email() {
+        let mut app = App::new();
+        let mut team_ticket = Ticket::for_test("AMP-1", "To Do");
+        team_ticket.assignee_email = Some("sam.chen@example.com".to_string());
+        app.cache.team_tickets = vec![team_ticket];
+
+        // Team groups by exact email, so Jira's own spelling must not replace the roster's.
+        let mut detail = Ticket::for_test("AMP-1", "To Do");
+        detail.assignee_email = Some("Sam.Chen@Example.com".to_string());
+        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+        assert_eq!(
+            app.cache.team_tickets[0].assignee_email.as_deref(),
+            Some("sam.chen@example.com")
+        );
+
+        // A different assignee is a reassignment, and replaces it.
+        detail.assignee_email = Some("alex@example.com".to_string());
+        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+        assert_eq!(
+            app.cache.team_tickets[0].assignee_email.as_deref(),
+            Some("alex@example.com")
+        );
     }
 }
