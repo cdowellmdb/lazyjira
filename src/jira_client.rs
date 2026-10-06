@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use tokio::process::Command;
 
-use crate::local_cache::{load_my_email, save_my_email};
+use crate::local_cache::{load_my_email, remember_my_email};
 
 /// The ticket's page in the Jira web UI.
 pub fn browse_url(key: &str) -> Result<String> {
@@ -64,7 +64,7 @@ pub fn name_from_email(email: &str) -> String {
 /// Ask `jira me` for the current user's email, and remember it for later refreshes.
 pub async fn refresh_my_email(project: &str) -> Result<String> {
     let email = crate::cache::normalize_email(&fetch_my_email().await?);
-    save_my_email(project, &email)?;
+    remember_my_email(project, &email);
     Ok(email)
 }
 

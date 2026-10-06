@@ -297,6 +297,8 @@ pub struct App {
     pub keybindings_page_height: Cell<u16>,
     /// Ticket keys currently being fetched for rich detail.
     detail_fetching: HashSet<String>,
+    /// The ticket details fetched so far, which list reads fill in and the writer keeps on disk.
+    pub details: crate::local_cache::DetailCache,
     /// Why the last detail fetch failed, by ticket key.
     detail_fetch_errors: HashMap<String, String>,
     /// Single-ticket moves waiting on Jira, confirmed, or rejected.
@@ -380,6 +382,7 @@ impl App {
             keybindings_scroll_max: Cell::new(0),
             keybindings_page_height: Cell::new(1),
             detail_fetching: HashSet::new(),
+            details: crate::local_cache::DetailCache::in_memory(),
             detail_fetch_errors: HashMap::new(),
             moves: crate::moves::MoveTracker::default(),
             last_request_id: 0,

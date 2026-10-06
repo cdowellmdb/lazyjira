@@ -32,10 +32,6 @@ const DETAILS_CACHE_PREFIX: &str = "lazyjira_ticket_details_cache";
 const FULL_CACHE_PREFIX: &str = "lazyjira_full_cache";
 const MY_EMAIL_PREFIX: &str = "lazyjira_my_email";
 
-fn cache_file_name(prefix: &str, project: &str) -> String {
-    format!("{prefix}_{project}.json")
-}
-
 /// Where every cache lives: `~/.cache/lazyjira/`, or the temp dir without a `HOME`.
 fn cache_dir_in(home: Option<std::ffi::OsString>) -> PathBuf {
     match home {
@@ -45,16 +41,21 @@ fn cache_dir_in(home: Option<std::ffi::OsString>) -> PathBuf {
 }
 
 fn cache_dir() -> PathBuf {
-    // Tests keep off the real ~/.cache.
-    cache_dir_in(if cfg!(test) {
-        None
-    } else {
-        std::env::var_os("HOME")
-    })
+    if cfg!(test) {
+        // Tests keep off the real ~/.cache, and off the files of another test run sharing this
+        // temp dir.
+        return std::env::temp_dir().join(format!("lazyjira-test-{}", std::process::id()));
+    }
+    cache_dir_in(std::env::var_os("HOME"))
+}
+
+/// The file of cache `prefix` for `project` in `dir`.
+fn cache_file(dir: &Path, prefix: &str, project: &str) -> PathBuf {
+    dir.join(format!("{prefix}_{project}.json"))
 }
 
 fn cache_path(prefix: &str, project: &str) -> PathBuf {
-    cache_dir().join(cache_file_name(prefix, project))
+    cache_file(&cache_dir(), prefix, project)
 }
 
 fn read_cache_file<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
@@ -63,11 +64,15 @@ fn read_cache_file<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
 }
 
 fn write_cache_file(path: &Path, value: &impl serde::Serialize) -> Result<()> {
+    let json = serde_json::to_string(value).context("Failed to serialize cache")?;
+    write_cache_text(path, &json)
+}
+
+fn write_cache_text(path: &Path, json: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("Failed to create cache directory: {}", dir.display()))?;
     }
-    let json = serde_json::to_string(value).context("Failed to serialize cache")?;
     std::fs::write(path, json)
         .with_context(|| format!("Failed to write cache file: {}", path.display()))
 }
@@ -112,13 +117,18 @@ pub fn load_my_email(project: &str) -> Option<String> {
     read_cache_file(&cache_path(MY_EMAIL_PREFIX, project))
 }
 
-pub fn save_my_email(project: &str, email: &str) -> Result<()> {
-    write_cache_file(&cache_path(MY_EMAIL_PREFIX, project), &email)
+/// Remembers `email` for later refreshes. Not being able to write the file only costs the next
+/// refresh a `jira me`, so that's a warning rather than an error that fails this one.
+pub fn remember_my_email(project: &str, email: &str) {
+    if let Err(e) = write_cache_file(&cache_path(MY_EMAIL_PREFIX, project), &email) {
+        eprintln!("Warning: failed to remember your email: {:#}", e);
+    }
 }
 
-/// Fills in what only a ticket's detail has: description, reporter and activity. Everything the
-/// list search returns (labels, assignee, epic, parent) stays as that search read it, since
-/// the cache is never invalidated and would bring back what has since changed in Jira.
+/// Fills in what only a ticket's detail has: description, reporter and activity, and whether
+/// the detail was loaded, as it was stored. Everything the list search returns (labels,
+/// assignee, epic, parent) stays as that search read it, since the cache is never invalidated
+/// and would bring back what has since changed in Jira.
 fn hydrate_ticket_from_details_cache(
     ticket: &mut Ticket,
     details_by_key: &HashMap<String, Ticket>,
@@ -127,9 +137,7 @@ fn hydrate_ticket_from_details_cache(
         return;
     };
 
-    // Only mark fully loaded if the cached detail has reporter (added later).
-    // Old cache entries missing reporter will be re-fetched once, then stay cached.
-    ticket.detail_loaded = detail.reporter.is_some();
+    ticket.detail_loaded = detail.detail_loaded;
     ticket.description = detail.description.clone();
     if detail.reporter.is_some() {
         ticket.reporter = detail.reporter.clone();
@@ -147,6 +155,9 @@ pub struct DetailCache {
     changed: mpsc::UnboundedSender<()>,
 }
 
+/// How long details must stop changing before the writer saves them.
+const FLUSH_AFTER_IDLE: Duration = Duration::from_millis(750);
+
 impl DetailCache {
     /// Read the details cache file once, and start the task that writes it back.
     pub fn spawn(project: &str) -> Self {
@@ -155,8 +166,14 @@ impl DetailCache {
             cache_path(DETAILS_CACHE_PREFIX, project),
             details.by_key.clone(),
             changed,
+            FLUSH_AFTER_IDLE,
         ));
         details
+    }
+
+    /// A cache with nothing in it and no writer, so what's recorded stays in memory only.
+    pub fn in_memory() -> Self {
+        Self::new(HashMap::new()).0
     }
 
     fn new(by_key: HashMap<String, Ticket>) -> (Self, mpsc::UnboundedReceiver<()>) {
@@ -169,8 +186,7 @@ impl DetailCache {
     }
 
     /// Keep a freshly fetched detail. False when the writer has stopped, so it won't reach disk.
-    pub fn record(&self, mut detail: Ticket) -> bool {
-        detail.detail_loaded = true;
+    pub fn record(&self, detail: Ticket) -> bool {
         lock_details(&self.by_key).insert(detail.key.clone(), detail);
         self.changed.send(()).is_ok()
     }
@@ -196,17 +212,29 @@ fn lock_details(
     by_key.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Write the details once changes go quiet, and once more when the app closes the channel.
+/// Serializes `by_key` and hands the text to `write`. The lock is held only while serializing,
+/// so recording and hydrating, which the UI waits on, never wait for the disk.
+fn flush_details(
+    by_key: &Mutex<HashMap<String, Ticket>>,
+    write: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    let json = serde_json::to_string(&*lock_details(by_key))
+        .context("Failed to serialize the details cache")?;
+    write(&json)
+}
+
+/// Write the details once they've stayed unchanged for `idle`, and once more when the app closes
+/// the channel.
 async fn write_details(
     path: PathBuf,
     by_key: Arc<Mutex<HashMap<String, Ticket>>>,
     mut changed: mpsc::UnboundedReceiver<()>,
+    idle: Duration,
 ) {
-    let flush_after_idle = Duration::from_millis(750);
     while changed.recv().await.is_some() {
-        while let Ok(Some(())) = timeout(flush_after_idle, changed.recv()).await {}
-        if let Err(e) = write_cache_file(&path, &*lock_details(&by_key)) {
-            eprintln!("Warning: failed to persist details cache: {}", e);
+        while let Ok(Some(())) = timeout(idle, changed.recv()).await {}
+        if let Err(e) = flush_details(&by_key, |json| write_cache_text(&path, json)) {
+            eprintln!("Warning: failed to persist details cache: {:#}", e);
         }
     }
 }
@@ -217,6 +245,22 @@ mod tests {
 
     fn test_ticket(key: &str, status: &str) -> Ticket {
         Ticket::for_test(key, status)
+    }
+
+    /// Removes the cache files a test wrote, even when it fails.
+    struct Remove(Vec<PathBuf>);
+
+    impl Drop for Remove {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    /// A project name no other test or test run shares.
+    fn project(name: &str) -> String {
+        format!("{name}{}", std::process::id())
     }
 
     #[test]
@@ -263,6 +307,7 @@ mod tests {
         stale.parent_key = Some("AMP-7".into());
         stale.description = Some("Body".into());
         stale.reporter = Some("Pat".into());
+        stale.detail_loaded = true;
         let cached = HashMap::from([("AMP-1".to_string(), stale)]);
 
         hydrate_ticket_from_details_cache(&mut fresh, &cached);
@@ -283,56 +328,103 @@ mod tests {
     }
 
     #[test]
-    fn my_email_is_remembered_per_project() {
-        let _ = std::fs::remove_file(cache_path(MY_EMAIL_PREFIX, "EMAILTEST_A"));
-        assert_eq!(load_my_email("EMAILTEST_A"), None);
-        save_my_email("EMAILTEST_A", "me@example.com").unwrap();
+    fn a_cached_detail_counts_as_loaded_as_it_was_stored_whether_or_not_it_has_a_reporter() {
+        // Jira has no reporter for a deleted user, and such a ticket must not be fetched again
+        // on every refresh; an entry stored before its detail was read isn't loaded either.
+        let mut no_reporter = test_ticket("AMP-1", "To Do");
+        no_reporter.detail_loaded = true;
+        let mut not_loaded = test_ticket("AMP-2", "To Do");
+        not_loaded.reporter = Some("Pat".into());
+        let cached = HashMap::from([
+            ("AMP-1".to_string(), no_reporter),
+            ("AMP-2".to_string(), not_loaded),
+        ]);
 
-        assert_eq!(
-            load_my_email("EMAILTEST_A").as_deref(),
-            Some("me@example.com")
-        );
-        assert_eq!(load_my_email("EMAILTEST_B"), None);
+        let mut one = test_ticket("AMP-1", "To Do");
+        hydrate_ticket_from_details_cache(&mut one, &cached);
+        let mut two = test_ticket("AMP-2", "To Do");
+        hydrate_ticket_from_details_cache(&mut two, &cached);
+
+        assert!(one.detail_loaded);
+        assert!(!two.detail_loaded);
+    }
+
+    #[test]
+    fn my_email_is_remembered_per_project() {
+        let (a, b) = (project("EMAIL_A"), project("EMAIL_B"));
+        let _remove = Remove(vec![cache_path(MY_EMAIL_PREFIX, &a)]);
+        assert_eq!(load_my_email(&a), None);
+        remember_my_email(&a, "me@example.com");
+
+        assert_eq!(load_my_email(&a).as_deref(), Some("me@example.com"));
+        assert_eq!(load_my_email(&b), None);
+    }
+
+    #[test]
+    fn an_email_that_cannot_be_saved_is_a_warning_not_a_failure() {
+        // A file stands where the cache directory for this project would be made.
+        let project = project("BLOCKED");
+        let blocker = cache_path(MY_EMAIL_PREFIX, &format!("{project}-dir"));
+        let _remove = Remove(vec![blocker.clone()]);
+        std::fs::create_dir_all(blocker.parent().unwrap()).unwrap();
+        std::fs::write(&blocker, "in the way").unwrap();
+        let unwritable = format!("{project}-dir.json/x");
+
+        remember_my_email(&unwritable, "me@example.com");
+
+        assert_eq!(load_my_email(&unwritable), None);
     }
 
     #[test]
     fn caches_live_in_the_lazyjira_dir_under_home_per_project() {
         let dir = cache_dir_in(Some("/home/me".into()));
         assert_eq!(dir, PathBuf::from("/home/me/.cache/lazyjira"));
+        // Without a HOME they fall back to the temp dir, still under lazyjira.
+        assert_eq!(
+            cache_dir_in(None),
+            std::env::temp_dir().join("lazyjira").as_path()
+        );
 
-        for prefix in [DETAILS_CACHE_PREFIX, EPICS_CACHE_PREFIX, MY_EMAIL_PREFIX] {
-            assert_eq!(
-                cache_path(prefix, "AMP").parent(),
-                Some(cache_dir().as_path())
-            );
-            assert_ne!(cache_path(prefix, "AMP"), cache_path(prefix, "DEMO"));
-        }
+        assert_eq!(
+            cache_file(&dir, EPICS_CACHE_PREFIX, "AMP"),
+            PathBuf::from("/home/me/.cache/lazyjira/lazyjira_epics_cache_AMP.json")
+        );
+        assert_eq!(
+            cache_file(&dir, DETAILS_CACHE_PREFIX, "AMP"),
+            PathBuf::from("/home/me/.cache/lazyjira/lazyjira_ticket_details_cache_AMP.json")
+        );
+        assert_eq!(
+            cache_file(&dir, MY_EMAIL_PREFIX, "DEMO"),
+            PathBuf::from("/home/me/.cache/lazyjira/lazyjira_my_email_DEMO.json")
+        );
     }
 
     #[test]
     fn an_old_temp_dir_epics_cache_is_ignored() {
+        let project = project("OLDTMP");
         let epics = vec![Epic {
             key: "OLDTMP-1".into(),
             summary: "Old".into(),
             children: vec![],
         }];
-        let old = std::env::temp_dir().join("lazyjira_epics_cache_OLDTMP.json");
+        // Where the epics cache lived before it moved: straight in the system temp dir.
+        let old = std::env::temp_dir().join(format!("lazyjira_epics_cache_{project}.json"));
+        let _remove = Remove(vec![old.clone(), cache_path(EPICS_CACHE_PREFIX, &project)]);
         std::fs::write(&old, serde_json::to_string(&epics).unwrap()).unwrap();
-        let _ = std::fs::remove_file(cache_path(EPICS_CACHE_PREFIX, "OLDTMP"));
 
-        assert!(load_epics_cache("OLDTMP").is_empty());
+        assert!(load_epics_cache(&project).is_empty());
 
-        save_epics_cache("OLDTMP", &epics).unwrap();
-        assert_eq!(load_epics_cache("OLDTMP")[0].key, "OLDTMP-1");
-        let _ = std::fs::remove_file(old);
+        save_epics_cache(&project, &epics).unwrap();
+        assert_eq!(load_epics_cache(&project)[0].key, "OLDTMP-1");
     }
 
     #[test]
     fn a_refresh_hydrates_from_details_recorded_in_memory() {
-        let (details, _changed) = DetailCache::new(HashMap::new());
+        let details = DetailCache::in_memory();
         let mut detail = test_ticket("DEMO-1", "In Progress");
         detail.description = Some("Body".into());
         detail.reporter = Some("Sam Doe".into());
+        detail.detail_loaded = true;
         details.record(detail);
 
         let mut cache = Cache {
@@ -357,5 +449,83 @@ mod tests {
             // The list read's status stands; a detail never overrides it here.
             assert_eq!(ticket.status, "To Do");
         }
+    }
+
+    #[test]
+    fn recording_and_hydrating_never_wait_for_the_disk() {
+        let (details, _changed) = DetailCache::new(HashMap::new());
+        details.record(test_ticket("DEMO-1", "To Do"));
+
+        let mut written = None;
+        flush_details(&details.by_key, |json| {
+            // The writer is mid-write here: the lock must already be free.
+            assert!(
+                details.by_key.try_lock().is_ok(),
+                "the lock is held while writing"
+            );
+            written = Some(json.to_string());
+            Ok(())
+        })
+        .unwrap();
+
+        let saved: HashMap<String, Ticket> = serde_json::from_str(&written.unwrap()).unwrap();
+        assert_eq!(saved.keys().collect::<Vec<_>>(), ["DEMO-1"]);
+    }
+
+    fn saved_keys(path: &Path) -> Vec<String> {
+        let mut keys: Vec<String> = read_cache_file::<HashMap<String, Ticket>>(path)
+            .unwrap_or_default()
+            .into_keys()
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    #[tokio::test]
+    async fn details_are_saved_once_they_stop_changing() {
+        let path = cache_path(DETAILS_CACHE_PREFIX, &project("QUIET"));
+        let _remove = Remove(vec![path.clone()]);
+        let (details, changed) = DetailCache::new(HashMap::new());
+        let writer = tokio::spawn(write_details(
+            path.clone(),
+            details.by_key.clone(),
+            changed,
+            Duration::from_millis(30),
+        ));
+
+        details.record(test_ticket("DEMO-1", "To Do"));
+        details.record(test_ticket("DEMO-2", "To Do"));
+        // Not closed: the save has to come from the quiet period alone.
+        let mut waited = 0;
+        while saved_keys(&path).len() < 2 && waited < 100 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            waited += 1;
+        }
+
+        assert_eq!(saved_keys(&path), ["DEMO-1", "DEMO-2"]);
+        writer.abort();
+    }
+
+    #[tokio::test]
+    async fn details_are_saved_when_the_app_closes_even_before_they_go_quiet() {
+        let path = cache_path(DETAILS_CACHE_PREFIX, &project("CLOSING"));
+        let _remove = Remove(vec![path.clone()]);
+        let (details, changed) = DetailCache::new(HashMap::new());
+        // A quiet period far longer than the test: only closing can trigger this save.
+        let writer = tokio::spawn(write_details(
+            path.clone(),
+            details.by_key.clone(),
+            changed,
+            Duration::from_secs(3600),
+        ));
+
+        details.record(test_ticket("DEMO-1", "To Do"));
+        drop(details);
+        tokio::time::timeout(Duration::from_secs(5), writer)
+            .await
+            .expect("the writer stops when the channel closes")
+            .unwrap();
+
+        assert_eq!(saved_keys(&path), ["DEMO-1"]);
     }
 }

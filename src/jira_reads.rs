@@ -12,7 +12,7 @@ use crate::cache::{Cache, Epic, TeamMember, Ticket};
 use crate::config::AppConfig;
 use crate::jira_client::{my_email, name_from_email};
 use crate::jira_rest::{is_key, jql_quote, key_list, KEYS_PER_SEARCH};
-use crate::local_cache::{load_epics_cache, save_epics_cache};
+use crate::local_cache::{load_epics_cache, save_epics_cache, DetailCache};
 use crate::subtasks;
 
 const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
@@ -413,7 +413,11 @@ pub async fn refresh_epics_cache(config: &AppConfig) -> Result<Vec<Epic>> {
     Ok(epics)
 }
 
-async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result<Cache> {
+async fn fetch_with_scope(
+    config: &AppConfig,
+    scope: TicketFetchScope,
+    details: &DetailCache,
+) -> Result<Cache> {
     let mut team_members = config.team_members();
 
     let project = &config.jira.project;
@@ -434,22 +438,26 @@ async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result
     attach_epics_to_tickets(&mut my_tickets, &mut team_tickets, &epics);
     reconcile_epic_child_statuses(&mut epics, &my_tickets, &team_tickets);
 
-    Ok(Cache {
+    let mut cache = Cache {
         my_tickets,
         team_tickets,
         epics,
         team_members,
-    })
+    };
+    details.hydrate(&mut cache);
+    Ok(cache)
 }
 
-/// Fetch active (non-Done) tickets first for fast startup accuracy.
-pub async fn fetch_active_only(config: &AppConfig) -> Result<Cache> {
-    fetch_with_scope(config, TicketFetchScope::ActiveOnly).await
+/// Fetch active (non-Done) tickets first for fast startup accuracy. The result already holds
+/// the details in `details`.
+pub async fn fetch_active_only(config: &AppConfig, details: &DetailCache) -> Result<Cache> {
+    fetch_with_scope(config, TicketFetchScope::ActiveOnly, details).await
 }
 
-/// Fetch active + recently done tickets for a complete cache refresh.
-pub async fn fetch_all(config: &AppConfig) -> Result<Cache> {
-    fetch_with_scope(config, TicketFetchScope::ActiveAndRecentDone).await
+/// Fetch active + recently done tickets for a complete cache refresh, with the details in
+/// `details` already filled in.
+pub async fn fetch_all(config: &AppConfig, details: &DetailCache) -> Result<Cache> {
+    fetch_with_scope(config, TicketFetchScope::ActiveAndRecentDone, details).await
 }
 
 /// Run an arbitrary JQL query and return matching tickets.
