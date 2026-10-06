@@ -56,6 +56,13 @@ pub async fn issue(key: &str, fields: &[&str]) -> Result<Ticket> {
     shared()?.issue(key, fields).await
 }
 
+/// Whether lazyjira can reach Jira at all: jira-cli's config is readable and `JIRA_API_TOKEN` is
+/// set. The error says which is missing, so a read checks it first and reports that instead of
+/// whatever a `jira` process says about the same problem.
+pub fn ready() -> Result<()> {
+    shared().map(|_| ())
+}
+
 /// The client for this session, built on first use. `JIRA_API_TOKEN` can't change while the app
 /// runs, so a setup error (such as a missing token) is kept and reported on every call.
 fn shared() -> Result<&'static JiraRest> {
