@@ -1,6 +1,6 @@
 //! The Jira REST calls lazyjira makes itself: the paginated search every list read and the
-//! detail prefetch use, listing a ticket's transitions with their fields, and sending one
-//! transition by id.
+//! detail prefetch use, reading one issue, listing a ticket's transitions with their fields, and
+//! sending one transition by id.
 //!
 //! Uses jira-cli's `server`, `auth_type`, `login` and `epic.link` settings and the
 //! `JIRA_API_TOKEN` environment variable, so no extra setup is needed where jira-cli already
@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::cache::Ticket;
-use crate::jira_issue::parse_search_page;
+use crate::jira_issue::{parse_search_page, ticket_from_issue};
 use crate::transitions::{parse_transitions, Transition};
 
 /// Lists the transitions Jira offers for `key`, with their fields.
@@ -36,6 +36,13 @@ pub async fn transition(key: &str, id: &str, resolution_id: Option<&str>) -> Res
 /// one.
 pub async fn search(jql: &str, fields: &[&str]) -> Result<Vec<Ticket>> {
     shared()?.search(jql, fields).await
+}
+
+/// The ticket `key`, with `fields` and the Epic Link filled in as for `search`. Unlike a search,
+/// which reads Jira's index and can lag behind a change made a moment ago (a move), this reads
+/// the issue itself, so it's the read for a ticket the user just opened or moved.
+pub async fn issue(key: &str, fields: &[&str]) -> Result<Ticket> {
+    shared()?.issue(key, fields).await
 }
 
 /// The client for this session, built on first use. `JIRA_API_TOKEN` can't change while the app
@@ -203,6 +210,20 @@ impl JiraRest {
         Ok(())
     }
 
+    async fn issue(&self, key: &str, fields: &[&str]) -> Result<Ticket> {
+        let epic_link = epic_link_field();
+        let fields: Vec<&str> = fields.iter().copied().chain(epic_link.as_deref()).collect();
+        let response = self
+            .request(Method::GET, &issue_path(key, &fields)?)
+            .send()
+            .await
+            .context("Couldn't reach Jira")?;
+        let json: Value = serde_json::from_str(&successful_body(response).await?)
+            .context("Jira's answer isn't JSON")?;
+        ticket_from_issue(&json, epic_link.as_deref())
+            .with_context(|| format!("Jira's answer for {key} has no key"))
+    }
+
     async fn search(&self, jql: &str, fields: &[&str]) -> Result<Vec<Ticket>> {
         let epic_link = epic_link_field();
         let fields: Vec<&str> = fields.iter().copied().chain(epic_link.as_deref()).collect();
@@ -273,6 +294,14 @@ pub fn key_list(keys: &[String]) -> Option<String> {
 /// change the query.
 pub fn jql_quote(text: &str) -> String {
     format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// The path, under the API root, that reads `key` with just `fields`.
+fn issue_path(key: &str, fields: &[&str]) -> Result<String> {
+    if !is_key(key) {
+        bail!("{key:?} isn't a ticket key");
+    }
+    Ok(format!("issue/{key}?fields={}", fields.join(",")))
 }
 
 fn search_body(jql: &str, fields: &[&str], start_at: usize) -> Value {
@@ -486,6 +515,18 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.to_string(), "Jira answered 503.");
+    }
+
+    #[test]
+    fn one_issue_is_read_by_key_with_the_fields_asked_for() {
+        assert_eq!(
+            issue_path("DEMO-1", &["summary", "status", "customfield_10857"]).unwrap(),
+            "issue/DEMO-1?fields=summary,status,customfield_10857"
+        );
+        // The key goes into a URL path, so anything but a key is refused.
+        for key in ["DEMO-1/transitions", "../DEMO-1", "DEMO 1", ""] {
+            assert!(issue_path(key, &["summary"]).is_err(), "{key:?}");
+        }
     }
 
     #[test]

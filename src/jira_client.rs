@@ -11,7 +11,6 @@ use tokio::time::timeout;
 
 use crate::cache::{Cache, Epic, TeamMember, Ticket};
 use crate::config::AppConfig;
-use crate::jira_issue::ticket_from_issue;
 use crate::jira_rest::{is_key, jql_quote, key_list, KEYS_PER_SEARCH};
 use crate::subtasks;
 
@@ -116,24 +115,19 @@ async fn load_subtasks<'a>(tickets: impl Iterator<Item = &'a Ticket>) -> Result<
     Ok(found)
 }
 
-/// Fetch full ticket detail as JSON via `jira issue view KEY --raw`.
-/// Returns the ticket with description populated.
-pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
-    let output = run_cmd("jira", &["issue", "view", key, "--raw"]).await?;
-    let json: serde_json::Value = serde_json::from_str(&output)
-        .with_context(|| format!("Failed to parse JSON for {}", key))?;
-    let mut ticket = ticket_from_issue(&json, crate::jira_rest::epic_link_field().as_deref())
-        .with_context(|| format!("No issue in Jira's answer for {}", key))?;
-    ticket.detail_loaded = true;
-    Ok(ticket)
-}
-
 /// What a detail adds to a list row's fields: what the detail overlay shows. `enrich_ticket`
 /// copies the rest over the row.
 const DETAIL_ONLY_FIELDS: &[&str] = &["reporter", "description", "comment"];
 
-/// Reads the details of `keys` over Jira's REST search, a chunk of tickets per request instead
-/// of a `jira issue view` process each. See `read_details`.
+/// Reads one ticket's detail fresh from Jira: when it's opened, and after a move. It reads the
+/// issue itself rather than searching, so it can't miss a change made a moment ago.
+pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
+    let fields = [LIST_FIELDS, DETAIL_ONLY_FIELDS].concat();
+    Ok(as_detail(crate::jira_rest::issue(key, &fields).await?))
+}
+
+/// Reads the details of `keys` over Jira's REST search, a chunk of tickets per request. See
+/// `read_details`.
 pub async fn fetch_ticket_details(
     keys: &[String],
     deliver: impl FnMut(String, Result<Ticket, String>),

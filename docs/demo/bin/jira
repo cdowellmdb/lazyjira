@@ -2,12 +2,11 @@
 """Fake `jira` CLI that serves made-up tickets for recording the README demo.
 
 Only covers the subcommands and output formats lazyjira calls in
-src/jira_client.rs: `me` and `issue view`. Writes (comment, assign, edit, create) succeed
-without changing anything. Lists, epics and moves go through Jira's REST API, which
+src/jira_client.rs: `me`. Writes (comment, assign, edit, create) succeed without changing
+anything. Ticket reads (lists, epics, details) and moves go through Jira's REST API, which
 fake_jira_rest.py serves from this file's data.
 """
 
-import json
 import re
 import sys
 
@@ -56,6 +55,9 @@ SUBTASKS = [
     ("DEMO-113", "In Progress", "priya.shah@example.com", "Wire the address lookup API", ["checkout", "frontend"], "DEMO-103"),
     ("DEMO-114", "In Progress", "sam.chen@example.com", "Reproduce the rounding bug on staging", ["billing"], "DEMO-102"),
 ]
+
+# The Assigned Teams value of every ticket; docs/demo/config.toml's `jira.team_name`.
+TEAM_NAME = "Platform Team"
 
 # The id of the Epic Link custom field. record.sh puts it in the demo's jira-cli config
 # (`epic.link`), which is where lazyjira reads it from.
@@ -140,7 +142,13 @@ def matches(ticket, clause):
     if m:
         return ticket["epic"] == m.group(1).upper()
 
-    # Anything else ("Assigned Teams", updated/created windows, priority) matches everything.
+    # Every ticket here belongs to the team in docs/demo/config.toml (`jira.team_name`), so the
+    # Unassigned tab is empty if the config asks for another one.
+    m = re.fullmatch(r'"assigned teams"\s*=\s*"?([^"]+?)"?', clause, re.I)
+    if m:
+        return m.group(1) == TEAM_NAME
+
+    # Anything else (updated/created windows, priority) matches everything.
     return True
 
 
@@ -210,31 +218,9 @@ def base_fields(t):
 
 
 def issue_payload(t):
-    """One issue as `issue view --raw` shows it: every field, and the changelog."""
+    """One issue as Jira's REST API shows it: every field. The changelog is left out, as Jira
+    leaves it out unless asked for."""
     reporter = "priya.shah@example.com" if t["assignee"] != "priya.shah@example.com" else ME
-    histories = [
-        {
-            "created": "2026-09-15T09:12:00.000+0000",
-            "author": person(reporter),
-            "items": [{"field": "status", "fromString": "Needs Triage", "toString": "Ready for Work"}],
-        }
-    ]
-    if t["assignee"]:
-        histories.append(
-            {
-                "created": "2026-09-16T16:40:00.000+0000",
-                "author": person(reporter),
-                "items": [{"field": "assignee", "fromString": "", "toString": TEAM[t["assignee"]]}],
-            }
-        )
-    if t["status"] not in ("Needs Triage", "Ready for Work", "To Do"):
-        histories.append(
-            {
-                "created": "2026-09-18T10:05:00.000+0000",
-                "author": person(t["assignee"] or reporter),
-                "items": [{"field": "status", "fromString": "Ready for Work", "toString": t["status"]}],
-            }
-        )
     comments = [
         {
             "created": "2026-09-22T13:30:00.000+0000",
@@ -274,22 +260,12 @@ def issue_payload(t):
             ),
             "comment": {"comments": comments},
         },
-        "changelog": {"histories": histories},
     }
-
-
-def issue_view(key):
-    rows = [t for t in all_tickets() if t["key"] == key]
-    if not rows:
-        sys.exit(f"issue {key} not found")
-    print(json.dumps(issue_payload(rows[0])))
 
 
 def main(args):
     if args == ["me"]:
         print(ME)
-    elif args[:2] == ["issue", "view"] and len(args) >= 3:
-        issue_view(args[2])
     elif args[:2] == ["issue", "create"]:
         print("Issue DEMO-500 created")
     elif args[:2] in (["issue", "assign"], ["issue", "edit"], ["issue", "comment"]):

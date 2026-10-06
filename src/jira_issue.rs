@@ -1,6 +1,8 @@
-//! Jira's issue JSON as a [`Ticket`]. A search result and `jira issue view --raw` share one shape
-//! (`{key, fields: {..}}`, the search holding only the fields it asked for), so one pure parser
-//! reads both.
+//! Jira's issue JSON as a [`Ticket`]. A search result and a single issue share one shape
+//! (`{key, fields: {..}}`, holding only the fields asked for), so one pure parser reads both.
+//! Neither asks for the changelog (nor did `jira issue view --raw`, which this replaced), so
+//! Activity holds comments only; field changes appear for an issue that carries
+//! `changelog.histories`.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
