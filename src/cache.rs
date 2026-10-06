@@ -233,6 +233,10 @@ pub enum ActivityKind {
     Comment { body: String },
 }
 
+/// The Team row that holds tickets nobody has taken, and the email that stands for it.
+pub const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
+pub const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
+
 /// What a ticket's status reads as when Jira's answer has none. It isn't a real status, so it
 /// shows plainly instead of passing as To Do, and a detail read never copies it over a real one.
 pub const UNKNOWN_STATUS: &str = "Unknown";
@@ -260,8 +264,8 @@ pub struct Ticket {
     #[serde(default)]
     pub parent_key: Option<String>,
     /// Jira's `updated` timestamp as Jira sends it (`2026-09-30T10:23:20.000+0000`). Filled by
-    /// the list search; caches from before it load without one. Nothing shows it yet: the
-    /// Updated column in the list-readability spec (#54) reads it.
+    /// the list search; caches from before it load without one. Nothing shows it yet: it is kept
+    /// for an Updated column in the lists.
     #[serde(default)]
     pub updated: Option<String>,
     #[serde(default)]
@@ -325,6 +329,28 @@ pub fn normalize_email(email: &str) -> String {
     email.trim().to_lowercase()
 }
 
+/// A display name made from an email's local part: `alex.rivera@…` is `Alex Rivera`.
+pub fn name_from_email(email: &str) -> String {
+    let local = email.split('@').next().unwrap_or(email);
+    local
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut out = String::new();
+                    out.push(first.to_ascii_uppercase());
+                    out.push_str(chars.as_str());
+                    out
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Team member info loaded from team.yml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamMember {
@@ -355,6 +381,16 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::{normalize_email, StatusRules, Ticket};
+
+    #[test]
+    fn a_name_is_made_from_the_local_part_of_an_email() {
+        assert_eq!(
+            super::name_from_email("alex.rivera@example.com"),
+            "Alex Rivera"
+        );
+        assert_eq!(super::name_from_email("sam@example.com"), "Sam");
+        assert_eq!(super::name_from_email("j..doe@example.com"), "J Doe");
+    }
 
     #[test]
     fn emails_are_compared_without_case_or_padding() {

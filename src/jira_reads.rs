@@ -12,15 +12,18 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 
 use crate::bounded::for_each_bounded;
-use crate::cache::{Cache, Epic, TeamMember, Ticket};
+use crate::cache::{
+    name_from_email, normalize_email, Cache, Epic, TeamMember, Ticket, UNASSIGNED_TEAM_EMAIL,
+    UNASSIGNED_TEAM_NAME,
+};
 use crate::config::AppConfig;
-use crate::jira_client::{my_email, name_from_email};
-use crate::jira_rest::{is_key, jql_quote, key_list, KEYS_PER_SEARCH};
-use crate::local_cache::{load_epics_cache, save_epics_cache, DetailCache};
+use crate::jira_client::fetch_my_email;
+use crate::jira_rest::describe;
+use crate::jql::{self, is_key, key_list, KEYS_PER_SEARCH};
+use crate::local_cache::{
+    load_epics_cache, load_my_email, remember_my_email, save_epics_cache, DetailCache,
+};
 use crate::subtasks;
-
-const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
-const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
 
 #[derive(Debug, Clone, Copy)]
 enum TicketFetchScope {
@@ -123,8 +126,14 @@ const DETAIL_ONLY_FIELDS: &[&str] = &["reporter", "description", "comment"];
 /// Reads one ticket's detail fresh from Jira: when it's opened, and after a move. It reads the
 /// issue itself rather than searching, so it can't miss a change made a moment ago.
 pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
-    let fields = [LIST_FIELDS, DETAIL_ONLY_FIELDS].concat();
-    Ok(as_detail(crate::jira_rest::issue(key, &fields).await?))
+    Ok(as_detail(
+        crate::jira_rest::issue(key, &detail_fields()).await?,
+    ))
+}
+
+/// What a detail read asks for: the list fields and the detail-only ones.
+fn detail_fields() -> Vec<&'static str> {
+    [LIST_FIELDS, DETAIL_ONLY_FIELDS].concat()
 }
 
 /// Reads the details of `keys` over Jira's REST search, a chunk of tickets per request. See
@@ -133,7 +142,7 @@ pub async fn fetch_ticket_details(
     keys: &[String],
     deliver: impl FnMut(String, Result<Ticket, String>),
 ) {
-    let fields = [LIST_FIELDS, DETAIL_ONLY_FIELDS].concat();
+    let fields = detail_fields();
     read_details(
         keys,
         |jql| {
@@ -191,7 +200,7 @@ async fn read_details<S, F>(
             }
         }
         Err(e) => {
-            let error = format!("{:#}", e);
+            let error = describe(&e);
             for key in chunks[at] {
                 deliver(key.clone(), Err(error.clone()));
             }
@@ -220,7 +229,7 @@ const LIST_FIELDS: &[&str] = &[
 fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchScope) -> String {
     let assignees = assignee_emails
         .iter()
-        .map(|email| jql_quote(email))
+        .map(|email| jql::quote(email))
         .collect::<Vec<_>>()
         .join(", ");
     let active = config.active_status_clause();
@@ -236,8 +245,8 @@ fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchSco
         "project = {} AND ((assignee in ({assignees}) AND {statuses}) \
          OR (assignee is EMPTY AND \"Assigned Teams\" = {} AND status in {active})) \
          ORDER BY key",
-        jql_quote(&config.jira.project),
-        jql_quote(&config.jira.team_name)
+        jql::quote(&config.jira.project),
+        jql::quote(&config.jira.team_name)
     )
 }
 
@@ -332,7 +341,7 @@ fn epic_children_jqls(project: &str, epic_keys: &[String], has_epic_link: bool) 
             };
             format!(
                 "project = {} AND ({link}parent in ({list})) ORDER BY key",
-                jql_quote(project)
+                jql::quote(project)
             )
         })
         .collect()
@@ -348,7 +357,7 @@ fn scoped_jql(project: &str, jql: &str) -> String {
         Some(at) => (jql[..at].trim(), jql[at..].trim()),
         None => (jql.trim(), "ORDER BY created DESC"),
     };
-    let project = jql_quote(project);
+    let project = jql::quote(project);
     if condition.is_empty() {
         format!("project = {project} {order}")
     } else {
@@ -361,7 +370,7 @@ fn scoped_jql(project: &str, jql: &str) -> String {
 fn epics_jql(project: &str) -> String {
     format!(
         "project = {} AND issuetype = Epic ORDER BY key",
-        jql_quote(project)
+        jql::quote(project)
     )
 }
 
@@ -484,6 +493,33 @@ pub async fn refresh_epics_cache(config: &AppConfig) -> Result<Vec<Epic>> {
     let epics = fetch_epics(config).await?;
     save_epics_cache(&config.jira.project, &epics)?;
     Ok(epics)
+}
+
+/// Asks `jira me` for the current user's email, and remembers it for later refreshes.
+async fn refresh_my_email(project: &str) -> Result<String> {
+    let email = normalize_email(&fetch_my_email().await?);
+    remember_my_email(project, &email);
+    Ok(email)
+}
+
+/// The remembered email, so a refresh doesn't wait on `jira me`; asks Jira only the first time.
+async fn my_email(project: &str) -> Result<String> {
+    match load_my_email(project) {
+        Some(email) => Ok(email),
+        None => refresh_my_email(project).await,
+    }
+}
+
+/// Keeps the remembered email current for the next refresh, in the background; a failure keeps
+/// the old one. With none remembered the first refresh asks `jira me` itself, so asking here too
+/// would run it twice at once.
+pub fn keep_my_email_current(project: &str) {
+    if load_my_email(project).is_some() {
+        let project = project.to_string();
+        tokio::spawn(async move {
+            let _ = refresh_my_email(&project).await;
+        });
+    }
 }
 
 async fn fetch_with_scope(

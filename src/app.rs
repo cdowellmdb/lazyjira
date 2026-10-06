@@ -1,11 +1,9 @@
 use crate::bulk_actions::BulkState;
-use crate::cache::Cache;
+use crate::cache::{Cache, UNASSIGNED_TEAM_EMAIL, UNASSIGNED_TEAM_NAME};
 use crate::subtasks::{nest, Family};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
-const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
-const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
 const NO_EPIC_KEY: &str = "NO-EPIC";
 const NO_EPIC_SUMMARY: &str = "No Epic";
 

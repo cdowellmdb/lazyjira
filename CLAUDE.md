@@ -30,11 +30,12 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/theme.rs** — Color themes: presets, custom themes from `[themes]`, and the pass that recolors a drawn frame
 - **src/mouse.rs** — Hit targets registered by renderers and mouse event handling
 - **src/setup.rs** — First-run setup screen (project key, team name); imports the legacy `team.yml` roster
-- **src/jira_client.rs** — The `jira` CLI: `jira me` and the remembered email (`my_email`), creating tickets, comments, assignment and field edits, and a ticket's browser URL
-- **src/jira_reads.rs** — What a refresh reads from Jira, all through `jira_rest`: the list JQL and bucketing one search into My Work/Team/Unassigned, saved filters, epics with their children and sub-tasks, and ticket details (`fetch_ticket_detail` for one fresh read, `fetch_ticket_details` for batched prefetch)
+- **src/jira_client.rs** — The `jira` CLI: `jira me`, creating tickets, comments, assignment and field edits
+- **src/jira_reads.rs** — What a refresh reads from Jira, all through `jira_rest`: the list JQL and bucketing one search into My Work/Team/Unassigned, saved filters, epics with their children and sub-tasks, and ticket details (`fetch_ticket_detail` for one fresh read, `fetch_ticket_details` for batched prefetch), and the current user's email (`my_email`: remembered through `local_cache`, asked of `jira me` only when none is)
 - **src/local_cache.rs** — The files kept between runs in `~/.cache/lazyjira/` (snapshot, epics, details, the current user's email) and `DetailCache`, the in-memory copy of the details that list reads hydrate from
 - **src/bounded.rs** — Runs tasks a few at a time (`for_each_bounded`): the reads' searches and the bulk actions' Jira calls share it
-- **src/jira_rest.rs** — Jira REST client using jira-cli's config and `JIRA_API_TOKEN`: the paginated `search` (JQL + fields in, tickets out), `issue` (one issue, read itself rather than through the search index), and moves (list a ticket's transitions, send one by id)
+- **src/jira_rest.rs** — Jira REST client using jira-cli's config and `JIRA_API_TOKEN`: the paginated `search` (JQL + fields in, tickets out), `issue` (one issue, read itself rather than through the search index), moves (list a ticket's transitions, send one by id), and a ticket's browser URL
+- **src/jql.rs** — Building JQL safely: `quote` for a value, `key_list` and `is_key` so only ticket-key-shaped text reaches a list, and `KEYS_PER_SEARCH`
 - **src/jira_issue.rs** — Pure parser from Jira's issue JSON (`{key, fields}`: a search result or a single issue) to a `Ticket`, including comments as activity
 - **src/subtasks.rs** — Sub-task hierarchy: `nest` orders rows so a sub-task follows its parent, `is_nested` tells renderers which rows are drawn under one, and `add_to_epics` adds the sub-tasks under an epic's children to that epic
 - **src/transitions.rs** — Transition model and parsing, and the rules for matching shortcuts and resolutions
@@ -101,7 +102,7 @@ Renderers draw with plain ANSI colors, each used for one job: `DarkGray` is mute
 ## Configuration
 
 - **Config file:** `~/.config/lazyjira/config.toml`, created by the first-run setup. Holds the project key, team name, team roster (`[team]`), statuses, saved filters, and `[preferences]`. An old top-level `resolutions` list is ignored (moves offer the resolutions Jira allows). Saved filters and preferences rewrite it. `S` applies team and epic changes during the session.
-- **Browser URLs:** derive them when opened with `jira_client::browse_url`, using jira-cli's `server` through `jira_rest::server_url`. URLs are not stored in tickets or caches.
+- **Browser URLs:** derive them when opened with `jira_rest::browse_url`, using jira-cli's `server`. URLs are not stored in tickets or caches.
 - **Unassigned tab:** queries the `Assigned Teams` custom field using `jira.team_name`.
 - **Legacy roster:** `~/.claude/skills/jira/team.yml` is only read once, during first-run setup, to seed `[team]`.
 - **Auth:** Via existing `jira` CLI authentication (`~/.config/.jira/.config.yml`, or `$JIRA_CONFIG_FILE`). List reads, detail reads and moves call Jira's REST API with that file's `server`, `auth_type`, `login` and `epic.link`, and `JIRA_API_TOKEN`; lazyjira assumes Jira Server or Data Center (ADR 0005).

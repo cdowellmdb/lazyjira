@@ -9,6 +9,7 @@ mod jira_client;
 mod jira_issue;
 mod jira_reads;
 mod jira_rest;
+mod jql;
 mod local_cache;
 mod mouse;
 mod move_picker;
@@ -40,6 +41,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::bulk_actions::{BulkAction, BulkCall, BulkSummary, BulkTarget};
 use crate::bulk_plan::{BulkJob, BulkPlan, FetchedTransitions};
 use crate::config::AppConfig;
+use crate::jira_rest::describe;
 use crate::move_picker::JiraCall;
 use app::{
     App, BulkUploadPreview, BulkUploadState, BulkUploadSummary, DetailMode, FilterFocus, Tab,
@@ -107,12 +109,6 @@ enum BackgroundMessage {
         requested_at: u64,
         result: std::result::Result<Vec<crate::cache::Ticket>, String>,
     },
-}
-
-/// An error with its whole chain, as the user sees it: "Couldn't reach Jira: connection refused"
-/// rather than just the outermost "Couldn't reach Jira".
-fn describe(error: &anyhow::Error) -> String {
-    format!("{:#}", error)
 }
 
 fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
@@ -451,15 +447,7 @@ async fn main() -> Result<()> {
         .unwrap_or(Tab::MyWork);
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
     app.details = local_cache::DetailCache::spawn(&config.jira.project);
-    // Refreshes use the remembered email; this keeps it current for the next one. A failure
-    // keeps the old one. With none remembered the first refresh asks `jira me` itself, so asking
-    // here too would run it twice at once.
-    let project = config.jira.project.clone();
-    if local_cache::load_my_email(&project).is_some() {
-        tokio::spawn(async move {
-            let _ = jira_client::refresh_my_email(&project).await;
-        });
-    }
+    jira_reads::keep_my_email_current(&config.jira.project);
 
     // Fast startup: load persisted snapshot immediately, then revalidate in stages.
     if let Some(snapshot) = local_cache::load_startup_cache_snapshot(&config.jira.project) {
@@ -1415,7 +1403,7 @@ fn handle_move_failure_keys(app: &mut App, key: KeyCode) {
 }
 
 fn open_ticket_in_browser(app: &mut App, key: &str) {
-    let result = jira_client::browse_url(key)
+    let result = jira_rest::browse_url(key)
         .and_then(|url| Command::new("open").arg(url).spawn().map_err(Into::into));
     if let Err(error) = result {
         app.flash = Some(format!("Couldn't open browser: {error:#}"));
@@ -2243,16 +2231,6 @@ mod tests {
     use super::*;
     use crate::bulk_actions::BulkState;
     use std::collections::BTreeMap;
-
-    #[test]
-    fn a_failed_jira_call_is_shown_with_its_cause() {
-        let error =
-            anyhow::anyhow!("tcp connect error: connection refused").context("Couldn't reach Jira");
-        assert_eq!(
-            describe(&error),
-            "Couldn't reach Jira: tcp connect error: connection refused"
-        );
-    }
 
     #[test]
     fn dev_mode_prefers_the_active_checkout_over_the_installed_git_source() {
