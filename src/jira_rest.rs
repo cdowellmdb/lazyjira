@@ -1,4 +1,4 @@
-//! The Jira REST calls lazyjira makes itself: the paginated search every list read uses,
+//! The Jira REST calls lazyjira makes itself: the paginated search every list read and the detail prefetch use,
 //! listing a ticket's transitions with their fields, sending one transition by id, and reading
 //! which sub-tasks sit under which parent (still used for epics).
 //!
@@ -272,9 +272,9 @@ const KEYS_PER_SEARCH: usize = 50;
 const SEARCH_PAGE_SIZE: usize = 500;
 const SUBTASK_FIELDS: [&str; 5] = ["summary", "status", "assignee", "labels", "parent"];
 
-/// JQL for the sub-tasks among `keys` and under them. Keys that don't look like Jira keys are
-/// left out so they can't break the query; `None` when none are left.
-fn subtasks_jql(keys: &[String]) -> Option<String> {
+/// `keys` as the inside of a JQL list (`A-1,B-2`). Keys that don't look like Jira keys are left
+/// out so they can't break the query; `None` when none are left.
+pub fn key_list(keys: &[String]) -> Option<String> {
     let keys: Vec<&str> = keys
         .iter()
         .map(String::as_str)
@@ -285,10 +285,12 @@ fn subtasks_jql(keys: &[String]) -> Option<String> {
                     .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         })
         .collect();
-    if keys.is_empty() {
-        return None;
-    }
-    let list = keys.join(",");
+    (!keys.is_empty()).then(|| keys.join(","))
+}
+
+/// JQL for the sub-tasks among `keys` and under them; `None` when `key_list` leaves no keys.
+fn subtasks_jql(keys: &[String]) -> Option<String> {
+    let list = key_list(keys)?;
     Some(format!(
         "(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()"
     ))

@@ -174,45 +174,20 @@ fn spawn_ticket_detail_prefetch(
     keys: Vec<String>,
     requested_at: u64,
 ) {
-    const MAX_CONCURRENCY: usize = 6;
     if keys.is_empty() {
         return;
     }
 
     let tx = tx.clone();
     tokio::spawn(async move {
-        let mut iter = keys.into_iter();
-        let mut tasks = tokio::task::JoinSet::new();
-
-        for _ in 0..MAX_CONCURRENCY {
-            if let Some(key) = iter.next() {
-                tasks.spawn(async move {
-                    let result = jira_client::fetch_ticket_detail(&key)
-                        .await
-                        .map_err(|e| e.to_string());
-                    (key, result)
-                });
-            }
-        }
-
-        while let Some(joined) = tasks.join_next().await {
-            if let Ok((key, result)) = joined {
-                let _ = tx.send(BackgroundMessage::TicketDetailFetched {
-                    key,
-                    requested_at,
-                    result,
-                });
-            }
-
-            if let Some(next_key) = iter.next() {
-                tasks.spawn(async move {
-                    let result = jira_client::fetch_ticket_detail(&next_key)
-                        .await
-                        .map_err(|e| e.to_string());
-                    (next_key, result)
-                });
-            }
-        }
+        jira_client::fetch_ticket_details(&keys, |key, result| {
+            let _ = tx.send(BackgroundMessage::TicketDetailFetched {
+                key,
+                requested_at,
+                result,
+            });
+        })
+        .await;
     });
 }
 
