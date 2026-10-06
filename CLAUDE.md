@@ -121,3 +121,6 @@ Use `README.md` as the current onboarding doc for run instructions and keybindin
 
 ## Commit Messages
 Follow @COMMIT_STYLING.md
+
+## Coding Standards and PRs
+Follow @CODING_STANDARDS.md: the four required reviews run before any PR (draft included) is raised, and PR bodies use the `/pr` template plus a Reviews section.
