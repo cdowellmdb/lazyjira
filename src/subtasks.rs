@@ -90,6 +90,7 @@ pub fn add_to_epics(epics: &mut [Epic], subtasks: &[Subtask]) {
                     epic_key: Some(epic.key.clone()),
                     epic_name: Some(epic.summary.clone()),
                     parent_key: Some(subtask.parent_key.clone()),
+                    updated: None,
                     detail_loaded: false,
                     activity: Vec::new(),
                 });

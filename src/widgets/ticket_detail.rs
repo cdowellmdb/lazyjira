@@ -798,6 +798,7 @@ mod tests {
             epic_key: None,
             epic_name: None,
             parent_key: None,
+            updated: None,
             detail_loaded: true,
             activity: vec![
                 comment("2026-09-02T10:00:00.000+0000", "Eliza Spang", "Second *reply*"),

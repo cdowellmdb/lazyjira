@@ -5,6 +5,7 @@ mod bulk_upload;
 mod cache;
 mod config;
 mod jira_client;
+mod jira_issue;
 mod jira_rest;
 mod mouse;
 mod move_picker;
@@ -489,7 +490,15 @@ async fn main() -> Result<()> {
         app.flash = Some("Loaded cached data. Refreshing active tickets...".to_string());
         spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::ActiveOnly, &config);
     } else {
-        let mut cache = jira_client::fetch_active_only(&config).await?;
+        let mut cache = match jira_client::fetch_active_only(&config).await {
+            Ok(cache) => cache,
+            Err(e) => {
+                // No snapshot to fall back on. Leave the screen first, or the error is lost
+                // in it (a missing JIRA_API_TOKEN lands here on a first run).
+                restore_terminal(&mut terminal)?;
+                return Err(e);
+            }
+        };
         detail_cache.hydrate(&mut cache);
         app.replace_cache(cache, app.moves.now());
         app.loading = false;
@@ -807,7 +816,11 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Restore terminal
+    restore_terminal(&mut terminal)
+}
+
+/// Leaves raw mode and the alternate screen, so what prints next stays readable.
+fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -816,7 +829,6 @@ async fn main() -> Result<()> {
         DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
-
     Ok(())
 }
 
@@ -2400,6 +2412,7 @@ mod tests {
             epic_key: None,
             epic_name: None,
             parent_key: None,
+            updated: None,
             detail_loaded: false,
             activity: Vec::new(),
         }

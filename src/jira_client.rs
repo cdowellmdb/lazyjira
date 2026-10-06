@@ -8,8 +8,9 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use crate::cache::{ActivityEntry, ActivityKind, Cache, Epic, TeamMember, Ticket};
+use crate::cache::{Cache, Epic, TeamMember, Ticket};
 use crate::config::AppConfig;
+use crate::jira_issue::ticket_from_issue;
 use crate::jira_rest::Subtask;
 use crate::subtasks;
 
@@ -143,6 +144,7 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
         epic_key: None,
         epic_name: None,
         parent_key: None,
+        updated: None,
         detail_loaded: false,
         activity: Vec::new(),
     })
@@ -264,208 +266,101 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
     let output = run_cmd("jira", &["issue", "view", key, "--raw"]).await?;
     let json: serde_json::Value = serde_json::from_str(&output)
         .with_context(|| format!("Failed to parse JSON for {}", key))?;
+    let mut ticket = ticket_from_issue(&json, crate::jira_rest::epic_link_field().as_deref())
+        .with_context(|| format!("No issue in Jira's answer for {}", key))?;
+    ticket.detail_loaded = true;
+    Ok(ticket)
+}
 
-    let fields = json.get("fields").context("No fields in response")?;
+/// What a list row needs. `key` always comes back, and the Epic Link field is added by the
+/// search. `issuetype` tells a sub-task's parent from an epic.
+const LIST_FIELDS: &[&str] = &[
+    "summary",
+    "status",
+    "assignee",
+    "labels",
+    "parent",
+    "issuetype",
+    "updated",
+];
 
-    let summary = fields["summary"].as_str().unwrap_or("").to_string();
-    let status_name = fields["status"]["name"].as_str();
-    let assignee = fields["assignee"]["displayName"]
-        .as_str()
-        .map(|s| s.to_string());
-    let assignee_email = fields["assignee"]["emailAddress"]
-        .as_str()
-        .map(|s| s.to_string());
-    let reporter = fields["reporter"]["displayName"]
-        .as_str()
-        .map(|s| s.to_string());
-    let description = fields["description"].as_str().map(|s| s.to_string());
-    let labels = fields["labels"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    // A sub-task's parent is its parent ticket, not an epic.
-    let parent = fields["parent"]["key"].as_str().map(|s| s.to_string());
-    let (parent_key, epic_parent) = if fields["issuetype"]["subtask"].as_bool() == Some(true) {
-        (parent, None)
-    } else {
-        (None, parent)
+/// The one search behind My Work, Team and Unassigned: the active tickets of everyone in
+/// `assignee_emails`, plus those done inside the window for the full scope, and the active
+/// tickets nobody has taken that are the team's by Assigned Teams. jira-cli used to add the
+/// project and an order; a REST search needs both spelled out. The order keeps pages stable
+/// while tickets change underneath them.
+fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchScope) -> String {
+    let assignees = assignee_emails
+        .iter()
+        .map(|email| format!("\"{}\"", email))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let active = config.active_status_clause();
+    let statuses = match scope {
+        TicketFetchScope::ActiveOnly => format!("status in {active}"),
+        TicketFetchScope::ActiveAndRecentDone => format!(
+            "(status in {active} OR (status in {} AND updated >= {}))",
+            config.done_status_clause(),
+            config.done_window()
+        ),
     };
-    let epic_key = fields["customfield_12551"]
-        .as_array()
-        .and_then(|a| a.first())
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .or(epic_parent);
-
-    let mut activity = Vec::new();
-
-    // Parse changelog
-    if let Some(histories) = json
-        .get("changelog")
-        .and_then(|c| c.get("histories"))
-        .and_then(|h| h.as_array())
-    {
-        for history in histories {
-            let timestamp = history["created"].as_str().unwrap_or("").to_string();
-            let author = history["author"]["displayName"]
-                .as_str()
-                .unwrap_or("Unknown")
-                .to_string();
-            let author_email = history["author"]["emailAddress"]
-                .as_str()
-                .map(|s| s.to_string());
-
-            if let Some(items) = history["items"].as_array() {
-                for item in items {
-                    let field = item["field"].as_str().unwrap_or("");
-                    let from_str = item["fromString"].as_str().unwrap_or("").to_string();
-                    let to_str = item["toString"].as_str().unwrap_or("").to_string();
-
-                    let kind = match field {
-                        "status" => ActivityKind::StatusChange {
-                            from: from_str,
-                            to: to_str,
-                        },
-                        "assignee" => ActivityKind::AssigneeChange {
-                            from: Some(from_str).filter(|s| !s.is_empty()),
-                            to: Some(to_str).filter(|s| !s.is_empty()),
-                        },
-                        _ => ActivityKind::FieldChange {
-                            field: field.to_string(),
-                            from: from_str,
-                            to: to_str,
-                        },
-                    };
-
-                    activity.push(ActivityEntry {
-                        timestamp: timestamp.clone(),
-                        author: author.clone(),
-                        author_email: author_email.clone(),
-                        kind,
-                    });
-                }
-            }
-        }
-    }
-
-    // Parse comments
-    if let Some(comments) = json
-        .get("fields")
-        .and_then(|f| f.get("comment"))
-        .and_then(|c| c.get("comments"))
-        .and_then(|c| c.as_array())
-    {
-        for comment in comments {
-            let timestamp = comment["created"].as_str().unwrap_or("").to_string();
-            let author = comment["author"]["displayName"]
-                .as_str()
-                .unwrap_or("Unknown")
-                .to_string();
-            let author_email = comment["author"]["emailAddress"]
-                .as_str()
-                .map(|s| s.to_string());
-            let body = comment["body"].as_str().unwrap_or("").to_string();
-
-            activity.push(ActivityEntry {
-                timestamp,
-                author,
-                author_email,
-                kind: ActivityKind::Comment { body },
-            });
-        }
-    }
-
-    // Sort newest first
-    activity.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-
-    let ticket_key = json["key"].as_str().unwrap_or(key).to_string();
-
-    Ok(Ticket {
-        key: ticket_key,
-        summary,
-        status: status_name.unwrap_or("To Do").to_string(),
-        assignee,
-        assignee_email,
-        reporter,
-        description,
-        labels,
-        epic_key,
-        epic_name: None,
-        parent_key,
-        detail_loaded: true,
-        activity,
-    })
-}
-
-/// Fetch tickets assigned to a specific user, setting assignee_email on results.
-async fn fetch_tickets_for_user(
-    config: &AppConfig,
-    email: &str,
-    scope: TicketFetchScope,
-) -> Result<Vec<Ticket>> {
-    let active_query = format!(
-        "assignee = \"{}\" AND status in {}",
-        email,
-        config.active_status_clause()
-    );
-
-    let mut tickets_by_key: HashMap<String, Ticket> = HashMap::new();
-
-    match scope {
-        TicketFetchScope::ActiveOnly => {
-            for mut ticket in fetch_tickets_for_query(config, &active_query).await? {
-                ticket.assignee_email = Some(email.to_string());
-                tickets_by_key.insert(ticket.key.clone(), ticket);
-            }
-        }
-        TicketFetchScope::ActiveAndRecentDone => {
-            let recent_done_query = format!(
-                "assignee = \"{}\" AND status in {} AND updated >= {}",
-                email,
-                config.done_status_clause(),
-                config.done_window()
-            );
-            let (active_result, done_result) = tokio::join!(
-                fetch_tickets_for_query(config, &active_query),
-                fetch_tickets_for_query(config, &recent_done_query)
-            );
-            for mut ticket in active_result? {
-                ticket.assignee_email = Some(email.to_string());
-                tickets_by_key.insert(ticket.key.clone(), ticket);
-            }
-            for mut ticket in done_result? {
-                ticket.assignee_email = Some(email.to_string());
-                tickets_by_key.insert(ticket.key.clone(), ticket);
-            }
-        }
-    }
-
-    let mut tickets: Vec<Ticket> = tickets_by_key.into_values().collect();
-    tickets.sort_by(|a, b| a.key.cmp(&b.key));
-    Ok(tickets)
-}
-
-fn unassigned_team_active_query(config: &AppConfig) -> String {
     format!(
-        "assignee is EMPTY AND \"Assigned Teams\" = \"{}\" AND status in {}",
-        config.jira.team_name,
-        config.active_status_clause()
+        "project = \"{}\" AND ((assignee in ({assignees}) AND {statuses}) \
+         OR (assignee is EMPTY AND \"Assigned Teams\" = \"{}\" AND status in {active})) \
+         ORDER BY key",
+        config.jira.project, config.jira.team_name
     )
 }
 
-async fn fetch_unassigned_team_tickets(config: &AppConfig) -> Result<Vec<Ticket>> {
-    let mut tickets =
-        fetch_tickets_for_query(config, &unassigned_team_active_query(config)).await?;
-    for ticket in &mut tickets {
-        ticket.assignee = Some(UNASSIGNED_TEAM_NAME.to_string());
-        ticket.assignee_email = Some(UNASSIGNED_TEAM_EMAIL.to_string());
+/// Splits one search's tickets into My Work and Team, each sorted by key. Jira's email for an
+/// assignee is mapped to the roster's entry ignoring case, since Team groups by exact email;
+/// tickets with no assignee become the Unassigned member's. A ticket assigned to someone
+/// outside `members` can't be placed and is left out.
+fn bucket_tickets(
+    mut found: Vec<Ticket>,
+    members: &[TeamMember],
+    my_email: &str,
+) -> (Vec<Ticket>, Vec<Ticket>) {
+    found.sort_by(|a, b| a.key.cmp(&b.key));
+    found.dedup_by(|a, b| a.key == b.key);
+    let (mut mine, mut team) = (Vec::new(), Vec::new());
+    for mut ticket in found {
+        if ticket.assignee.is_none() {
+            ticket.assignee = Some(UNASSIGNED_TEAM_NAME.to_string());
+            ticket.assignee_email = Some(UNASSIGNED_TEAM_EMAIL.to_string());
+        } else if let Some(member) = members.iter().find(|member| {
+            ticket
+                .assignee_email
+                .as_deref()
+                .is_some_and(|email| email.eq_ignore_ascii_case(&member.email))
+        }) {
+            ticket.assignee_email = Some(member.email.clone());
+            if member.email.eq_ignore_ascii_case(my_email) {
+                mine.push(ticket.clone());
+            }
+        } else {
+            continue;
+        }
+        team.push(ticket);
     }
-    tickets.sort_by(|a, b| a.key.cmp(&b.key));
-    Ok(tickets)
+    (mine, team)
+}
+
+/// `jql` limited to `project`, with an order, as `jira issue list -q` made it. A filter's own
+/// ORDER BY is kept (after the project, outside the parentheses); without one, newest first.
+fn scoped_jql(project: &str, jql: &str) -> String {
+    // ponytail: the last "order by" is taken as the clause, so one inside a quoted string
+    // fails the query; parse JQL properly if filters ever need it.
+    let split = jql.to_ascii_lowercase().rfind("order by");
+    let (condition, order) = match split {
+        Some(at) => (jql[..at].trim(), jql[at..].trim()),
+        None => (jql.trim(), "ORDER BY created DESC"),
+    };
+    if condition.is_empty() {
+        format!("project = \"{project}\" {order}")
+    } else {
+        format!("project = \"{project}\" AND ({condition}) {order}")
+    }
 }
 
 /// Fetch all epics and their children.
@@ -727,6 +622,9 @@ async fn my_email(project: &str) -> Result<String> {
     }
 }
 
+/// Fills in what only a ticket's detail has: description, reporter and activity. Everything the
+/// list search returns (labels, assignee, epic, parent) stays as that search read it, since
+/// the cache is never invalidated and would bring back what has since changed in Jira.
 fn hydrate_ticket_from_details_cache(
     ticket: &mut Ticket,
     details_by_key: &HashMap<String, Ticket>,
@@ -739,21 +637,8 @@ fn hydrate_ticket_from_details_cache(
     // Old cache entries missing reporter will be re-fetched once, then stay cached.
     ticket.detail_loaded = detail.reporter.is_some();
     ticket.description = detail.description.clone();
-    ticket.labels = detail.labels.clone();
-    if detail.assignee.is_some() {
-        ticket.assignee = detail.assignee.clone();
-    }
-    if detail.assignee_email.is_some() {
-        ticket.assignee_email = detail.assignee_email.clone();
-    }
     if detail.reporter.is_some() {
         ticket.reporter = detail.reporter.clone();
-    }
-    if detail.epic_key.is_some() {
-        ticket.epic_key = detail.epic_key.clone();
-    }
-    if detail.epic_name.is_some() {
-        ticket.epic_name = detail.epic_name.clone();
     }
     if !detail.activity.is_empty() {
         ticket.activity = detail.activity.clone();
@@ -793,9 +678,16 @@ pub fn attach_epics_to_tickets(
                 .map(|child| (child.key.clone(), (epic.key.clone(), epic.summary.clone())))
         })
         .collect();
+    let name_by_epic: HashMap<&str, &str> = epics
+        .iter()
+        .map(|epic| (epic.key.as_str(), epic.summary.as_str()))
+        .collect();
 
     let attach_epic = |ticket: &mut Ticket| {
-        if let Some((epic_key, epic_name)) = epic_by_ticket.get(&ticket.key) {
+        if let Some(epic_key) = ticket.epic_key.as_deref() {
+            // The epic the search read is fresher than the epics cache's children.
+            ticket.epic_name = name_by_epic.get(epic_key).map(|name| name.to_string());
+        } else if let Some((epic_key, epic_name)) = epic_by_ticket.get(&ticket.key) {
             ticket.epic_key = Some(epic_key.clone());
             ticket.epic_name = Some(epic_name.clone());
         }
@@ -893,7 +785,10 @@ async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result
 
     let project = &config.jira.project;
     let my_email = my_email(project).await?;
-    if !team_members.iter().any(|member| member.email == my_email) {
+    if !team_members
+        .iter()
+        .any(|member| member.email.eq_ignore_ascii_case(&my_email))
+    {
         team_members.push(TeamMember {
             name: name_from_email(&my_email),
             email: my_email.clone(),
@@ -901,44 +796,22 @@ async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result
     }
     let mut epics = load_epics_cache(project);
 
-    let mut my_tickets = fetch_tickets_for_user(config, &my_email, scope).await?;
-
-    // Seed team view with my current tickets to avoid refetching self.
-    let mut team_tickets = my_tickets.clone();
-    let mut team_handles = Vec::new();
-    for member in &team_members {
-        if member.email == my_email {
-            continue;
-        }
-        let email = member.email.clone();
-        let cfg = config.clone();
-        team_handles.push(tokio::spawn(async move {
-            fetch_tickets_for_user(&cfg, &email, scope).await
-        }));
-    }
-
-    for handle in team_handles {
-        let tickets = handle.await??;
-        team_tickets.extend(tickets);
-    }
-
-    let unassigned_team_tickets = fetch_unassigned_team_tickets(config).await?;
-    if !unassigned_team_tickets.is_empty()
-        && !team_members
-            .iter()
-            .any(|member| member.email == UNASSIGNED_TEAM_EMAIL)
+    // A failed search returns here, so the caller keeps showing the last snapshot.
+    let emails: Vec<&str> = team_members.iter().map(|m| m.email.as_str()).collect();
+    let found = crate::jira_rest::search(&lists_jql(config, &emails, scope), LIST_FIELDS).await?;
+    let (mut my_tickets, mut team_tickets) = bucket_tickets(found, &team_members, &my_email);
+    if team_tickets
+        .iter()
+        .any(|ticket| ticket.assignee_email.as_deref() == Some(UNASSIGNED_TEAM_EMAIL))
     {
         team_members.push(TeamMember {
             name: UNASSIGNED_TEAM_NAME.to_string(),
             email: UNASSIGNED_TEAM_EMAIL.to_string(),
         });
     }
-    team_tickets.extend(unassigned_team_tickets);
 
     attach_epics_to_tickets(&mut my_tickets, &mut team_tickets, &epics);
     reconcile_epic_child_statuses(&mut epics, &my_tickets, &team_tickets);
-    let found = load_subtasks(my_tickets.iter().chain(&team_tickets)).await;
-    subtasks::set_parents(my_tickets.iter_mut().chain(&mut team_tickets), &found);
 
     Ok(Cache {
         my_tickets,
@@ -1004,10 +877,7 @@ pub async fn edit_ticket(
 
 /// Run an arbitrary JQL query and return matching tickets.
 pub async fn fetch_jql_query(config: &AppConfig, jql: &str) -> Result<Vec<Ticket>> {
-    let mut tickets = fetch_tickets_for_query(config, jql).await?;
-    let found = load_subtasks(tickets.iter()).await;
-    subtasks::set_parents(tickets.iter_mut(), &found);
-    Ok(tickets)
+    crate::jira_rest::search(&scoped_jql(&config.jira.project, jql), LIST_FIELDS).await
 }
 
 /// Create a new ticket via `jira issue create`, with optional body and labels.
@@ -1089,6 +959,7 @@ mod tests {
             epic_key: None,
             epic_name: None,
             parent_key: None,
+            updated: None,
             detail_loaded: false,
             activity: Vec::new(),
         }
@@ -1154,9 +1025,8 @@ mod tests {
         assert_eq!(loaded.cache.my_tickets[0].status, "Resolved");
     }
 
-    #[test]
-    fn unassigned_query_filters_for_team_name_from_config() {
-        let config = AppConfig {
+    fn test_config() -> AppConfig {
+        AppConfig {
             jira: JiraConfig {
                 project: "AMP".into(),
                 team_name: "Code Generation".into(),
@@ -1164,14 +1034,123 @@ mod tests {
                 epics_i_care_about: vec![],
             },
             team: BTreeMap::new(),
-            statuses: StatusConfig::default(),
+            statuses: StatusConfig {
+                active: vec!["In Progress".into(), "To Do".into()],
+                done: vec!["Done".into(), "Closed".into()],
+            },
             filters: vec![],
             preferences: Default::default(),
             themes: Default::default(),
-        };
-        let query = unassigned_team_active_query(&config);
-        assert!(query.contains("assignee is EMPTY"));
-        assert!(query.contains("\"Assigned Teams\" = \"Code Generation\""));
+        }
+    }
+
+    #[test]
+    fn the_list_search_covers_the_roster_and_the_teams_unassigned_work() {
+        let config = test_config();
+        let emails = ["alex@example.com", "sam@example.com"];
+        assert_eq!(
+            lists_jql(&config, &emails, TicketFetchScope::ActiveOnly),
+            "project = \"AMP\" AND (\
+             (assignee in (\"alex@example.com\", \"sam@example.com\") \
+              AND status in (\"In Progress\", \"To Do\")) \
+             OR (assignee is EMPTY AND \"Assigned Teams\" = \"Code Generation\" \
+              AND status in (\"In Progress\", \"To Do\"))) ORDER BY key"
+        );
+    }
+
+    #[test]
+    fn the_full_list_search_adds_recently_done_tickets_inside_the_window() {
+        let mut config = test_config();
+        config.jira.done_window_days = 7;
+        let jql = lists_jql(
+            &config,
+            &["alex@example.com"],
+            TicketFetchScope::ActiveAndRecentDone,
+        );
+        assert_eq!(
+            jql,
+            "project = \"AMP\" AND (\
+             (assignee in (\"alex@example.com\") AND (status in (\"In Progress\", \"To Do\") \
+              OR (status in (\"Done\", \"Closed\") AND updated >= -7d))) \
+             OR (assignee is EMPTY AND \"Assigned Teams\" = \"Code Generation\" \
+              AND status in (\"In Progress\", \"To Do\"))) ORDER BY key"
+        );
+    }
+
+    fn assigned(key: &str, status: &str, name: &str, email: &str) -> Ticket {
+        Ticket {
+            assignee: Some(name.to_string()),
+            assignee_email: Some(email.to_string()),
+            ..test_ticket(key, status)
+        }
+    }
+
+    fn roster() -> Vec<TeamMember> {
+        vec![
+            TeamMember {
+                name: "Alex Rivera".into(),
+                email: "alex.rivera@example.com".into(),
+            },
+            TeamMember {
+                name: "Sam Chen".into(),
+                email: "sam.chen@example.com".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn one_search_fills_my_work_and_team_by_the_roster_email() {
+        let found = vec![
+            assigned("AMP-3", "To Do", "Sam", "sam.chen@example.com"),
+            assigned("AMP-2", "Done", "Alex", "alex.rivera@example.com"),
+            assigned("AMP-1", "To Do", "Alex", "alex.rivera@example.com"),
+            test_ticket("AMP-4", "To Do"),
+        ];
+        let (mine, team) = bucket_tickets(found, &roster(), "alex.rivera@example.com");
+        let keys = |tickets: &[Ticket]| tickets.iter().map(|t| t.key.clone()).collect::<Vec<_>>();
+        assert_eq!(keys(&mine), ["AMP-1", "AMP-2"]);
+        assert_eq!(keys(&team), ["AMP-1", "AMP-2", "AMP-3", "AMP-4"]);
+    }
+
+    #[test]
+    fn jiras_email_is_mapped_to_the_roster_entry_ignoring_case() {
+        let found = vec![
+            assigned("AMP-1", "To Do", "Sam C.", "Sam.Chen@Example.com"),
+            assigned("AMP-2", "To Do", "Alex R.", "ALEX.RIVERA@example.com"),
+        ];
+        // `jira me` can differ in case from Jira's own email too.
+        let (mine, team) = bucket_tickets(found, &roster(), "Alex.Rivera@example.com");
+        assert_eq!(
+            team[0].assignee_email.as_deref(),
+            Some("sam.chen@example.com")
+        );
+        assert_eq!(
+            team[1].assignee_email.as_deref(),
+            Some("alex.rivera@example.com")
+        );
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].key, "AMP-2");
+        // The name is Jira's own: a display name that differs from the roster's still groups.
+        assert_eq!(team[0].assignee.as_deref(), Some("Sam C."));
+    }
+
+    #[test]
+    fn tickets_without_an_assignee_go_to_the_unassigned_row() {
+        let (mine, team) = bucket_tickets(
+            vec![test_ticket("AMP-9", "To Do")],
+            &roster(),
+            "alex.rivera@example.com",
+        );
+        assert!(mine.is_empty());
+        assert_eq!(team[0].assignee.as_deref(), Some("Unassigned"));
+        assert_eq!(team[0].assignee_email.as_deref(), Some("__unassigned__"));
+    }
+
+    #[test]
+    fn a_ticket_assigned_to_someone_outside_the_roster_is_left_out() {
+        let found = vec![assigned("AMP-5", "To Do", "Pat", "pat@example.com")];
+        let (mine, team) = bucket_tickets(found, &roster(), "alex.rivera@example.com");
+        assert!(mine.is_empty() && team.is_empty());
     }
 
     #[test]
@@ -1202,6 +1181,85 @@ mod tests {
         reconcile_epic_child_statuses(&mut epics, &[], &[]);
 
         assert_eq!(epics[0].children[0].status, "To Do");
+    }
+
+    #[test]
+    fn a_saved_filter_is_scoped_to_the_project_the_way_jira_cli_did() {
+        assert_eq!(
+            scoped_jql("AMP", "type = Bug AND assignee = currentUser()"),
+            "project = \"AMP\" AND (type = Bug AND assignee = currentUser()) \
+             ORDER BY created DESC"
+        );
+        // The filter's own ordering wins, and stays outside the parentheses.
+        assert_eq!(
+            scoped_jql("AMP", "status = Blocked order by updated ASC"),
+            "project = \"AMP\" AND (status = Blocked) order by updated ASC"
+        );
+        assert_eq!(
+            scoped_jql("AMP", "ORDER BY priority DESC"),
+            "project = \"AMP\" ORDER BY priority DESC"
+        );
+        assert_eq!(
+            scoped_jql("AMP", "  "),
+            "project = \"AMP\" ORDER BY created DESC"
+        );
+    }
+
+    #[test]
+    fn the_details_cache_fills_only_what_the_list_search_does_not_return() {
+        let mut fresh = assigned("AMP-1", "To Do", "Alex R.", "alex.rivera@example.com");
+        fresh.labels = vec!["new".into()];
+        fresh.epic_key = Some("AMP-100".into());
+        let mut stale = test_ticket("AMP-1", "Blocked");
+        stale.assignee = Some("Old Owner".into());
+        stale.assignee_email = Some("old@example.com".into());
+        stale.labels = vec!["old".into()];
+        stale.epic_key = Some("AMP-50".into());
+        stale.parent_key = Some("AMP-7".into());
+        stale.description = Some("Body".into());
+        stale.reporter = Some("Pat".into());
+        let cached = HashMap::from([("AMP-1".to_string(), stale)]);
+
+        hydrate_ticket_from_details_cache(&mut fresh, &cached);
+
+        assert_eq!(fresh.status, "To Do");
+        assert_eq!(fresh.assignee.as_deref(), Some("Alex R."));
+        assert_eq!(
+            fresh.assignee_email.as_deref(),
+            Some("alex.rivera@example.com")
+        );
+        assert_eq!(fresh.labels, ["new"]);
+        assert_eq!(fresh.epic_key.as_deref(), Some("AMP-100"));
+        // A re-parented sub-task must not get its old parent back from the cache.
+        assert_eq!(fresh.parent_key, None);
+        assert_eq!(fresh.description.as_deref(), Some("Body"));
+        assert_eq!(fresh.reporter.as_deref(), Some("Pat"));
+        assert!(fresh.detail_loaded);
+    }
+
+    #[test]
+    fn an_epic_key_from_the_search_gets_its_name_from_the_epics() {
+        let epics = vec![Epic {
+            key: "AMP-100".to_string(),
+            summary: "Checkout".to_string(),
+            children: vec![test_ticket("AMP-2", "To Do")],
+        }];
+        let mut searched = test_ticket("AMP-1", "To Do");
+        searched.epic_key = Some("AMP-100".to_string());
+        // Not a child in the epics cache yet, but the search says which epic it's in.
+        let mut mine = vec![searched, test_ticket("AMP-2", "To Do")];
+        attach_epics_to_tickets(&mut mine, &mut [], &epics);
+        assert_eq!(mine[0].epic_name.as_deref(), Some("Checkout"));
+        assert_eq!(mine[1].epic_key.as_deref(), Some("AMP-100"));
+        assert_eq!(mine[1].epic_name.as_deref(), Some("Checkout"));
+
+        // The search is fresher than the epics cache, so its epic wins over the cache's.
+        let mut moved = test_ticket("AMP-2", "To Do");
+        moved.epic_key = Some("AMP-200".to_string());
+        let mut mine = vec![moved];
+        attach_epics_to_tickets(&mut mine, &mut [], &epics);
+        assert_eq!(mine[0].epic_key.as_deref(), Some("AMP-200"));
+        assert_eq!(mine[0].epic_name, None);
     }
 
     #[test]
@@ -1253,7 +1311,7 @@ mod tests {
     fn a_refresh_hydrates_from_details_recorded_in_memory() {
         let (details, _changed) = DetailCache::new(HashMap::new());
         let mut detail = test_ticket("DEMO-1", "In Progress");
-        detail.labels = vec!["backend".into()];
+        detail.description = Some("Body".into());
         detail.reporter = Some("Sam Doe".into());
         details.record(detail);
 
@@ -1274,7 +1332,7 @@ mod tests {
             &cache.team_tickets[0],
             &cache.epics[0].children[0],
         ] {
-            assert_eq!(ticket.labels, ["backend"]);
+            assert_eq!(ticket.description.as_deref(), Some("Body"));
             assert!(ticket.detail_loaded);
             // The list read's status stands; a detail never overrides it here.
             assert_eq!(ticket.status, "To Do");
