@@ -1,5 +1,6 @@
-//! The Jira REST calls jira-cli can't make: listing a ticket's transitions with their fields,
-//! sending one transition by id, and reading which sub-tasks sit under which parent.
+//! The Jira REST calls lazyjira makes itself: the paginated search every list read uses,
+//! listing a ticket's transitions with their fields, sending one transition by id, and reading
+//! which sub-tasks sit under which parent (still used for epics).
 //!
 //! Uses jira-cli's `server`, `auth_type` and `login` settings and the `JIRA_API_TOKEN`
 //! environment variable, so no extra setup is needed where jira-cli already works.
