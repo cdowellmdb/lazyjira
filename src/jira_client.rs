@@ -100,167 +100,6 @@ async fn load_subtasks<'a>(tickets: impl Iterator<Item = &'a Ticket>) -> Vec<Sub
     crate::jira_rest::subtasks(&keys).await.unwrap_or_default()
 }
 
-/// Parse a line of tab-separated ticket output into a Ticket.
-/// Expected columns: key, status, assignee, summary
-/// Summary is last because the jira CLI uses tab-padding for alignment,
-/// which inserts extra tabs after long text fields. Putting summary last
-/// avoids corrupting the status/assignee parsing.
-fn parse_ticket_line(line: &str) -> Option<Ticket> {
-    // Filter out empty fields caused by tab-padding alignment
-    let fields: Vec<&str> = line.split('\t').filter(|s| !s.is_empty()).collect();
-    if fields.len() < 3 {
-        return None;
-    }
-
-    let key = fields[0].trim().to_string();
-    if key.is_empty() {
-        return None;
-    }
-
-    let status_str = fields[1].trim();
-    // When assignee is empty, jira-cli tab padding can collapse to 3 fields after filtering.
-    // In that case, treat field 2 as summary.
-    let (assignee, summary) = if fields.len() == 3 {
-        (None, fields[2].trim().to_string())
-    } else {
-        (
-            Some(fields[2].trim().to_string()).filter(|s| !s.is_empty()),
-            fields[3..]
-                .iter()
-                .map(|s| s.trim())
-                .collect::<Vec<_>>()
-                .join(" "),
-        )
-    };
-
-    Some(Ticket {
-        key,
-        summary,
-        status: status_str.to_string(),
-        assignee,
-        assignee_email: None,
-        reporter: None,
-        description: None,
-        labels: Vec::new(),
-        epic_key: None,
-        epic_name: None,
-        parent_key: None,
-        updated: None,
-        detail_loaded: false,
-        activity: Vec::new(),
-    })
-}
-
-/// Fetch tickets for a JQL query with pagination.
-async fn fetch_tickets_for_query(config: &AppConfig, query: &str) -> Result<Vec<Ticket>> {
-    let mut all_tickets = Vec::new();
-    let mut from = 0usize;
-    let page_size = 100usize;
-    let project = &config.jira.project;
-
-    loop {
-        let paginate = format!("{}:{}", from, page_size);
-        let output = match run_cmd(
-            "jira",
-            &[
-                "issue",
-                "list",
-                "-p",
-                project,
-                "-q",
-                query,
-                "--plain",
-                "--no-headers",
-                "--columns",
-                "key,status,assignee,summary",
-                "--paginate",
-                &paginate,
-            ],
-        )
-        .await
-        {
-            Ok(output) => output,
-            Err(e) => {
-                // jira-cli returns exit code 1 for empty JQL results.
-                if e.to_string().contains("No result found for given query") {
-                    break;
-                }
-                return Err(e);
-            }
-        };
-
-        if output.is_empty() {
-            break;
-        }
-
-        let batch: Vec<Ticket> = output.lines().filter_map(parse_ticket_line).collect();
-        let batch_len = batch.len();
-        all_tickets.extend(batch);
-
-        if batch_len < page_size {
-            break;
-        }
-        from += page_size;
-    }
-
-    Ok(all_tickets)
-}
-
-/// Fetch epic children using both company-managed (Epic Link) and team-managed (parent) style links.
-async fn fetch_children_for_epic(
-    config: &AppConfig,
-    epic_key: &str,
-    epic_summary: &str,
-) -> Result<Vec<Ticket>> {
-    let epic_link_query = format!("\"Epic Link\" = {}", epic_key);
-    let parent_query = format!("parent = {}", epic_key);
-
-    let (epic_link_result, parent_result) = tokio::join!(
-        fetch_tickets_for_query(config, &epic_link_query),
-        fetch_tickets_for_query(config, &parent_query)
-    );
-
-    let mut children_by_key: HashMap<String, Ticket> = HashMap::new();
-    let mut success_count = 0usize;
-    let mut errors: Vec<String> = Vec::new();
-
-    match epic_link_result {
-        Ok(tickets) => {
-            success_count += 1;
-            for mut t in tickets {
-                t.epic_key = Some(epic_key.to_string());
-                t.epic_name = Some(epic_summary.to_string());
-                children_by_key.entry(t.key.clone()).or_insert(t);
-            }
-        }
-        Err(e) => errors.push(format!("Epic Link query error: {}", e)),
-    }
-
-    match parent_result {
-        Ok(tickets) => {
-            success_count += 1;
-            for mut t in tickets {
-                t.epic_key = Some(epic_key.to_string());
-                t.epic_name = Some(epic_summary.to_string());
-                children_by_key.entry(t.key.clone()).or_insert(t);
-            }
-        }
-        Err(e) => errors.push(format!("parent query error: {}", e)),
-    }
-
-    if success_count == 0 {
-        anyhow::bail!(
-            "Failed to fetch children for {} via Epic Link and parent queries. {}",
-            epic_key,
-            errors.join(" | ")
-        );
-    }
-
-    let mut children: Vec<Ticket> = children_by_key.into_values().collect();
-    children.sort_by(|a, b| a.key.cmp(&b.key));
-    Ok(children)
-}
-
 /// Fetch full ticket detail as JSON via `jira issue view KEY --raw`.
 /// Returns the ticket with description populated.
 pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
@@ -422,6 +261,25 @@ fn bucket_tickets(
     (mine, team)
 }
 
+/// The searches that find the children of `epic_keys`, `KEYS_PER_SEARCH` epics to a search. A
+/// child names its epic through the Epic Link field (company-managed projects, when jira-cli's
+/// config knows the field) or `parent` (team-managed). A chunk with no usable key sends no
+/// search. The order keeps pages stable while tickets change underneath them.
+fn epic_children_jqls(project: &str, epic_keys: &[String], has_epic_link: bool) -> Vec<String> {
+    epic_keys
+        .chunks(crate::jira_rest::KEYS_PER_SEARCH)
+        .filter_map(crate::jira_rest::key_list)
+        .map(|list| {
+            let link = if has_epic_link {
+                format!("\"Epic Link\" in ({list}) OR ")
+            } else {
+                String::new()
+            };
+            format!("project = \"{project}\" AND ({link}parent in ({list})) ORDER BY key")
+        })
+        .collect()
+}
+
 /// `jql` limited to `project`, with an order, as `jira issue list -q` made it. A filter's own
 /// ORDER BY is kept (after the project, outside the parentheses); without one, newest first.
 fn scoped_jql(project: &str, jql: &str) -> String {
@@ -439,158 +297,66 @@ fn scoped_jql(project: &str, jql: &str) -> String {
     }
 }
 
-/// Fetch all epics and their children.
+/// All the project's epics. Like the lists, jira-cli used to add the project; the order keeps
+/// pages stable while epics change underneath them.
+fn epics_jql(project: &str) -> String {
+    format!("project = \"{project}\" AND issuetype = Epic ORDER BY key")
+}
+
+/// What an epic row needs from the epic list; the epic's children come from their own search.
+const EPIC_FIELDS: &[&str] = &["summary"];
+
+/// The epics, each with the found tickets that name it as their `epic_key`, sorted by key and
+/// carrying the epic's name. `listed` is the epic search's answer in any order, and a page
+/// boundary can repeat an epic or a child, so each is kept once. A ticket whose epic isn't listed
+/// (it's in another project) belongs to no epic here.
+fn group_by_epic(mut listed: Vec<Ticket>, mut found: Vec<Ticket>) -> Vec<Epic> {
+    listed.sort_by(|a, b| a.key.cmp(&b.key));
+    listed.dedup_by(|a, b| a.key == b.key);
+    let mut epics: Vec<Epic> = listed
+        .into_iter()
+        .map(|epic| Epic {
+            key: epic.key,
+            summary: epic.summary,
+            children: Vec::new(),
+        })
+        .collect();
+    let index: HashMap<String, usize> = epics
+        .iter()
+        .enumerate()
+        .map(|(at, epic)| (epic.key.clone(), at))
+        .collect();
+
+    found.sort_by(|a, b| a.key.cmp(&b.key));
+    found.dedup_by(|a, b| a.key == b.key);
+    for mut child in found {
+        let at = child.epic_key.as_ref().and_then(|key| index.get(key));
+        if let Some(&at) = at {
+            child.epic_name = Some(epics[at].summary.clone());
+            epics[at].children.push(child);
+        }
+    }
+    epics
+}
+
+/// Fetch all epics and their children: one search for the epics, one per `KEYS_PER_SEARCH`
+/// epics for their children, and the sub-tasks of those children (see `load_subtasks`). A
+/// failed search fails the refresh, so the last epics stay on screen.
 async fn fetch_epics(config: &AppConfig) -> Result<Vec<Epic>> {
-    const MAX_EPIC_CHILD_FETCH_CONCURRENCY: usize = 8;
+    use crate::jira_rest::{epic_link_field, search};
 
-    let mut from = 0usize;
-    let page_size = 100usize;
-    let mut epic_stubs_map: HashMap<String, String> = HashMap::new();
     let project = &config.jira.project;
-
-    loop {
-        let paginate = format!("{}:{}", from, page_size);
-        let epics_output = run_cmd(
-            "jira",
-            &[
-                "issue",
-                "list",
-                "-t",
-                "Epic",
-                "-p",
-                project,
-                "--plain",
-                "--no-headers",
-                "--columns",
-                "key,status,summary",
-                "--paginate",
-                &paginate,
-            ],
-        )
-        .await?;
-
-        if epics_output.is_empty() {
-            break;
-        }
-
-        let mut batch_count = 0usize;
-        for line in epics_output.lines() {
-            let fields: Vec<&str> = line.split('\t').filter(|s| !s.is_empty()).collect();
-            if fields.len() >= 2 {
-                let key = fields[0].trim().to_string();
-                // Summary is after status (field 2+)
-                let summary = if fields.len() > 2 {
-                    fields[2..]
-                        .iter()
-                        .map(|s| s.trim())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                } else {
-                    String::new()
-                };
-                if !key.is_empty() {
-                    epic_stubs_map.entry(key).or_insert(summary);
-                    batch_count += 1;
-                }
-            }
-        }
-
-        if batch_count < page_size {
-            break;
-        }
-        from += page_size;
+    let listed = search(&epics_jql(project), EPIC_FIELDS).await?;
+    let keys: Vec<String> = listed.iter().map(|epic| epic.key.clone()).collect();
+    let mut found = Vec::new();
+    // ponytail: one search after another; join them if a hundred epics ever drag.
+    for jql in epic_children_jqls(project, &keys, epic_link_field().is_some()) {
+        found.extend(search(&jql, LIST_FIELDS).await?);
     }
 
-    let mut epic_stubs: Vec<(String, String)> = epic_stubs_map.into_iter().collect();
-    epic_stubs.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let epic_count = epic_stubs.len();
-    if epic_count == 0 {
-        return Ok(Vec::new());
-    }
-
-    let config_arc = std::sync::Arc::new(config.clone());
-    let mut epics_by_index: Vec<Option<Epic>> = vec![None; epic_count];
-    let mut iter = epic_stubs.into_iter().enumerate();
-    let mut tasks = tokio::task::JoinSet::new();
-
-    let initial_workers = MAX_EPIC_CHILD_FETCH_CONCURRENCY.min(epic_count);
-    for _ in 0..initial_workers {
-        if let Some((idx, (epic_key, epic_summary))) = iter.next() {
-            let cfg = config_arc.clone();
-            tasks.spawn(async move {
-                let children = match fetch_children_for_epic(&cfg, &epic_key, &epic_summary).await {
-                    Ok(children) => children,
-                    Err(e) => {
-                        eprintln!("Warning: {}. Showing this epic with no related tickets.", e);
-                        Vec::new()
-                    }
-                };
-
-                (
-                    idx,
-                    Epic {
-                        key: epic_key,
-                        summary: epic_summary,
-                        children,
-                    },
-                )
-            });
-        }
-    }
-
-    while let Some(joined) = tasks.join_next().await {
-        match joined {
-            Ok((idx, epic)) => {
-                epics_by_index[idx] = Some(epic);
-            }
-            Err(e) => {
-                eprintln!("Warning: epic fetch task failed: {}", e);
-            }
-        }
-
-        if let Some((idx, (epic_key, epic_summary))) = iter.next() {
-            let cfg = config_arc.clone();
-            tasks.spawn(async move {
-                let children = match fetch_children_for_epic(&cfg, &epic_key, &epic_summary).await {
-                    Ok(children) => children,
-                    Err(e) => {
-                        eprintln!("Warning: {}. Showing this epic with no related tickets.", e);
-                        Vec::new()
-                    }
-                };
-
-                (
-                    idx,
-                    Epic {
-                        key: epic_key,
-                        summary: epic_summary,
-                        children,
-                    },
-                )
-            });
-        }
-    }
-
-    let mut epics = Vec::with_capacity(epic_count);
-    let mut dropped = 0usize;
-    for epic in epics_by_index {
-        if let Some(epic) = epic {
-            epics.push(epic);
-        } else {
-            dropped += 1;
-        }
-    }
-    if dropped > 0 {
-        eprintln!(
-            "Warning: dropped {} epic rows due to unexpected task failure.",
-            dropped
-        );
-    }
-
-    let found = load_subtasks(epics.iter().flat_map(|epic| &epic.children)).await;
-    subtasks::add_to_epics(&mut epics, &found);
-
+    let mut epics = group_by_epic(listed, found);
+    let subtasks = load_subtasks(epics.iter().flat_map(|epic| &epic.children)).await;
+    subtasks::add_to_epics(&mut epics, &subtasks);
     Ok(epics)
 }
 
@@ -1042,34 +808,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_ticket_line_handles_empty_assignee() {
-        let line = "AMP-2842\tNeeds Triage\t\t\t\tevals cli export doesn't support packages";
-        let ticket = parse_ticket_line(line).expect("ticket should parse");
-        assert_eq!(ticket.key, "AMP-2842");
-        assert_eq!(ticket.assignee, None);
+    fn the_epic_list_is_every_epic_in_the_project() {
         assert_eq!(
-            ticket.summary,
-            "evals cli export doesn't support packages".to_string()
+            epics_jql("AMP"),
+            "project = \"AMP\" AND issuetype = Epic ORDER BY key"
         );
-    }
-
-    #[test]
-    fn parse_ticket_line_handles_assignee_and_summary() {
-        let line = "AMP-2815\tIn Progress\tMohammad Mazraeh\tRun evals ci in Olympus in parallel";
-        let ticket = parse_ticket_line(line).expect("ticket should parse");
-        assert_eq!(ticket.key, "AMP-2815");
-        assert_eq!(ticket.assignee, Some("Mohammad Mazraeh".to_string()));
-        assert_eq!(
-            ticket.summary,
-            "Run evals ci in Olympus in parallel".to_string()
-        );
-    }
-
-    #[test]
-    fn parse_ticket_line_keeps_the_real_status_name() {
-        let line = "DEMO-7\tResolved\tSam Doe\tShip it";
-        let ticket = parse_ticket_line(line).expect("ticket should parse");
-        assert_eq!(ticket.status, "Resolved");
     }
 
     #[test]
@@ -1227,6 +970,167 @@ mod tests {
         let found = vec![assigned("AMP-5", "To Do", "Pat", "pat@example.com")];
         let (mine, team) = bucket_tickets(found, &roster(), "alex.rivera@example.com");
         assert!(mine.is_empty() && team.is_empty());
+    }
+
+    fn epic_keys(count: usize) -> Vec<String> {
+        (1..=count).map(|n| format!("AMP-{n}")).collect()
+    }
+
+    #[test]
+    fn epic_children_are_searched_fifty_epics_at_a_time() {
+        // Exactly 50 epics: one search holding all of them.
+        let one = epic_children_jqls("AMP", &epic_keys(50), true);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0], {
+            let list = epic_keys(50).join(",");
+            format!(
+                "project = \"AMP\" AND (\"Epic Link\" in ({list}) OR parent in ({list})) \
+                 ORDER BY key"
+            )
+        });
+        // 51 epics: a second search that holds only the 51st.
+        let two = epic_children_jqls("AMP", &epic_keys(51), true);
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[0], one[0]);
+        assert_eq!(
+            two[1],
+            "project = \"AMP\" AND (\"Epic Link\" in (AMP-51) OR parent in (AMP-51)) \
+             ORDER BY key"
+        );
+        assert!(epic_children_jqls("AMP", &[], true).is_empty());
+    }
+
+    #[test]
+    fn without_an_epic_link_field_only_the_parent_link_is_searched() {
+        assert_eq!(
+            epic_children_jqls("AMP", &epic_keys(2), false),
+            ["project = \"AMP\" AND (parent in (AMP-1,AMP-2)) ORDER BY key"]
+        );
+    }
+
+    #[test]
+    fn epic_keys_that_are_not_shaped_like_keys_stay_out_of_the_query() {
+        let keys = vec!["AMP-1".to_string(), "x\") OR 1=1".to_string()];
+        assert_eq!(
+            epic_children_jqls("AMP", &keys, false),
+            ["project = \"AMP\" AND (parent in (AMP-1)) ORDER BY key"]
+        );
+        // A chunk with nothing left to ask about sends no search.
+        assert!(epic_children_jqls("AMP", &["no good".to_string()], false).is_empty());
+    }
+
+    /// What the children searches answer, as Jira shapes it (the Epic Link field is a plain
+    /// string): three children of AMP-100, one found twice (two searches can both match it), one
+    /// of AMP-200 through `parent`, one through Epic Link, and one of an epic outside the list.
+    const CHILDREN_PAGE: &str = r#"{"total": 7, "issues": [
+        {"key": "AMP-3", "fields": {"summary": "Three", "status": {"name": "Resolved"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-100"}},
+        {"key": "AMP-1", "fields": {"summary": "One", "status": {"name": "Done"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-100"}},
+        {"key": "AMP-2", "fields": {"summary": "Two", "status": {"name": "In Progress"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-100"}},
+        {"key": "AMP-2", "fields": {"summary": "Two", "status": {"name": "In Progress"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-100"}},
+        {"key": "AMP-4", "fields": {"summary": "Four", "status": {"name": "To Do"},
+          "issuetype": {"name": "Story", "subtask": false}, "parent": {"key": "AMP-200"}}},
+        {"key": "AMP-5", "fields": {"summary": "Five", "status": {"name": "Done"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-200"}},
+        {"key": "AMP-6", "fields": {"summary": "Six", "status": {"name": "Done"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-999"}}]}"#;
+
+    fn epic_tickets(rows: &[(&str, &str)]) -> Vec<Ticket> {
+        rows.iter()
+            .map(|(key, summary)| Ticket {
+                summary: summary.to_string(),
+                ..test_ticket(key, "In Progress")
+            })
+            .collect()
+    }
+
+    fn subtask(key: &str, parent: &str, status: &str) -> crate::jira_rest::Subtask {
+        crate::jira_rest::Subtask {
+            key: key.to_string(),
+            parent_key: parent.to_string(),
+            summary: key.to_string(),
+            status: status.to_string(),
+            assignee: None,
+            assignee_email: None,
+            labels: vec![],
+        }
+    }
+
+    #[test]
+    fn children_are_grouped_under_the_epic_they_name_with_one_copy_each() {
+        let (found, _) =
+            crate::jira_issue::parse_search_page(CHILDREN_PAGE, Some("customfield_10857")).unwrap();
+        // The epic search can answer out of order, and a page boundary can repeat an epic.
+        let listed = epic_tickets(&[
+            ("AMP-300", "Quiet"),
+            ("AMP-200", "Search"),
+            ("AMP-100", "Checkout"),
+            ("AMP-200", "Search"),
+        ]);
+
+        let epics = group_by_epic(listed, found);
+
+        let keys = |epic: &Epic| {
+            epic.children
+                .iter()
+                .map(|t| t.key.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            epics.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
+            ["AMP-100", "AMP-200", "AMP-300"]
+        );
+        assert_eq!(epics[0].summary, "Checkout");
+        assert_eq!(keys(&epics[0]), ["AMP-1", "AMP-2", "AMP-3"]);
+        // A non-sub-task's parent is its epic when no Epic Link says otherwise.
+        assert_eq!(keys(&epics[1]), ["AMP-4", "AMP-5"]);
+        // AMP-6 names an epic that isn't listed, so it belongs to no epic here.
+        assert!(epics[2].children.is_empty());
+        for child in &epics[0].children {
+            assert_eq!(child.epic_key.as_deref(), Some("AMP-100"));
+            assert_eq!(child.epic_name.as_deref(), Some("Checkout"));
+        }
+    }
+
+    #[test]
+    fn epic_progress_counts_the_children_and_sub_tasks_it_did_before() {
+        let (found, _) =
+            crate::jira_issue::parse_search_page(CHILDREN_PAGE, Some("customfield_10857")).unwrap();
+        let listed = epic_tickets(&[
+            ("AMP-100", "Checkout"),
+            ("AMP-200", "Search"),
+            ("AMP-300", "Quiet"),
+        ]);
+        let mut epics = group_by_epic(listed, found);
+        // AMP-1 gained a done sub-task, AMP-4 an open one: Jira doesn't link them to the epic.
+        subtasks::add_to_epics(
+            &mut epics,
+            &[
+                subtask("AMP-7", "AMP-1", "Done"),
+                subtask("AMP-8", "AMP-4", "To Do"),
+            ],
+        );
+
+        let rules = crate::cache::StatusRules::new(
+            &["In Progress".to_string(), "To Do".to_string()],
+            &["Done".to_string(), "Closed".to_string()],
+        );
+        // Worked by hand: AMP-100 is AMP-1, AMP-2, AMP-3 and AMP-7, of which AMP-1, AMP-3
+        // (Resolved follows Done) and AMP-7 are done; AMP-200 is AMP-4, AMP-5 and AMP-8, of
+        // which only AMP-5 is done.
+        assert_eq!(
+            epics
+                .iter()
+                .map(|e| (e.total(), e.done_count(&rules)))
+                .collect::<Vec<_>>(),
+            [(4, 3), (3, 1), (0, 0)]
+        );
+        assert_eq!(epics[0].progress_pct(&rules), 75.0);
+        assert_eq!(epics[2].progress_pct(&rules), 0.0);
+        assert_eq!(epics[1].children[2].parent_key.as_deref(), Some("AMP-4"));
     }
 
     #[test]

@@ -266,7 +266,8 @@ impl JiraRest {
     }
 }
 
-const KEYS_PER_SEARCH: usize = 50;
+/// How many keys one `key in (…)`, `parent in (…)` or `"Epic Link" in (…)` search holds.
+pub const KEYS_PER_SEARCH: usize = 50;
 /// Jira allows up to 1000 a page, and a server that allows fewer is followed by what it sends
 /// (`next_start`). Pages of 100 cost three round-trips for a team of 270 tickets, 500 only one.
 const SEARCH_PAGE_SIZE: usize = 500;
