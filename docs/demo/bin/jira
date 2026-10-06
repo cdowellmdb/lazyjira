@@ -47,8 +47,21 @@ TICKETS = [
     ("DEMO-400", "Bug", "Needs Triage", None, "Flaky timeout in nightly e2e suite", ["ci"], None),
 ]
 
+# key, status, assignee email, summary, labels, parent. DEMO-114 sits in another person's
+# group than its parent, so its summary leads with the parent's key.
+SUBTASKS = [
+    ("DEMO-111", "In Progress", "alex.rivera@example.com", "Migrate stored cards to the new vault", ["checkout"], "DEMO-101"),
+    ("DEMO-112", "To Do", "alex.rivera@example.com", "Add card tokenization endpoint", ["checkout", "backend"], "DEMO-101"),
+    ("DEMO-113", "In Progress", "priya.shah@example.com", "Wire the address lookup API", ["checkout", "frontend"], "DEMO-103"),
+    ("DEMO-114", "In Progress", "sam.chen@example.com", "Reproduce the rounding bug on staging", ["billing"], "DEMO-102"),
+]
 
-def ticket_dict(row):
+# The id of the Epic Link custom field. record.sh puts it in the demo's jira-cli config
+# (`epic.link`), which is where lazyjira reads it from.
+EPIC_LINK_FIELD = "customfield_10857"
+
+
+def ticket_dict(row, parent=None):
     key, issue_type, status, assignee, summary, labels, epic = row
     return {
         "key": key,
@@ -58,7 +71,20 @@ def ticket_dict(row):
         "summary": summary,
         "labels": labels,
         "epic": epic,
+        "parent": parent,
     }
+
+
+def all_tickets():
+    subtasks = [
+        ticket_dict((key, "Sub-task", status, assignee, summary, labels, None), parent)
+        for key, status, assignee, summary, labels, parent in SUBTASKS
+    ]
+    return [ticket_dict(row) for row in TICKETS] + subtasks
+
+
+def values(group):
+    return [v.strip().strip('"').lower() for v in group.split(",") if v.strip()]
 
 
 def matches(ticket, clause):
@@ -70,8 +96,23 @@ def matches(ticket, clause):
         value = m.group(1)
         email = ME if value.lower() == "currentuser()" else value
         return ticket["assignee"] == email
+    m = re.fullmatch(r"assignee\s+in\s*\((.*)\)", clause, re.I)
+    if m:
+        return (ticket["assignee"] or "").lower() in values(m.group(1))
     if re.fullmatch(r"assignee\s+is\s+empty", lower):
         return ticket["assignee"] is None
+
+    m = re.fullmatch(r"key\s+in\s*\((.*)\)", clause, re.I)
+    if m:
+        return ticket["key"].lower() in values(m.group(1))
+    m = re.fullmatch(r"parent\s+in\s*\((.*)\)", clause, re.I)
+    if m:
+        return (ticket["parent"] or "").lower() in values(m.group(1))
+    m = re.fullmatch(r'"epic link"\s+in\s*\((.*)\)', clause, re.I)
+    if m:
+        return (ticket["epic"] or "").lower() in values(m.group(1))
+    if re.fullmatch(r"issuetype\s+in\s+subTaskIssueTypes\(\)", clause, re.I):
+        return ticket["type"] == "Sub-task"
 
     m = re.fullmatch(r"status\s+in\s*\((.*)\)", clause, re.I)
     if m:
@@ -95,11 +136,44 @@ def matches(ticket, clause):
     return True
 
 
+def split_top(expr, word):
+    """Splits `expr` on the keyword `word`, outside parentheses and quotes."""
+    pattern = re.compile(rf"\s+{word}\s+", re.I)
+    parts, depth, quoted, start, i = [], 0, False, 0, 0
+    while i < len(expr):
+        c = expr[i]
+        if c == '"':
+            quoted = not quoted
+        elif not quoted and c == "(":
+            depth += 1
+        elif not quoted and c == ")":
+            depth -= 1
+        elif not quoted and depth == 0 and c.isspace():
+            m = pattern.match(expr, i)
+            if m:
+                parts.append(expr[start:i])
+                start = i = m.end()
+                continue
+        i += 1
+    parts.append(expr[start:])
+    return parts
+
+
+def evaluate(ticket, expr):
+    """A small JQL evaluator: OR, AND and parentheses over the clauses `matches` knows."""
+    expr = expr.strip()
+    for word, combine in (("or", any), ("and", all)):
+        parts = split_top(expr, word)
+        if len(parts) > 1:
+            return combine(evaluate(ticket, part) for part in parts)
+    if expr.startswith("(") and expr.endswith(")"):
+        return evaluate(ticket, expr[1:-1])
+    return matches(ticket, expr)
+
+
 def run_query(jql):
     jql = re.split(r"\border\s+by\b", jql, flags=re.I)[0]
-    clauses = re.split(r"\s+and\s+", jql, flags=re.I)
-    tickets = [ticket_dict(row) for row in TICKETS]
-    return [t for t in tickets if all(matches(t, c) for c in clauses)]
+    return [t for t in all_tickets() if evaluate(t, jql)]
 
 
 def flag(args, name):
@@ -131,8 +205,23 @@ def person(email):
     return {"displayName": TEAM[email], "emailAddress": email}
 
 
+def base_fields(t):
+    """The fields a list search and `issue view --raw` both return, as Jira shapes them."""
+    number = int(t["key"].split("-")[1])
+    return {
+        "summary": t["summary"],
+        "status": {"name": t["status"]},
+        "assignee": person(t["assignee"]),
+        "labels": t["labels"],
+        "updated": f"2026-09-{number % 27 + 1:02d}T10:00:00.000+0000",
+        "issuetype": {"name": t["type"], "subtask": t["type"] == "Sub-task"},
+        "parent": {"key": t["parent"]} if t["parent"] else None,
+        EPIC_LINK_FIELD: t["epic"],
+    }
+
+
 def issue_view(key):
-    rows = [ticket_dict(row) for row in TICKETS if row[0] == key]
+    rows = [t for t in all_tickets() if t["key"] == key]
     if not rows:
         sys.exit(f"issue {key} not found")
     t = rows[0]
@@ -178,9 +267,7 @@ def issue_view(key):
     payload = {
         "key": t["key"],
         "fields": {
-            "summary": t["summary"],
-            "status": {"name": t["status"]},
-            "assignee": person(t["assignee"]),
+            **base_fields(t),
             "reporter": person(reporter),
             "description": (
                 "h2. Context\n"
@@ -199,8 +286,6 @@ def issue_view(key):
                 "{code}\n\n"
                 "(!) Coordinate with the {{payments}} team before enabling in production."
             ),
-            "labels": t["labels"],
-            "parent": {"key": t["epic"]} if t["epic"] else None,
             "comment": {"comments": comments},
         },
         "changelog": {"histories": histories},
