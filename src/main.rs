@@ -1,4 +1,5 @@
 mod app;
+mod bounded;
 mod bulk_actions;
 mod bulk_plan;
 mod bulk_upload;
@@ -267,18 +268,11 @@ where
     Fut: std::future::Future<Output = (String, std::result::Result<T, String>)> + Send + 'static,
     T: Send + 'static,
 {
-    let mut items = items.into_iter();
-    let mut tasks = tokio::task::JoinSet::new();
-    for item in items.by_ref().take(MAX_BULK_CONCURRENCY) {
-        tasks.spawn(task(item));
-    }
     let mut results = Vec::new();
-    while let Some(joined) = tasks.join_next().await {
+    bounded::for_each_bounded(MAX_BULK_CONCURRENCY, items, task, |_, joined| {
         results.push(joined.unwrap_or_else(|err| ("unknown".to_string(), Err(err.to_string()))));
-        if let Some(item) = items.next() {
-            tasks.spawn(task(item));
-        }
-    }
+    })
+    .await;
     results
 }
 
@@ -2343,6 +2337,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The most calls `run_bounded` has going at once over `count` items that each take a moment.
+    async fn most_at_once(count: usize) -> usize {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        use std::sync::Arc;
+
+        let running = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+        let (r, m) = (running.clone(), most.clone());
+        let results = run_bounded((0..count).collect(), move |n| {
+            let (running, most) = (r.clone(), m.clone());
+            async move {
+                most.fetch_max(running.fetch_add(1, SeqCst) + 1, SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                running.fetch_sub(1, SeqCst);
+                (format!("AMP-{n}"), Ok::<(), String>(()))
+            }
+        })
+        .await;
+        assert_eq!(results.len(), count);
+        most.load(SeqCst)
+    }
+
+    #[tokio::test]
+    async fn a_bulk_action_makes_six_jira_calls_at_a_time() {
+        assert_eq!(most_at_once(5).await, 5);
+        assert_eq!(most_at_once(6).await, 6);
+        // The seventh waits for one of the six to finish.
+        assert_eq!(most_at_once(7).await, 6);
     }
 
     #[test]
