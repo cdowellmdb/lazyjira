@@ -24,6 +24,65 @@ enum TicketFetchScope {
     ActiveAndRecentDone,
 }
 
+/// How many of a read's searches run at once: a project with 400 epics needs about fifty,
+/// which one after another is a minute, and a few at a time is easy on Jira.
+const SEARCHES_AT_ONCE: usize = 4;
+
+/// Runs `search` on each of `jqls`, `SEARCHES_AT_ONCE` at a time, and gives each answer to `done`
+/// with the position of its query in `jqls`, as it arrives rather than in order.
+async fn search_each<S, F>(
+    jqls: Vec<String>,
+    search: S,
+    mut done: impl FnMut(usize, Result<Vec<Ticket>>),
+) where
+    S: Fn(String) -> F,
+    F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
+{
+    let mut waiting = jqls.into_iter().enumerate();
+    let mut running = tokio::task::JoinSet::new();
+    loop {
+        while running.len() < SEARCHES_AT_ONCE {
+            let Some((at, jql)) = waiting.next() else {
+                break;
+            };
+            let answer = search(jql);
+            running.spawn(async move { (at, answer.await) });
+        }
+        match running.join_next().await {
+            Some(joined) => {
+                let (at, found) = joined.expect("a search task panicked");
+                done(at, found);
+            }
+            None => return,
+        }
+    }
+}
+
+/// The tickets every one of `jqls` finds, in the order of the queries. The first query that
+/// fails, in that order, fails them all.
+async fn search_in_order<S, F>(jqls: Vec<String>, search: S) -> Result<Vec<Ticket>>
+where
+    S: Fn(String) -> F,
+    F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
+{
+    let mut answers: Vec<Option<Result<Vec<Ticket>>>> =
+        std::iter::repeat_with(|| None).take(jqls.len()).collect();
+    search_each(jqls, search, |at, found| answers[at] = Some(found)).await;
+    let mut found = Vec::new();
+    for answer in answers {
+        found.extend(answer.expect("every query is answered")?);
+    }
+    Ok(found)
+}
+
+/// Every ticket `jqls` find (see `search_in_order`), asking Jira for `fields`.
+async fn search_all(jqls: Vec<String>, fields: &'static [&'static str]) -> Result<Vec<Ticket>> {
+    search_in_order(jqls, |jql| async move {
+        crate::jira_rest::search(&jql, fields).await
+    })
+    .await
+}
+
 /// The searches that find the sub-tasks among `keys` and under them, `KEYS_PER_SEARCH` keys to a
 /// search. A chunk with no usable key sends no search.
 fn subtasks_jqls(keys: &[String]) -> Vec<String> {
@@ -41,12 +100,7 @@ async fn load_subtasks<'a>(tickets: impl Iterator<Item = &'a Ticket>) -> Result<
     let mut keys: Vec<String> = tickets.map(|ticket| ticket.key.clone()).collect();
     keys.sort();
     keys.dedup();
-    let mut found = Vec::new();
-    // ponytail: one search after another, as with the children's.
-    for jql in subtasks_jqls(&keys) {
-        found.extend(crate::jira_rest::search(&jql, LIST_FIELDS).await?);
-    }
-    Ok(found)
+    search_all(subtasks_jqls(&keys), LIST_FIELDS).await
 }
 
 /// What a detail adds to a list row's fields: what the detail overlay shows. `enrich_ticket`
@@ -70,8 +124,8 @@ pub async fn fetch_ticket_details(
     read_details(
         keys,
         |jql| {
-            let fields = &fields;
-            async move { crate::jira_rest::search(&jql, fields).await }
+            let fields = fields.clone();
+            async move { crate::jira_rest::search(&jql, &fields).await }
         },
         deliver,
     )
@@ -85,31 +139,43 @@ fn as_detail(mut ticket: Ticket) -> Ticket {
 }
 
 /// Reads the details of `keys`, `KEYS_PER_SEARCH` at a time (usually one page of results), with
-/// `search`, which runs a JQL query. Each key's outcome goes to `deliver` as its chunk is read.
-/// A chunk that fails fails only its keys, so the rest are still read and the failed ones are
-/// asked for again later.
-// ponytail: one chunk after another; read a few at once if a cold start of thousands of
-// tickets is too slow.
+/// `search`, which runs a JQL query, a few chunks at once (`SEARCHES_AT_ONCE`). Each key's
+/// outcome goes to `deliver` as its chunk is read. A chunk that fails fails only its keys, so the
+/// rest are still read and the failed ones are asked for again later.
 async fn read_details<S, F>(
     keys: &[String],
     search: S,
     mut deliver: impl FnMut(String, Result<Ticket, String>),
 ) where
     S: Fn(String) -> F,
-    F: Future<Output = Result<Vec<Ticket>>>,
+    F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
 {
-    for chunk in keys.chunks(KEYS_PER_SEARCH) {
-        let found = match key_list(chunk) {
-            Some(list) => search(format!("key in ({list})")).await.map(|tickets| {
-                tickets
+    let chunks: Vec<&[String]> = keys.chunks(KEYS_PER_SEARCH).collect();
+    // The chunk each query is for. A chunk with no usable key sends no search.
+    let mut searched = Vec::new();
+    let mut jqls = Vec::new();
+    for (at, chunk) in chunks.iter().enumerate() {
+        match key_list(chunk) {
+            Some(list) => {
+                searched.push(at);
+                jqls.push(format!("key in ({list})"));
+            }
+            None => {
+                for key in *chunk {
+                    deliver(key.clone(), Err(format!("{key:?} isn't a ticket key")));
+                }
+            }
+        }
+    }
+
+    search_each(jqls, search, |query, found| {
+        let chunk = chunks[searched[query]];
+        match found {
+            Ok(tickets) => {
+                let mut found: HashMap<_, _> = tickets
                     .into_iter()
                     .map(|ticket| (ticket.key.clone(), ticket))
-                    .collect::<HashMap<_, _>>()
-            }),
-            None => Ok(HashMap::new()),
-        };
-        match found {
-            Ok(mut found) => {
+                    .collect();
                 for key in chunk {
                     let result = match found.remove(key) {
                         Some(ticket) => Ok(as_detail(ticket)),
@@ -126,7 +192,8 @@ async fn read_details<S, F>(
                 }
             }
         }
-    }
+    })
+    .await
 }
 
 /// What a list row needs. `key` always comes back, and the Epic Link field is added by the
@@ -338,11 +405,11 @@ async fn fetch_epics(config: &AppConfig) -> Result<Vec<Epic>> {
     let project = &config.jira.project;
     let listed = search(&epics_jql(project), EPIC_FIELDS).await?;
     let keys: Vec<String> = listed.iter().map(|epic| epic.key.clone()).collect();
-    let mut found = Vec::new();
-    // ponytail: one search after another; join them if a hundred epics ever drag.
-    for jql in epic_children_jqls(project, &keys, epic_link_field().is_some()) {
-        found.extend(search(&jql, LIST_FIELDS).await?);
-    }
+    let found = search_all(
+        epic_children_jqls(project, &keys, epic_link_field().is_some()),
+        LIST_FIELDS,
+    )
+    .await?;
 
     let mut epics = group_by_epic(listed, found);
     let subtasks = load_subtasks(epics.iter().flat_map(|epic| &epic.children)).await?;
@@ -1006,6 +1073,67 @@ mod tests {
         // Nothing to read, nothing to search.
         let (searches, delivered) = read(&[], has_all).await;
         assert!(searches.is_empty() && delivered.is_empty());
+    }
+
+    /// A search for jql "n" that answers one ticket, T-n, after a while: the earlier the query
+    /// the longer it takes, so answers arrive out of order. `running` and `most` count how many
+    /// searches are at it at once, and the most there were.
+    fn slow_search(
+        running: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        most: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        jql: String,
+    ) -> impl Future<Output = Result<Vec<Ticket>>> + Send + 'static {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (running, most) = (running.clone(), most.clone());
+        async move {
+            let now = running.fetch_add(1, SeqCst) + 1;
+            most.fetch_max(now, SeqCst);
+            let n: u64 = jql.parse().unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(4 * (12 - n.min(11)))).await;
+            running.fetch_sub(1, SeqCst);
+            if jql == "7" {
+                anyhow::bail!("Jira answered 503.");
+            }
+            Ok(vec![test_ticket(&format!("T-{jql}"), "To Do")])
+        }
+    }
+
+    /// Runs `count` queries ("0", "1", ...) through `search_in_order`, skipping the one that
+    /// fails unless `count` is past it, returning what it found and how many ran at once.
+    async fn run_queries(count: usize) -> (Result<Vec<Ticket>>, usize) {
+        let running = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let most = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let jqls = (0..count).map(|n| n.to_string()).collect();
+        let found = search_in_order(jqls, |jql| slow_search(&running, &most, jql)).await;
+        (found, most.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn searches_run_four_at_a_time_and_answer_in_the_order_asked() {
+        // Fewer queries than the limit all run at once; exactly the limit does too.
+        assert_eq!(run_queries(3).await.1, 3);
+        assert_eq!(run_queries(4).await.1, 4);
+        // The fifth waits for one of the four to finish, so never more than four are at it.
+        let (found, most) = run_queries(5).await;
+        assert_eq!(most, 4);
+        assert_eq!(
+            ticket_keys(&found.unwrap()),
+            ["T-0", "T-1", "T-2", "T-3", "T-4"],
+            "in query order although the earlier ones finish last"
+        );
+        // Seven queries (0 to 6) are answered in order too, still four at a time.
+        let (found, most) = run_queries(7).await;
+        assert_eq!(most, 4);
+        assert_eq!(found.unwrap().len(), 7);
+        // No queries, nothing to run.
+        assert!(run_queries(0).await.0.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn one_failed_search_fails_them_all() {
+        // Query "7" fails, and 0 to 9 are all run.
+        let (found, _) = run_queries(10).await;
+        assert_eq!(found.unwrap_err().to_string(), "Jira answered 503.");
     }
 
     #[tokio::test]
