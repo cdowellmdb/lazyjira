@@ -203,7 +203,7 @@ def person(email):
 
 
 def base_fields(t):
-    """The fields a list search and `issue view --raw` both return, as Jira shapes them."""
+    """The fields a list search and a single issue both return, as Jira shapes them."""
     number = int(t["key"].split("-")[1])
     return {
         "summary": t["summary"],
