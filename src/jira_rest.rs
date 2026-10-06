@@ -266,15 +266,16 @@ impl JiraRest {
     }
 }
 
-const KEYS_PER_SEARCH: usize = 50;
+/// How many keys one `key in (…)`, `parent in (…)` or `"Epic Link" in (…)` search holds.
+pub const KEYS_PER_SEARCH: usize = 50;
 /// Jira allows up to 1000 a page, and a server that allows fewer is followed by what it sends
 /// (`next_start`). Pages of 100 cost three round-trips for a team of 270 tickets, 500 only one.
 const SEARCH_PAGE_SIZE: usize = 500;
 const SUBTASK_FIELDS: [&str; 5] = ["summary", "status", "assignee", "labels", "parent"];
 
-/// JQL for the sub-tasks among `keys` and under them. Keys that don't look like Jira keys are
-/// left out so they can't break the query; `None` when none are left.
-fn subtasks_jql(keys: &[String]) -> Option<String> {
+/// `keys` as the inside of a JQL `in (…)` list. Keys that don't look like Jira keys are left out
+/// so they can't break the query; `None` when none are left.
+pub fn key_list(keys: &[String]) -> Option<String> {
     let keys: Vec<&str> = keys
         .iter()
         .map(String::as_str)
@@ -285,10 +286,12 @@ fn subtasks_jql(keys: &[String]) -> Option<String> {
                     .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         })
         .collect();
-    if keys.is_empty() {
-        return None;
-    }
-    let list = keys.join(",");
+    (!keys.is_empty()).then(|| keys.join(","))
+}
+
+/// JQL for the sub-tasks among `keys` and under them; `None` when no key is usable.
+fn subtasks_jql(keys: &[String]) -> Option<String> {
+    let list = key_list(keys)?;
     Some(format!(
         "(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()"
     ))
