@@ -880,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_filter_is_scoped_to_the_project_the_way_jira_cli_did() {
+    fn a_saved_filter_is_limited_to_the_project_and_keeps_its_own_order() {
         assert_eq!(
             scoped_jql("AMP", "type = Bug AND assignee = currentUser()"),
             "project = \"AMP\" AND (type = Bug AND assignee = currentUser()) \

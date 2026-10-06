@@ -109,6 +109,11 @@ pub fn server_url() -> Result<String> {
 fn configured_server(yaml: &str) -> Result<String> {
     let config: JiraCliConfig =
         serde_yaml::from_str(yaml).context("jira-cli's config has no usable `server` setting")?;
+    validated_server(&config)
+}
+
+/// The config's `server` as a base URL without a trailing slash, if it is an HTTP(S) one.
+fn validated_server(config: &JiraCliConfig) -> Result<String> {
     let url = reqwest::Url::parse(config.server.trim()).context("Invalid Jira server URL")?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         bail!("Jira server must be an HTTP or HTTPS URL");
@@ -149,6 +154,7 @@ impl JiraRest {
     fn new(config_yaml: &str, token: String) -> Result<Self> {
         let config: JiraCliConfig = serde_yaml::from_str(config_yaml)
             .context("jira-cli's config has no usable `server` setting")?;
+        let server = validated_server(&config)?;
         let auth = match config.auth_type.as_deref().unwrap_or_default() {
             "bearer" => Auth::Bearer(token),
             // jira-cli treats a missing auth_type as basic.
@@ -169,11 +175,7 @@ impl JiraRest {
             .user_agent(concat!("lazyjira/", env!("CARGO_PKG_VERSION")))
             .build()
             .context("Couldn't set up the HTTP client")?;
-        Ok(Self {
-            http,
-            server: configured_server(config_yaml)?,
-            auth,
-        })
+        Ok(Self { http, server, auth })
     }
 
     fn request(&self, method: Method, path: &str) -> RequestBuilder {
@@ -266,9 +268,9 @@ where
 
 /// How many keys one `key in (…)`, `parent in (…)` or `"Epic Link" in (…)` search holds.
 pub const KEYS_PER_SEARCH: usize = 50;
-/// What a page asks for. A server that allows fewer (Jira Server and Data Center cap it at
-/// `jira.search.views.default.max`, 1000 by default) is followed by what it sends, see
-/// `next_start`. Pages of 100 cost three round-trips for a team of 270 tickets, 500 only one.
+/// What a page asks for. A server that allows fewer is followed by what it sends, see
+/// `next_start`; the instance this was measured on takes 500. Pages of 100 cost three
+/// round-trips for a team of 270 tickets, 500 only one.
 const SEARCH_PAGE_SIZE: usize = 500;
 
 /// Whether `key` looks like a Jira key, safe to put in a JQL list.
