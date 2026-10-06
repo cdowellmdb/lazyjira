@@ -272,7 +272,7 @@ The preview also warns about summaries that match an existing ticket or repeat w
 
 - On startup, lazyjira shows the last saved snapshot, then refreshes active tickets, then recently finished ones.
 - Epic relationships and ticket details are cached and refreshed in the background.
-- Cache files are per project, named `lazyjira_*` in `~/.cache/lazyjira/`: a snapshot, epic and ticket-detail caches, and your email from `jira me`.
+- Cache files are per project, named `lazyjira_*` in `~/.cache/lazyjira/` and readable only by you: a snapshot, epic and ticket-detail caches, and your email from `jira me`.
 
 ## Limitations
 

@@ -3,6 +3,8 @@
 //! in-memory copy of the details that refreshes hydrate from.
 
 use std::collections::HashMap;
+use std::io::Write;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -68,13 +70,27 @@ fn write_cache_file(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     write_cache_text(path, &json)
 }
 
+/// Writes a cache file that only this user can read: descriptions and comments are in it. The
+/// directory is made private too, and a file an earlier build made readable is tightened.
 fn write_cache_text(path: &Path, json: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
             .with_context(|| format!("Failed to create cache directory: {}", dir.display()))?;
     }
-    std::fs::write(path, json)
-        .with_context(|| format!("Failed to write cache file: {}", path.display()))
+    let write = || -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(json.as_bytes())
+    };
+    write().with_context(|| format!("Failed to write cache file: {}", path.display()))
 }
 
 fn now_unix_secs() -> u64 {
@@ -625,5 +641,28 @@ mod tests {
         assert!(!path.exists());
         // Closing a cache whose writer is gone doesn't wait for it.
         details.close().await;
+    }
+
+    #[test]
+    fn cache_files_and_their_directory_are_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+        // A file an earlier build made readable by everyone is tightened when it's rewritten.
+        let existing = cache_path(MY_EMAIL_PREFIX, &project("MODE"));
+        let _remove = Remove::new(vec![existing.clone()]);
+        std::fs::create_dir_all(existing.parent().unwrap()).unwrap();
+        std::fs::write(&existing, "\"old\"").unwrap();
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_cache_file(&existing, &"new").unwrap();
+        assert_eq!(mode(&existing), 0o600);
+
+        // A directory made for the caches is closed to others too.
+        let dir = cache_dir().join(format!("private-{}", std::process::id()));
+        let made = dir.join("x.json");
+        write_cache_text(&made, "{}").unwrap();
+        assert_eq!((mode(&dir), mode(&made)), (0o700, 0o600));
+        std::fs::remove_file(&made).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
     }
 }
