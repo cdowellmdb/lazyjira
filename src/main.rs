@@ -6,7 +6,9 @@ mod cache;
 mod config;
 mod jira_client;
 mod jira_issue;
+mod jira_reads;
 mod jira_rest;
+mod local_cache;
 mod mouse;
 mod move_picker;
 mod moves;
@@ -113,7 +115,7 @@ fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, c
     let tx = tx.clone();
     let config = config.clone();
     tokio::spawn(async move {
-        let result = jira_client::refresh_epics_cache(&config)
+        let result = jira_reads::refresh_epics_cache(&config)
             .await
             .map_err(|e| e.to_string());
         let _ = tx.send(BackgroundMessage::EpicsRefreshed {
@@ -137,9 +139,9 @@ fn spawn_cache_refresh(
     let config = config.clone();
     tokio::spawn(async move {
         let result = match phase {
-            CacheRefreshPhase::ActiveOnly => jira_client::fetch_active_only(&config).await,
-            CacheRefreshPhase::Full => jira_client::fetch_all(&config).await,
-            CacheRefreshPhase::Manual => jira_client::fetch_all(&config).await,
+            CacheRefreshPhase::ActiveOnly => jira_reads::fetch_active_only(&config).await,
+            CacheRefreshPhase::Full => jira_reads::fetch_all(&config).await,
+            CacheRefreshPhase::Manual => jira_reads::fetch_all(&config).await,
         }
         .map_err(|e| e.to_string());
         let _ = tx.send(BackgroundMessage::CacheRefreshed {
@@ -158,7 +160,7 @@ fn spawn_ticket_detail_fetch(
 ) {
     let tx = tx.clone();
     tokio::spawn(async move {
-        let result = jira_client::fetch_ticket_detail(&key)
+        let result = jira_reads::fetch_ticket_detail(&key)
             .await
             .map_err(|e| e.to_string());
         let _ = tx.send(BackgroundMessage::TicketDetailFetched {
@@ -180,7 +182,7 @@ fn spawn_ticket_detail_prefetch(
 
     let tx = tx.clone();
     tokio::spawn(async move {
-        jira_client::fetch_ticket_details(&keys, |key, result| {
+        jira_reads::fetch_ticket_details(&keys, |key, result| {
             let _ = tx.send(BackgroundMessage::TicketDetailFetched {
                 key,
                 requested_at,
@@ -448,7 +450,7 @@ async fn main() -> Result<()> {
         .find(|tab| tab.title() == config.preferences.start_tab)
         .unwrap_or(Tab::MyWork);
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
-    let detail_cache = jira_client::DetailCache::spawn(&config.jira.project);
+    let detail_cache = local_cache::DetailCache::spawn(&config.jira.project);
     // Refreshes use the remembered email; this keeps it current for the next one. A failure
     // keeps the old one, and a refresh without one asks `jira me` itself.
     let project = config.jira.project.clone();
@@ -457,7 +459,7 @@ async fn main() -> Result<()> {
     });
 
     // Fast startup: load persisted snapshot immediately, then revalidate in stages.
-    if let Some(snapshot) = jira_client::load_startup_cache_snapshot(&config.jira.project) {
+    if let Some(snapshot) = local_cache::load_startup_cache_snapshot(&config.jira.project) {
         app.replace_cache(snapshot.cache, app.moves.now());
         app.loading = false;
         app.cache_stale_age_secs = Some(snapshot.age_secs);
@@ -465,7 +467,7 @@ async fn main() -> Result<()> {
         app.flash = Some("Loaded cached data. Refreshing active tickets...".to_string());
         spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::ActiveOnly, &config);
     } else {
-        let mut cache = match jira_client::fetch_active_only(&config).await {
+        let mut cache = match jira_reads::fetch_active_only(&config).await {
             Ok(cache) => cache,
             Err(e) => {
                 // No snapshot to fall back on. Leave the screen first, or the error is lost
@@ -558,7 +560,7 @@ async fn main() -> Result<()> {
                             app.ticket_sync_stage = None;
                             app.clamp_selection();
                             queue_detail_prefetch(&mut app, &bg_tx);
-                            if let Err(e) = jira_client::save_full_cache_snapshot(
+                            if let Err(e) = local_cache::save_full_cache_snapshot(
                                 &config.jira.project,
                                 &app.cache,
                             ) {
@@ -580,7 +582,7 @@ async fn main() -> Result<()> {
                             app.ticket_sync_stage = None;
                             app.clamp_selection();
                             queue_detail_prefetch(&mut app, &bg_tx);
-                            if let Err(e) = jira_client::save_full_cache_snapshot(
+                            if let Err(e) = local_cache::save_full_cache_snapshot(
                                 &config.jira.project,
                                 &app.cache,
                             ) {
@@ -2100,7 +2102,7 @@ fn handle_filter_keys(
                     let jql = filter.jql.clone();
                     let requested_at = app.moves.now();
                     tokio::spawn(async move {
-                        let result = jira_client::fetch_jql_query(&cfg, &jql)
+                        let result = jira_reads::fetch_jql_query(&cfg, &jql)
                             .await
                             .map_err(|e| e.to_string());
                         let _ = tx.send(BackgroundMessage::FilterResults {
