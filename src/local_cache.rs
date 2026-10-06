@@ -113,8 +113,11 @@ fn load_details_cache(project: &str) -> HashMap<String, Ticket> {
     read_cache_file(&cache_path(DETAILS_CACHE_PREFIX, project)).unwrap_or_default()
 }
 
+/// The remembered email, normalized as it is read: a file written by an earlier build or edited
+/// by hand may spell it differently, and everything after compares emails exactly.
 pub fn load_my_email(project: &str) -> Option<String> {
-    read_cache_file(&cache_path(MY_EMAIL_PREFIX, project))
+    let email: String = read_cache_file(&cache_path(MY_EMAIL_PREFIX, project))?;
+    Some(crate::cache::normalize_email(&email))
 }
 
 /// Remembers `email` for later refreshes. Not being able to write the file only costs the next
@@ -358,6 +361,17 @@ mod tests {
 
         assert_eq!(load_my_email(&a).as_deref(), Some("me@example.com"));
         assert_eq!(load_my_email(&b), None);
+    }
+
+    #[test]
+    fn a_remembered_email_is_read_in_the_form_the_app_compares() {
+        // A file from before emails were normalized, or edited by hand.
+        let project = project("EMAIL_CASE");
+        let path = cache_path(MY_EMAIL_PREFIX, &project);
+        let _remove = Remove(vec![path.clone()]);
+        write_cache_file(&path, &" Me@Example.COM ").unwrap();
+
+        assert_eq!(load_my_email(&project).as_deref(), Some("me@example.com"));
     }
 
     #[test]

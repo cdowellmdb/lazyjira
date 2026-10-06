@@ -239,16 +239,18 @@ fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchSco
 
 /// The roster member `ticket` is assigned to: the one with the assignee's email, else the one
 /// with their display name, for when Jira hides the email (or the roster has another address).
+/// The list search only finds tickets assigned to a roster email, so an email the roster lacks
+/// is another address of someone on it, and the name is how to tell who.
 fn roster_member<'a>(members: &'a [TeamMember], ticket: &Ticket) -> Option<&'a TeamMember> {
     let by_email = ticket
         .assignee_email
         .as_deref()
         .and_then(|email| members.iter().find(|member| member.email == email));
     by_email.or_else(|| {
-        let name = ticket.assignee.as_deref()?;
+        let name = ticket.assignee.as_deref()?.to_lowercase();
         members
             .iter()
-            .find(|member| member.name.eq_ignore_ascii_case(name))
+            .find(|member| member.name.to_lowercase() == name)
     })
 }
 
@@ -683,6 +685,21 @@ mod tests {
             team[0].assignee_email.as_deref(),
             Some("alex.rivera@example.com")
         );
+    }
+
+    #[test]
+    fn display_names_match_whatever_the_case_even_beyond_ascii() {
+        let mut members = vec![TeamMember {
+            name: "José Álvarez".into(),
+            email: "jose@example.com".into(),
+        }];
+        let mut hidden = test_ticket("AMP-1", "To Do");
+        hidden.assignee = Some("JOSÉ ÁLVAREZ".to_string());
+
+        let (_, team) = bucket_tickets(vec![hidden], &mut members, "me@example.com");
+
+        assert_eq!(members.len(), 1, "José is already on the roster");
+        assert_eq!(team[0].assignee_email.as_deref(), Some("jose@example.com"));
     }
 
     #[test]
