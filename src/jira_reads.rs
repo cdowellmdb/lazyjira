@@ -473,20 +473,8 @@ mod tests {
 
     fn test_ticket(key: &str, status: &str) -> Ticket {
         Ticket {
-            key: key.to_string(),
             summary: format!("Summary for {}", key),
-            status: status.to_string(),
-            assignee: None,
-            assignee_email: None,
-            reporter: None,
-            description: None,
-            labels: Vec::new(),
-            epic_key: None,
-            epic_name: None,
-            parent_key: None,
-            updated: None,
-            detail_loaded: false,
-            activity: Vec::new(),
+            ..Ticket::for_test(key, status)
         }
     }
 

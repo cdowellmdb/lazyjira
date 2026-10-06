@@ -2392,20 +2392,8 @@ mod tests {
 
     fn ticket(key: &str, summary: &str, status: &str) -> crate::cache::Ticket {
         crate::cache::Ticket {
-            key: key.to_string(),
             summary: summary.to_string(),
-            status: status.to_string(),
-            assignee: None,
-            assignee_email: None,
-            reporter: None,
-            description: None,
-            labels: Vec::new(),
-            epic_key: None,
-            epic_name: None,
-            parent_key: None,
-            updated: None,
-            detail_loaded: false,
-            activity: Vec::new(),
+            ..crate::cache::Ticket::for_test(key, status)
         }
     }
 

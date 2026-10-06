@@ -248,7 +248,7 @@ pub enum ActivityKind {
 }
 
 /// A single Jira ticket.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Ticket {
     pub key: String,
     pub summary: String,
@@ -270,7 +270,8 @@ pub struct Ticket {
     #[serde(default)]
     pub parent_key: Option<String>,
     /// Jira's `updated` timestamp as Jira sends it (`2026-09-30T10:23:20.000+0000`). Filled by
-    /// the list search; caches from before it load without one.
+    /// the list search; caches from before it load without one. Nothing shows it yet: the
+    /// Updated column in the list-readability spec (#54) reads it.
     #[serde(default)]
     pub updated: Option<String>,
     #[serde(default)]
@@ -287,17 +288,7 @@ impl Ticket {
             key: key.to_string(),
             summary: key.to_string(),
             status: status.to_string(),
-            assignee: None,
-            assignee_email: None,
-            reporter: None,
-            description: None,
-            labels: Vec::new(),
-            epic_key: None,
-            epic_name: None,
-            parent_key: None,
-            updated: None,
-            detail_loaded: false,
-            activity: Vec::new(),
+            ..Ticket::default()
         }
     }
 }
