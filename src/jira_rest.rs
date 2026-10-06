@@ -266,7 +266,9 @@ impl JiraRest {
 }
 
 const KEYS_PER_SEARCH: usize = 50;
-const SEARCH_PAGE_SIZE: usize = 100;
+/// Jira allows up to 1000 a page, and a server that allows fewer is followed by what it sends
+/// (`next_start`). Pages of 100 cost three round-trips for a team of 270 tickets, 500 only one.
+const SEARCH_PAGE_SIZE: usize = 500;
 const SUBTASK_FIELDS: [&str; 5] = ["summary", "status", "assignee", "labels", "parent"];
 
 /// JQL for the sub-tasks among `keys` and under them. Keys that don't look like Jira keys are
@@ -451,7 +453,7 @@ mod tests {
             json!({
                 "jql": "project = DEMO",
                 "startAt": 200,
-                "maxResults": 100,
+                "maxResults": 500,
                 "fields": ["summary", "labels"],
             })
         );
@@ -460,10 +462,10 @@ mod tests {
     #[test]
     fn a_search_follows_pages_until_the_total_is_read() {
         // Exactly one full page: no second request.
-        assert_eq!(next_start(0, 100, 100), None);
-        // One more match than a page holds: the second page starts at the 101st.
-        assert_eq!(next_start(0, 100, 101), Some(100));
-        assert_eq!(next_start(100, 1, 101), None);
+        assert_eq!(next_start(0, 500, 500), None);
+        // One more match than a page holds: the second page starts at the 501st.
+        assert_eq!(next_start(0, 500, 501), Some(500));
+        assert_eq!(next_start(500, 1, 501), None);
         // A server that caps pages below ours is followed by what it actually sent.
         assert_eq!(next_start(0, 50, 120), Some(50));
         assert_eq!(next_start(50, 50, 120), Some(100));
