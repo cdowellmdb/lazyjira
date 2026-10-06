@@ -297,6 +297,8 @@ pub struct App {
     pub keybindings_page_height: Cell<u16>,
     /// Ticket keys currently being fetched for rich detail.
     detail_fetching: HashSet<String>,
+    /// The ticket details fetched so far, which list reads fill in and the writer keeps on disk.
+    pub details: crate::local_cache::DetailCache,
     /// Why the last detail fetch failed, by ticket key.
     detail_fetch_errors: HashMap<String, String>,
     /// Single-ticket moves waiting on Jira, confirmed, or rejected.
@@ -380,6 +382,7 @@ impl App {
             keybindings_scroll_max: Cell::new(0),
             keybindings_page_height: Cell::new(1),
             detail_fetching: HashSet::new(),
+            details: crate::local_cache::DetailCache::in_memory(),
             detail_fetch_errors: HashMap::new(),
             moves: crate::moves::MoveTracker::default(),
             last_request_id: 0,
@@ -538,7 +541,7 @@ impl App {
 
     pub fn replace_epics(&mut self, epics: Vec<crate::cache::Epic>, requested_at: u64) {
         self.ensure_visible_keys_cache();
-        crate::jira_client::attach_epics_to_tickets(
+        crate::jira_reads::attach_epics_to_tickets(
             &mut self.cache.my_tickets,
             &mut self.cache.team_tickets,
             &epics,
@@ -1755,16 +1758,8 @@ impl App {
             if detail.assignee.is_some() {
                 ticket.assignee = detail.assignee.clone();
             }
-            // Team groups by exact email, so the same address in Jira's spelling keeps the
-            // roster's.
-            if let Some(email) = &detail.assignee_email {
-                let same = ticket
-                    .assignee_email
-                    .as_deref()
-                    .is_some_and(|own| own.eq_ignore_ascii_case(email));
-                if !same {
-                    ticket.assignee_email = Some(email.clone());
-                }
+            if detail.assignee_email.is_some() {
+                ticket.assignee_email = detail.assignee_email.clone();
             }
             if detail.reporter.is_some() {
                 ticket.reporter = detail.reporter.clone();
@@ -1920,20 +1915,8 @@ mod tests {
 
     fn ticket(key: &str, summary: &str) -> Ticket {
         Ticket {
-            key: key.to_string(),
             summary: summary.to_string(),
-            status: "To Do".to_string(),
-            assignee: None,
-            assignee_email: None,
-            reporter: None,
-            description: None,
-            labels: Vec::new(),
-            epic_key: None,
-            epic_name: None,
-            parent_key: None,
-            updated: None,
-            detail_loaded: false,
-            activity: Vec::new(),
+            ..Ticket::for_test(key, "To Do")
         }
     }
 
@@ -2917,22 +2900,14 @@ mod tests {
     }
 
     #[test]
-    fn a_detail_fetch_keeps_the_rosters_spelling_of_the_assignees_email() {
+    fn a_detail_fetch_replaces_the_assignees_email() {
         let mut app = App::new();
         let mut team_ticket = Ticket::for_test("AMP-1", "To Do");
         team_ticket.assignee_email = Some("sam.chen@example.com".to_string());
         app.cache.team_tickets = vec![team_ticket];
 
-        // Team groups by exact email, so Jira's own spelling must not replace the roster's.
-        let mut detail = Ticket::for_test("AMP-1", "To Do");
-        detail.assignee_email = Some("Sam.Chen@Example.com".to_string());
-        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
-        assert_eq!(
-            app.cache.team_tickets[0].assignee_email.as_deref(),
-            Some("sam.chen@example.com")
-        );
-
         // A different assignee is a reassignment, and replaces it.
+        let mut detail = Ticket::for_test("AMP-1", "To Do");
         detail.assignee_email = Some("alex@example.com".to_string());
         assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
         assert_eq!(

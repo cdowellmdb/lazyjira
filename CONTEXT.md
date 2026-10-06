@@ -55,6 +55,10 @@ _Avoid_: Search when referring to a saved JQL query.
 **Search**:
 A text filter over loaded tickets and, in the Team view, team members.
 
+**Jira search**:
+A JQL query sent to Jira's REST search endpoint to read tickets (`jira_rest::search`), for a list, an epic's children, sub-tasks or a batch of details. A saved filter's JQL is sent through it too.
+_Avoid_: Search for a call to Jira; Search is the local text filter.
+
 **Status focus**:
 A restriction of My Work or Team to one displayed active status.
 

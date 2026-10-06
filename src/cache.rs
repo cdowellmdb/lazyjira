@@ -248,7 +248,7 @@ pub enum ActivityKind {
 }
 
 /// A single Jira ticket.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Ticket {
     pub key: String,
     pub summary: String,
@@ -270,7 +270,8 @@ pub struct Ticket {
     #[serde(default)]
     pub parent_key: Option<String>,
     /// Jira's `updated` timestamp as Jira sends it (`2026-09-30T10:23:20.000+0000`). Filled by
-    /// the list search; caches from before it load without one.
+    /// the list search; caches from before it load without one. Nothing shows it yet: the
+    /// Updated column in the list-readability spec (#54) reads it.
     #[serde(default)]
     pub updated: Option<String>,
     #[serde(default)]
@@ -287,17 +288,7 @@ impl Ticket {
             key: key.to_string(),
             summary: key.to_string(),
             status: status.to_string(),
-            assignee: None,
-            assignee_email: None,
-            reporter: None,
-            description: None,
-            labels: Vec::new(),
-            epic_key: None,
-            epic_name: None,
-            parent_key: None,
-            updated: None,
-            detail_loaded: false,
-            activity: Vec::new(),
+            ..Ticket::default()
         }
     }
 }
@@ -337,6 +328,13 @@ impl Epic {
     }
 }
 
+/// The form every email takes inside the app. Jira, `jira me` and the roster can spell one
+/// address in different cases, and Team groups by exact email, so each email is normalized as it
+/// comes in (from Jira's issues, the roster and `jira me`) and everything after compares exactly.
+pub fn normalize_email(email: &str) -> String {
+    email.trim().to_lowercase()
+}
+
 /// Team member info loaded from team.yml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamMember {
@@ -366,7 +364,15 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::{StatusRules, Ticket};
+    use super::{normalize_email, StatusRules, Ticket};
+
+    #[test]
+    fn emails_are_compared_without_case_or_padding() {
+        assert_eq!(
+            normalize_email(" Sam.Chen@Example.COM "),
+            "sam.chen@example.com"
+        );
+    }
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()

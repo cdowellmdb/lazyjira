@@ -36,7 +36,8 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 ## Requirements
 
 - The [`jira` CLI](https://github.com/ankitpokhrel/jira-cli) on your `PATH` and logged in (`jira init`). Running `jira me` should print your email.
-- `JIRA_API_TOKEN` set in your environment, as jira-cli normally uses it. Ticket lists (My Work, Team, Unassigned and filters) and moves go through Jira's REST API with jira-cli's `server`, `auth_type` and `epic.link` settings and this token.
+- `JIRA_API_TOKEN` set in your environment, as jira-cli normally uses it. Ticket lists (My Work, Team, Unassigned, Epics and filters), ticket details and moves go through Jira's REST API with jira-cli's `server`, `auth_type` and `epic.link` settings and this token. Earlier versions needed the token only for moves and sub-task nesting, so set it before upgrading if you never did.
+- A Jira Server or Data Center instance. Lists are read with the `/rest/api/2/search` endpoint, so Jira Cloud isn't supported.
 - macOS (Apple Silicon or Intel) or Linux x86_64. Windows is not supported.
 - A stable Rust toolchain, only if you build from source.
 
@@ -279,7 +280,8 @@ The preview also warns about summaries that match an existing ticket or repeat w
 - jira-cli omits empty descriptions when editing. Use the browser action to clear an existing description.
 - The Unassigned tab queries the `Assigned Teams` custom field. It doesn't work on Jira instances that don't have that field.
 - A move sends one transition. Reaching a status that is several transitions away takes several moves, and transitions that require fields other than a resolution fail with Jira's error; press `o` to finish those in the browser.
-- Ticket lists and moves need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read. Without it a refresh fails with an error and the last saved data stays on screen; with no saved data lazyjira exits with the error.
+- Ticket lists, details and moves need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read. Without it a refresh fails with an error and the last saved data stays on screen; with no saved data lazyjira exits with the error.
+- Epic children linked by the Epic Link field are found through jira-cli's `epic.link` setting. If your jira-cli config has none, only children whose `parent` is the epic appear.
 - A sub-task is indented under its parent only when the parent is in the same group (for example the same epic, or the same status in My Work). Elsewhere its summary starts with the parent's key, like `DSCI-3244 › ...`.
 - New tickets, from the create form or a CSV, can only be `Task`, `Bug`, or `Story`.
 
