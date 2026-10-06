@@ -108,6 +108,12 @@ enum BackgroundMessage {
     },
 }
 
+/// An error with its whole chain, as the user sees it: "Couldn't reach Jira: connection refused"
+/// rather than just the outermost "Couldn't reach Jira".
+fn describe(error: &anyhow::Error) -> String {
+    format!("{:#}", error)
+}
+
 fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
     let requested_at = app.moves.now();
     let request = app.next_request_id();
@@ -117,7 +123,7 @@ fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, c
     tokio::spawn(async move {
         let result = jira_reads::refresh_epics_cache(&config)
             .await
-            .map_err(|e| e.to_string());
+            .map_err(|e| describe(&e));
         let _ = tx.send(BackgroundMessage::EpicsRefreshed {
             request,
             requested_at,
@@ -144,7 +150,7 @@ fn spawn_cache_refresh(
             CacheRefreshPhase::Full => jira_reads::fetch_all(&config, &details).await,
             CacheRefreshPhase::Manual => jira_reads::fetch_all(&config, &details).await,
         }
-        .map_err(|e| e.to_string());
+        .map_err(|e| describe(&e));
         let _ = tx.send(BackgroundMessage::CacheRefreshed {
             request,
             phase,
@@ -163,7 +169,7 @@ fn spawn_ticket_detail_fetch(
     tokio::spawn(async move {
         let result = jira_reads::fetch_ticket_detail(&key)
             .await
-            .map_err(|e| e.to_string());
+            .map_err(|e| describe(&e));
         let _ = tx.send(BackgroundMessage::TicketDetailFetched {
             key,
             requested_at,
@@ -208,7 +214,7 @@ fn spawn_transitions_fetch(tx: &UnboundedSender<BackgroundMessage>, key: String,
     tokio::spawn(async move {
         let result = jira_rest::get_transitions(&key)
             .await
-            .map_err(|e| format!("{:#}", e));
+            .map_err(|e| describe(&e));
         let _ = tx.send(BackgroundMessage::TransitionsFetched {
             key,
             request,
@@ -225,10 +231,9 @@ fn spawn_ticket_move(
 ) {
     let tx = tx.clone();
     tokio::spawn(async move {
-        // `{:#}` keeps the whole error chain, e.g. why Jira could not be reached.
         let result = jira_rest::transition(&key, &transition_id, resolution_id.as_deref())
             .await
-            .map_err(|e| format!("{:#}", e));
+            .map_err(|e| describe(&e));
         let _ = tx.send(BackgroundMessage::TicketMoved { key, result });
     });
 }
@@ -287,7 +292,7 @@ fn spawn_bulk_transitions_fetch(
         let mut fetched = run_bounded(targets.clone(), |key| async move {
             let result = jira_rest::get_transitions(&key)
                 .await
-                .map_err(|e| format!("{:#}", e));
+                .map_err(|e| describe(&e));
             (key, result)
         })
         .await;
@@ -317,7 +322,7 @@ fn spawn_bulk_execution(
                 } => jira_rest::transition(&key, &transition.id, resolution_id.as_deref()).await,
                 BulkJob::Assign { email } => jira_client::assign_ticket(&key, &email).await,
             };
-            (key, result.map_err(|e| format!("{:#}", e)))
+            (key, result.map_err(|e| describe(&e)))
         })
         .await;
         let summary = bulk_actions::summarize(action, target, results, plan.skipped);
@@ -2103,7 +2108,7 @@ fn handle_filter_keys(
                     tokio::spawn(async move {
                         let result = jira_reads::fetch_jql_query(&cfg, &jql)
                             .await
-                            .map_err(|e| e.to_string());
+                            .map_err(|e| describe(&e));
                         let _ = tx.send(BackgroundMessage::FilterResults {
                             requested_at,
                             result,
@@ -2241,6 +2246,16 @@ mod tests {
     use super::*;
     use crate::bulk_actions::BulkState;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn a_failed_jira_call_is_shown_with_its_cause() {
+        let error =
+            anyhow::anyhow!("tcp connect error: connection refused").context("Couldn't reach Jira");
+        assert_eq!(
+            describe(&error),
+            "Couldn't reach Jira: tcp connect error: connection refused"
+        );
+    }
 
     #[test]
     fn dev_mode_prefers_the_active_checkout_over_the_installed_git_source() {
