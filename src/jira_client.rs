@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -23,7 +24,7 @@ pub fn browse_url(key: &str) -> Result<String> {
 }
 const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
 const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
-const FULL_CACHE_DIR_NAME: &str = "lazyjira";
+const CACHE_DIR_NAME: &str = "lazyjira";
 
 #[derive(Debug, Clone, Copy)]
 enum TicketFetchScope {
@@ -520,32 +521,46 @@ async fn fetch_epics(config: &AppConfig) -> Result<Vec<Epic>> {
 const EPICS_CACHE_PREFIX: &str = "lazyjira_epics_cache";
 const DETAILS_CACHE_PREFIX: &str = "lazyjira_ticket_details_cache";
 const FULL_CACHE_PREFIX: &str = "lazyjira_full_cache";
+const MY_EMAIL_PREFIX: &str = "lazyjira_my_email";
 
 fn cache_file_name(prefix: &str, project: &str) -> String {
     format!("{prefix}_{project}.json")
 }
 
-fn temp_cache_path(prefix: &str, project: &str) -> PathBuf {
-    std::env::temp_dir().join(cache_file_name(prefix, project))
-}
-
-fn epics_cache_path(project: &str) -> PathBuf {
-    temp_cache_path(EPICS_CACHE_PREFIX, project)
-}
-
-fn details_cache_path(project: &str) -> PathBuf {
-    temp_cache_path(DETAILS_CACHE_PREFIX, project)
-}
-
-fn full_cache_dir() -> PathBuf {
-    match std::env::var("HOME") {
-        Ok(home) => PathBuf::from(home).join(".cache").join(FULL_CACHE_DIR_NAME),
-        Err(_) => std::env::temp_dir().join(FULL_CACHE_DIR_NAME),
+/// Where every cache lives: `~/.cache/lazyjira/`, or the temp dir without a `HOME`.
+fn cache_dir_in(home: Option<std::ffi::OsString>) -> PathBuf {
+    match home {
+        Some(home) => PathBuf::from(home).join(".cache").join(CACHE_DIR_NAME),
+        None => std::env::temp_dir().join(CACHE_DIR_NAME),
     }
 }
 
-fn full_cache_path(project: &str) -> PathBuf {
-    full_cache_dir().join(cache_file_name(FULL_CACHE_PREFIX, project))
+fn cache_dir() -> PathBuf {
+    // Tests keep off the real ~/.cache.
+    cache_dir_in(if cfg!(test) {
+        None
+    } else {
+        std::env::var_os("HOME")
+    })
+}
+
+fn cache_path(prefix: &str, project: &str) -> PathBuf {
+    cache_dir().join(cache_file_name(prefix, project))
+}
+
+fn read_cache_file<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn write_cache_file(path: &Path, value: &impl serde::Serialize) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Failed to create cache directory: {}", dir.display()))?;
+    }
+    let json = serde_json::to_string(value).context("Failed to serialize cache")?;
+    std::fs::write(path, json)
+        .with_context(|| format!("Failed to write cache file: {}", path.display()))
 }
 
 fn now_unix_secs() -> u64 {
@@ -556,9 +571,7 @@ fn now_unix_secs() -> u64 {
 }
 
 pub fn load_startup_cache_snapshot(project: &str) -> Option<StartupCacheSnapshot> {
-    let path = full_cache_path(project);
-    let content = std::fs::read_to_string(&path).ok()?;
-    let snapshot: CacheSnapshot = serde_json::from_str(&content).ok()?;
+    let snapshot: CacheSnapshot = read_cache_file(&cache_path(FULL_CACHE_PREFIX, project))?;
     let age_secs = now_unix_secs().saturating_sub(snapshot.saved_at_unix_secs);
     Some(StartupCacheSnapshot {
         cache: snapshot.cache,
@@ -567,60 +580,46 @@ pub fn load_startup_cache_snapshot(project: &str) -> Option<StartupCacheSnapshot
 }
 
 pub fn save_full_cache_snapshot(project: &str, cache: &Cache) -> Result<()> {
-    let dir = full_cache_dir();
-    std::fs::create_dir_all(&dir).with_context(|| {
-        format!(
-            "Failed to create persistent cache directory: {}",
-            dir.display()
-        )
-    })?;
-
-    let path = full_cache_path(project);
     let snapshot = CacheSnapshot {
         saved_at_unix_secs: now_unix_secs(),
         cache: cache.clone(),
     };
-    let json = serde_json::to_string(&snapshot).context("Failed to serialize full cache")?;
-    std::fs::write(&path, json)
-        .with_context(|| format!("Failed to write full cache snapshot: {}", path.display()))?;
-    Ok(())
+    write_cache_file(&cache_path(FULL_CACHE_PREFIX, project), &snapshot)
 }
 
 fn load_epics_cache(project: &str) -> Vec<Epic> {
-    let path = epics_cache_path(project);
-    let content = match std::fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(_) => return Vec::new(),
-    };
-
-    serde_json::from_str::<Vec<Epic>>(&content).unwrap_or_default()
+    read_cache_file(&cache_path(EPICS_CACHE_PREFIX, project)).unwrap_or_default()
 }
 
 fn save_epics_cache(project: &str, epics: &[Epic]) -> Result<()> {
-    let path = epics_cache_path(project);
-    let json = serde_json::to_string(epics).context("Failed to serialize epics cache")?;
-    std::fs::write(&path, json)
-        .with_context(|| format!("Failed to write epics cache file: {}", path.display()))?;
-    Ok(())
+    write_cache_file(&cache_path(EPICS_CACHE_PREFIX, project), &epics)
 }
 
 fn load_details_cache(project: &str) -> HashMap<String, Ticket> {
-    let path = details_cache_path(project);
-    let content = match std::fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(_) => return HashMap::new(),
-    };
-
-    serde_json::from_str::<HashMap<String, Ticket>>(&content).unwrap_or_default()
+    read_cache_file(&cache_path(DETAILS_CACHE_PREFIX, project)).unwrap_or_default()
 }
 
-fn save_details_cache(project: &str, details_by_key: &HashMap<String, Ticket>) -> Result<()> {
-    let path = details_cache_path(project);
-    let json =
-        serde_json::to_string(details_by_key).context("Failed to serialize details cache")?;
-    std::fs::write(&path, json)
-        .with_context(|| format!("Failed to write details cache file: {}", path.display()))?;
-    Ok(())
+fn load_my_email(project: &str) -> Option<String> {
+    read_cache_file(&cache_path(MY_EMAIL_PREFIX, project))
+}
+
+fn save_my_email(project: &str, email: &str) -> Result<()> {
+    write_cache_file(&cache_path(MY_EMAIL_PREFIX, project), &email)
+}
+
+/// Ask `jira me` for the current user's email, and remember it for later refreshes.
+pub async fn refresh_my_email(project: &str) -> Result<String> {
+    let email = fetch_my_email().await?;
+    save_my_email(project, &email)?;
+    Ok(email)
+}
+
+/// The remembered email, so a refresh doesn't wait on `jira me`; asks Jira only the first time.
+async fn my_email(project: &str) -> Result<String> {
+    match load_my_email(project) {
+        Some(email) => Ok(email),
+        None => refresh_my_email(project).await,
+    }
 }
 
 /// Fills in what only a ticket's detail has: description, reporter and activity. Everything the
@@ -643,15 +642,6 @@ fn hydrate_ticket_from_details_cache(
     }
     if !detail.activity.is_empty() {
         ticket.activity = detail.activity.clone();
-    }
-}
-
-fn hydrate_tickets_from_details_cache(
-    tickets: &mut [Ticket],
-    details_by_key: &HashMap<String, Ticket>,
-) {
-    for ticket in tickets {
-        hydrate_ticket_from_details_cache(ticket, details_by_key);
     }
 }
 
@@ -718,57 +708,83 @@ pub async fn refresh_epics_cache(config: &AppConfig) -> Result<Vec<Epic>> {
     Ok(epics)
 }
 
-pub fn spawn_detail_cache_writer(project: &str) -> mpsc::UnboundedSender<Ticket> {
-    let (tx, mut rx) = mpsc::unbounded_channel::<Ticket>();
-    let project = project.to_string();
+/// Ticket details fetched so far. A refresh hydrates from this in-memory copy instead of
+/// reading the details cache file, and a background task writes it back to that file.
+#[derive(Clone)]
+pub struct DetailCache {
+    by_key: Arc<Mutex<HashMap<String, Ticket>>>,
+    changed: mpsc::UnboundedSender<()>,
+}
 
-    tokio::spawn(async move {
-        let mut details_by_key = load_details_cache(&project);
-        let flush_after_idle = Duration::from_millis(750);
-        let mut dirty = false;
+impl DetailCache {
+    /// Read the details cache file once, and start the task that writes it back.
+    pub fn spawn(project: &str) -> Self {
+        let (details, changed) = Self::new(load_details_cache(project));
+        tokio::spawn(write_details(
+            cache_path(DETAILS_CACHE_PREFIX, project),
+            details.by_key.clone(),
+            changed,
+        ));
+        details
+    }
 
-        loop {
-            let next = if dirty {
-                match timeout(flush_after_idle, rx.recv()).await {
-                    Ok(value) => value,
-                    Err(_) => {
-                        if let Err(e) = save_details_cache(&project, &details_by_key) {
-                            eprintln!("Warning: failed to persist details cache: {}", e);
-                        }
-                        dirty = false;
-                        continue;
-                    }
-                }
-            } else {
-                rx.recv().await
-            };
+    fn new(by_key: HashMap<String, Ticket>) -> (Self, mpsc::UnboundedReceiver<()>) {
+        let (changed, rx) = mpsc::unbounded_channel();
+        let details = DetailCache {
+            by_key: Arc::new(Mutex::new(by_key)),
+            changed,
+        };
+        (details, rx)
+    }
 
-            let Some(mut detail) = next else { break };
-            detail.detail_loaded = true;
-            details_by_key.insert(detail.key.clone(), detail);
-            dirty = true;
+    /// Keep a freshly fetched detail. False when the writer has stopped, so it won't reach disk.
+    pub fn record(&self, mut detail: Ticket) -> bool {
+        detail.detail_loaded = true;
+        lock_details(&self.by_key).insert(detail.key.clone(), detail);
+        self.changed.send(()).is_ok()
+    }
 
-            while let Ok(mut queued) = rx.try_recv() {
-                queued.detail_loaded = true;
-                details_by_key.insert(queued.key.clone(), queued);
-                dirty = true;
-            }
+    /// Fill a list read's tickets, including epic children, with the details already fetched.
+    pub fn hydrate(&self, cache: &mut Cache) {
+        let by_key = lock_details(&self.by_key);
+        let epic_children = cache.epics.iter_mut().flat_map(|epic| &mut epic.children);
+        for ticket in cache
+            .my_tickets
+            .iter_mut()
+            .chain(&mut cache.team_tickets)
+            .chain(epic_children)
+        {
+            hydrate_ticket_from_details_cache(ticket, &by_key);
         }
+    }
+}
 
-        if dirty {
-            if let Err(e) = save_details_cache(&project, &details_by_key) {
-                eprintln!("Warning: failed to persist details cache: {}", e);
-            }
+fn lock_details(
+    by_key: &Mutex<HashMap<String, Ticket>>,
+) -> MutexGuard<'_, HashMap<String, Ticket>> {
+    by_key.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Write the details once changes go quiet, and once more when the app closes the channel.
+async fn write_details(
+    path: PathBuf,
+    by_key: Arc<Mutex<HashMap<String, Ticket>>>,
+    mut changed: mpsc::UnboundedReceiver<()>,
+) {
+    let flush_after_idle = Duration::from_millis(750);
+    while changed.recv().await.is_some() {
+        while let Ok(Some(())) = timeout(flush_after_idle, changed.recv()).await {}
+        if let Err(e) = write_cache_file(&path, &*lock_details(&by_key)) {
+            eprintln!("Warning: failed to persist details cache: {}", e);
         }
-    });
-
-    tx
+    }
 }
 
 async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result<Cache> {
     let mut team_members = config.team_members();
 
-    let my_email = fetch_my_email().await?;
+    let project = &config.jira.project;
+    let my_email = my_email(project).await?;
     if !team_members
         .iter()
         .any(|member| member.email.eq_ignore_ascii_case(&my_email))
@@ -778,8 +794,6 @@ async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result
             email: my_email.clone(),
         });
     }
-    let project = &config.jira.project;
-    let details_by_key = load_details_cache(project);
     let mut epics = load_epics_cache(project);
 
     // A failed search returns here, so the caller keeps showing the last snapshot.
@@ -797,11 +811,6 @@ async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result
     }
 
     attach_epics_to_tickets(&mut my_tickets, &mut team_tickets, &epics);
-    hydrate_tickets_from_details_cache(&mut my_tickets, &details_by_key);
-    hydrate_tickets_from_details_cache(&mut team_tickets, &details_by_key);
-    for epic in &mut epics {
-        hydrate_tickets_from_details_cache(&mut epic.children, &details_by_key);
-    }
     reconcile_epic_child_statuses(&mut epics, &my_tickets, &team_tickets);
 
     Ok(Cache {
@@ -1251,5 +1260,82 @@ mod tests {
         attach_epics_to_tickets(&mut mine, &mut [], &epics);
         assert_eq!(mine[0].epic_key.as_deref(), Some("AMP-200"));
         assert_eq!(mine[0].epic_name, None);
+    }
+
+    #[test]
+    fn my_email_is_remembered_per_project() {
+        let _ = std::fs::remove_file(cache_path(MY_EMAIL_PREFIX, "EMAILTEST_A"));
+        assert_eq!(load_my_email("EMAILTEST_A"), None);
+        save_my_email("EMAILTEST_A", "me@example.com").unwrap();
+
+        assert_eq!(
+            load_my_email("EMAILTEST_A").as_deref(),
+            Some("me@example.com")
+        );
+        assert_eq!(load_my_email("EMAILTEST_B"), None);
+    }
+
+    #[test]
+    fn caches_live_in_the_lazyjira_dir_under_home_per_project() {
+        let dir = cache_dir_in(Some("/home/me".into()));
+        assert_eq!(dir, PathBuf::from("/home/me/.cache/lazyjira"));
+
+        for prefix in [DETAILS_CACHE_PREFIX, EPICS_CACHE_PREFIX, MY_EMAIL_PREFIX] {
+            assert_eq!(
+                cache_path(prefix, "AMP").parent(),
+                Some(cache_dir().as_path())
+            );
+            assert_ne!(cache_path(prefix, "AMP"), cache_path(prefix, "DEMO"));
+        }
+    }
+
+    #[test]
+    fn an_old_temp_dir_epics_cache_is_ignored() {
+        let epics = vec![Epic {
+            key: "OLDTMP-1".into(),
+            summary: "Old".into(),
+            children: vec![],
+        }];
+        let old = std::env::temp_dir().join("lazyjira_epics_cache_OLDTMP.json");
+        std::fs::write(&old, serde_json::to_string(&epics).unwrap()).unwrap();
+        let _ = std::fs::remove_file(cache_path(EPICS_CACHE_PREFIX, "OLDTMP"));
+
+        assert!(load_epics_cache("OLDTMP").is_empty());
+
+        save_epics_cache("OLDTMP", &epics).unwrap();
+        assert_eq!(load_epics_cache("OLDTMP")[0].key, "OLDTMP-1");
+        let _ = std::fs::remove_file(old);
+    }
+
+    #[test]
+    fn a_refresh_hydrates_from_details_recorded_in_memory() {
+        let (details, _changed) = DetailCache::new(HashMap::new());
+        let mut detail = test_ticket("DEMO-1", "In Progress");
+        detail.description = Some("Body".into());
+        detail.reporter = Some("Sam Doe".into());
+        details.record(detail);
+
+        let mut cache = Cache {
+            my_tickets: vec![test_ticket("DEMO-1", "To Do")],
+            team_tickets: vec![test_ticket("DEMO-1", "To Do")],
+            epics: vec![Epic {
+                key: "DEMO-9".into(),
+                summary: "Epic".into(),
+                children: vec![test_ticket("DEMO-1", "To Do")],
+            }],
+            ..Cache::empty()
+        };
+        details.hydrate(&mut cache);
+
+        for ticket in [
+            &cache.my_tickets[0],
+            &cache.team_tickets[0],
+            &cache.epics[0].children[0],
+        ] {
+            assert_eq!(ticket.description.as_deref(), Some("Body"));
+            assert!(ticket.detail_loaded);
+            // The list read's status stands; a detail never overrides it here.
+            assert_eq!(ticket.status, "To Do");
+        }
     }
 }

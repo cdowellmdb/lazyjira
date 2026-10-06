@@ -473,7 +473,13 @@ async fn main() -> Result<()> {
         .find(|tab| tab.title() == config.preferences.start_tab)
         .unwrap_or(Tab::MyWork);
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
-    let detail_cache_tx = jira_client::spawn_detail_cache_writer(&config.jira.project);
+    let detail_cache = jira_client::DetailCache::spawn(&config.jira.project);
+    // Refreshes use the remembered email; this keeps it current for the next one. A failure
+    // keeps the old one, and a refresh without one asks `jira me` itself.
+    let project = config.jira.project.clone();
+    tokio::spawn(async move {
+        let _ = jira_client::refresh_my_email(&project).await;
+    });
 
     // Fast startup: load persisted snapshot immediately, then revalidate in stages.
     if let Some(snapshot) = jira_client::load_startup_cache_snapshot(&config.jira.project) {
@@ -484,7 +490,7 @@ async fn main() -> Result<()> {
         app.flash = Some("Loaded cached data. Refreshing active tickets...".to_string());
         spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::ActiveOnly, &config);
     } else {
-        let cache = match jira_client::fetch_active_only(&config).await {
+        let mut cache = match jira_client::fetch_active_only(&config).await {
             Ok(cache) => cache,
             Err(e) => {
                 // No snapshot to fall back on. Leave the screen first, or the error is lost
@@ -493,6 +499,7 @@ async fn main() -> Result<()> {
                 return Err(e);
             }
         };
+        detail_cache.hydrate(&mut cache);
         app.replace_cache(cache, app.moves.now());
         app.loading = false;
         app.ticket_sync_stage = Some(TicketSyncStage::Full);
@@ -540,6 +547,10 @@ async fn main() -> Result<()> {
                     if request != app.cache_refresh_request {
                         continue;
                     }
+                    let result = result.map(|mut cache| {
+                        detail_cache.hydrate(&mut cache);
+                        cache
+                    });
                     match (phase, result) {
                         (CacheRefreshPhase::ActiveOnly, Ok(cache))
                             if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
@@ -624,7 +635,7 @@ async fn main() -> Result<()> {
                     match result {
                         Ok(detail) => {
                             if app.enrich_ticket(&key, requested_at, &detail)
-                                && detail_cache_tx.send(detail).is_err()
+                                && !detail_cache.record(detail)
                             {
                                 app.flash = Some(
                                     "Detail cache writer unavailable; skipping write".to_string(),
