@@ -269,6 +269,10 @@ pub struct Ticket {
     /// from the detail cache, so a re-parented sub-task doesn't keep its old parent.
     #[serde(default)]
     pub parent_key: Option<String>,
+    /// Jira's `updated` timestamp as Jira sends it (`2026-09-30T10:23:20.000+0000`). Filled by
+    /// the list search; caches from before it load without one.
+    #[serde(default)]
+    pub updated: Option<String>,
     #[serde(default)]
     pub detail_loaded: bool,
     #[serde(default)]
@@ -291,6 +295,7 @@ impl Ticket {
             epic_key: None,
             epic_name: None,
             parent_key: None,
+            updated: None,
             detail_loaded: false,
             activity: Vec::new(),
         }

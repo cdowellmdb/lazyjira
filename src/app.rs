@@ -1923,6 +1923,7 @@ mod tests {
             epic_key: None,
             epic_name: None,
             parent_key: None,
+            updated: None,
             detail_loaded: false,
             activity: Vec::new(),
         }

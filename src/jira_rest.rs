@@ -62,6 +62,31 @@ struct JiraCliConfig {
     server: String,
     auth_type: Option<String>,
     login: Option<String>,
+    #[serde(default)]
+    epic: Option<EpicSettings>,
+}
+
+/// jira-cli's `epic` settings: `link` is the id of the Epic Link custom field.
+#[derive(Deserialize)]
+struct EpicSettings {
+    link: Option<String>,
+}
+
+/// The id of the Epic Link custom field (`customfield_10857` on one instance, something else on
+/// another), as jira-cli's config names it. Read once; `None` when the config doesn't say.
+pub fn epic_link_field() -> Option<String> {
+    static FIELD: OnceLock<Option<String>> = OnceLock::new();
+    FIELD
+        .get_or_init(|| {
+            let yaml = std::fs::read_to_string(jira_cli_config_path().ok()?).ok()?;
+            configured_epic_link(&yaml)
+        })
+        .clone()
+}
+
+fn configured_epic_link(yaml: &str) -> Option<String> {
+    let config: JiraCliConfig = serde_yaml::from_str(yaml).ok()?;
+    config.epic?.link.filter(|link| !link.trim().is_empty())
 }
 
 /// Browser links use the same Jira instance as jira-cli, without needing a REST token.
@@ -331,6 +356,25 @@ mod tests {
         );
         assert!(configured_server("server: file:///tmp/jira").is_err());
         assert!(configured_server("server: not-a-url").is_err());
+    }
+
+    #[test]
+    fn the_epic_link_field_comes_from_jira_clis_epic_settings() {
+        let with_link = CONFIG.replace(
+            "epic:\n  name: customfield_1\n",
+            "epic:\n  name: customfield_10858\n  link: customfield_10857\n",
+        );
+        assert_eq!(
+            configured_epic_link(&with_link).as_deref(),
+            Some("customfield_10857")
+        );
+        // An instance without the field (jira-cli doesn't write one), or no config, is no link.
+        assert_eq!(configured_epic_link(CONFIG), None);
+        assert_eq!(
+            configured_epic_link("server: https://jira.example.com\n"),
+            None
+        );
+        assert_eq!(configured_epic_link("not: [yaml"), None);
     }
 
     #[test]

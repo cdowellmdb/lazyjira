@@ -5,6 +5,7 @@ mod bulk_upload;
 mod cache;
 mod config;
 mod jira_client;
+mod jira_issue;
 mod jira_rest;
 mod mouse;
 mod move_picker;
@@ -2389,6 +2390,7 @@ mod tests {
             epic_key: None,
             epic_name: None,
             parent_key: None,
+            updated: None,
             detail_loaded: false,
             activity: Vec::new(),
         }

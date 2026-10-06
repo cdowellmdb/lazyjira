@@ -7,8 +7,9 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use crate::cache::{ActivityEntry, ActivityKind, Cache, Epic, TeamMember, Ticket};
+use crate::cache::{Cache, Epic, TeamMember, Ticket};
 use crate::config::AppConfig;
+use crate::jira_issue::ticket_from_issue;
 use crate::jira_rest::Subtask;
 use crate::subtasks;
 
@@ -142,6 +143,7 @@ fn parse_ticket_line(line: &str) -> Option<Ticket> {
         epic_key: None,
         epic_name: None,
         parent_key: None,
+        updated: None,
         detail_loaded: false,
         activity: Vec::new(),
     })
@@ -263,141 +265,10 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
     let output = run_cmd("jira", &["issue", "view", key, "--raw"]).await?;
     let json: serde_json::Value = serde_json::from_str(&output)
         .with_context(|| format!("Failed to parse JSON for {}", key))?;
-
-    let fields = json.get("fields").context("No fields in response")?;
-
-    let summary = fields["summary"].as_str().unwrap_or("").to_string();
-    let status_name = fields["status"]["name"].as_str();
-    let assignee = fields["assignee"]["displayName"]
-        .as_str()
-        .map(|s| s.to_string());
-    let assignee_email = fields["assignee"]["emailAddress"]
-        .as_str()
-        .map(|s| s.to_string());
-    let reporter = fields["reporter"]["displayName"]
-        .as_str()
-        .map(|s| s.to_string());
-    let description = fields["description"].as_str().map(|s| s.to_string());
-    let labels = fields["labels"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    // A sub-task's parent is its parent ticket, not an epic.
-    let parent = fields["parent"]["key"].as_str().map(|s| s.to_string());
-    let (parent_key, epic_parent) = if fields["issuetype"]["subtask"].as_bool() == Some(true) {
-        (parent, None)
-    } else {
-        (None, parent)
-    };
-    let epic_key = fields["customfield_12551"]
-        .as_array()
-        .and_then(|a| a.first())
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .or(epic_parent);
-
-    let mut activity = Vec::new();
-
-    // Parse changelog
-    if let Some(histories) = json
-        .get("changelog")
-        .and_then(|c| c.get("histories"))
-        .and_then(|h| h.as_array())
-    {
-        for history in histories {
-            let timestamp = history["created"].as_str().unwrap_or("").to_string();
-            let author = history["author"]["displayName"]
-                .as_str()
-                .unwrap_or("Unknown")
-                .to_string();
-            let author_email = history["author"]["emailAddress"]
-                .as_str()
-                .map(|s| s.to_string());
-
-            if let Some(items) = history["items"].as_array() {
-                for item in items {
-                    let field = item["field"].as_str().unwrap_or("");
-                    let from_str = item["fromString"].as_str().unwrap_or("").to_string();
-                    let to_str = item["toString"].as_str().unwrap_or("").to_string();
-
-                    let kind = match field {
-                        "status" => ActivityKind::StatusChange {
-                            from: from_str,
-                            to: to_str,
-                        },
-                        "assignee" => ActivityKind::AssigneeChange {
-                            from: Some(from_str).filter(|s| !s.is_empty()),
-                            to: Some(to_str).filter(|s| !s.is_empty()),
-                        },
-                        _ => ActivityKind::FieldChange {
-                            field: field.to_string(),
-                            from: from_str,
-                            to: to_str,
-                        },
-                    };
-
-                    activity.push(ActivityEntry {
-                        timestamp: timestamp.clone(),
-                        author: author.clone(),
-                        author_email: author_email.clone(),
-                        kind,
-                    });
-                }
-            }
-        }
-    }
-
-    // Parse comments
-    if let Some(comments) = json
-        .get("fields")
-        .and_then(|f| f.get("comment"))
-        .and_then(|c| c.get("comments"))
-        .and_then(|c| c.as_array())
-    {
-        for comment in comments {
-            let timestamp = comment["created"].as_str().unwrap_or("").to_string();
-            let author = comment["author"]["displayName"]
-                .as_str()
-                .unwrap_or("Unknown")
-                .to_string();
-            let author_email = comment["author"]["emailAddress"]
-                .as_str()
-                .map(|s| s.to_string());
-            let body = comment["body"].as_str().unwrap_or("").to_string();
-
-            activity.push(ActivityEntry {
-                timestamp,
-                author,
-                author_email,
-                kind: ActivityKind::Comment { body },
-            });
-        }
-    }
-
-    // Sort newest first
-    activity.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-
-    let ticket_key = json["key"].as_str().unwrap_or(key).to_string();
-
-    Ok(Ticket {
-        key: ticket_key,
-        summary,
-        status: status_name.unwrap_or("To Do").to_string(),
-        assignee,
-        assignee_email,
-        reporter,
-        description,
-        labels,
-        epic_key,
-        epic_name: None,
-        parent_key,
-        detail_loaded: true,
-        activity,
-    })
+    let mut ticket = ticket_from_issue(&json, crate::jira_rest::epic_link_field().as_deref())
+        .with_context(|| format!("No issue in Jira's answer for {}", key))?;
+    ticket.detail_loaded = true;
+    Ok(ticket)
 }
 
 /// Fetch tickets assigned to a specific user, setting assignee_email on results.
@@ -1080,6 +951,7 @@ mod tests {
             epic_key: None,
             epic_name: None,
             parent_key: None,
+            updated: None,
             detail_loaded: false,
             activity: Vec::new(),
         }
