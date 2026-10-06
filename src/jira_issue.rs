@@ -289,6 +289,54 @@ mod tests {
     }
 
     #[test]
+    fn a_detail_search_page_gives_each_ticket_its_description_comments_and_parent() {
+        // The shape of a `key in (...)` search asking for the detail fields: comments come in
+        // the order Jira keeps them (oldest first) and each issue holds only its own.
+        let body = r#"{"total": 2, "issues": [
+            {"key": "DEMO-20", "fields": {
+              "summary": "Story", "status": {"name": "In Progress"},
+              "issuetype": {"name": "Story", "subtask": false},
+              "reporter": {"displayName": "Priya Shah"},
+              "description": "h2. Why\nBecause.",
+              "labels": ["checkout"],
+              "customfield_10857": "DEMO-1",
+              "comment": {"total": 3, "comments": [
+                {"created": "2026-09-01T09:00:00.000+0000", "author": {"displayName": "Ann"}, "body": "First"},
+                {"created": "2026-09-02T09:00:00.000+0000", "author": {"displayName": "Ben"}, "body": "Second"},
+                {"created": "2026-09-03T09:00:00.000+0000", "author": {"displayName": "Cy"}, "body": "Third"}]}}},
+            {"key": "DEMO-21", "fields": {
+              "summary": "Step", "status": {"name": "To Do"},
+              "issuetype": {"name": "Sub-task", "subtask": true},
+              "parent": {"key": "DEMO-20", "fields": {"issuetype": {"name": "Story"}}},
+              "description": null, "comment": {"total": 0, "comments": []}}}]}"#;
+        let (tickets, total) = parse_search_page(body, EPIC_LINK).unwrap();
+        assert_eq!(total, 2);
+
+        let story = &tickets[0];
+        assert_eq!(story.description.as_deref(), Some("h2. Why\nBecause."));
+        assert_eq!(story.reporter.as_deref(), Some("Priya Shah"));
+        assert_eq!(story.labels, ["checkout"]);
+        assert_eq!(story.epic_key.as_deref(), Some("DEMO-1"));
+        // Activity is newest first, which is how the overlay finds the comments to show them
+        // oldest first.
+        let bodies: Vec<_> = story
+            .activity
+            .iter()
+            .map(|entry| match &entry.kind {
+                ActivityKind::Comment { body } => body.as_str(),
+                other => panic!("expected only comments, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(bodies, ["Third", "Second", "First"]);
+
+        let step = &tickets[1];
+        assert_eq!(step.parent_key.as_deref(), Some("DEMO-20"));
+        assert_eq!(step.epic_key, None);
+        assert_eq!(step.description, None);
+        assert!(step.activity.is_empty());
+    }
+
+    #[test]
     fn a_search_page_gives_its_tickets_and_the_total() {
         let body = r#"{"startAt": 0, "maxResults": 100, "total": 250, "issues": [
             {"key": "DEMO-1", "fields": {"summary": "One", "status": {"name": "To Do"}}},
