@@ -337,6 +337,13 @@ impl Epic {
     }
 }
 
+/// The form every email takes inside the app. Jira, `jira me` and the roster can spell one
+/// address in different cases, and Team groups by exact email, so each email is normalized as it
+/// comes in (from Jira's issues, the roster and `jira me`) and everything after compares exactly.
+pub fn normalize_email(email: &str) -> String {
+    email.trim().to_lowercase()
+}
+
 /// Team member info loaded from team.yml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamMember {
@@ -366,7 +373,15 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::{StatusRules, Ticket};
+    use super::{normalize_email, StatusRules, Ticket};
+
+    #[test]
+    fn emails_are_compared_without_case_or_padding() {
+        assert_eq!(
+            normalize_email(" Sam.Chen@Example.COM "),
+            "sam.chen@example.com"
+        );
+    }
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()

@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::cache::{ActivityEntry, ActivityKind, Ticket};
+use crate::cache::{normalize_email, ActivityEntry, ActivityKind, Ticket};
 
 /// One page of a search answer: its tickets (an issue with no key is skipped) and the total
 /// number of matches.
@@ -50,7 +50,9 @@ pub fn ticket_from_issue(issue: &Value, epic_link_field: Option<&str>) -> Option
         summary: text(&fields["summary"]).unwrap_or_default(),
         status: text(&fields["status"]["name"]).unwrap_or_else(|| "To Do".to_string()),
         assignee: text(&fields["assignee"]["displayName"]),
-        assignee_email: text(&fields["assignee"]["emailAddress"]),
+        assignee_email: text(&fields["assignee"]["emailAddress"])
+            .as_deref()
+            .map(normalize_email),
         reporter: text(&fields["reporter"]["displayName"]),
         description: text(&fields["description"]),
         labels: fields["labels"]
@@ -161,9 +163,10 @@ mod tests {
         assert_eq!(ticket.summary, "Ship it");
         assert_eq!(ticket.status, "Resolved");
         assert_eq!(ticket.assignee.as_deref(), Some("Sam Doe"));
+        // Jira's spelling is normalized on the way in, so it compares exactly with the roster's.
         assert_eq!(
             ticket.assignee_email.as_deref(),
-            Some("Sam.Doe@Example.com")
+            Some("sam.doe@example.com")
         );
         assert_eq!(ticket.labels, ["checkout", "perf"]);
         assert_eq!(

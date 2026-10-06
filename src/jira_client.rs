@@ -227,38 +227,77 @@ fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchSco
     )
 }
 
-/// Splits one search's tickets into My Work and Team, each sorted by key. Jira's email for an
-/// assignee is mapped to the roster's entry ignoring case, since Team groups by exact email;
-/// tickets with no assignee become the Unassigned member's. A ticket assigned to someone
-/// outside `members` can't be placed and is left out.
+/// The roster member `ticket` is assigned to: the one with the assignee's email, else the one
+/// with their display name, for when Jira hides the email (or the roster has another address).
+fn roster_member<'a>(members: &'a [TeamMember], ticket: &Ticket) -> Option<&'a TeamMember> {
+    let by_email = ticket
+        .assignee_email
+        .as_deref()
+        .and_then(|email| members.iter().find(|member| member.email == email));
+    by_email.or_else(|| {
+        let name = ticket.assignee.as_deref()?;
+        members
+            .iter()
+            .find(|member| member.name.eq_ignore_ascii_case(name))
+    })
+}
+
+/// Splits one search's tickets into My Work and Team, each ordered by key. Every ticket stays
+/// visible: one assigned to someone `roster_member` can't find adds that person to `members`
+/// (under their email, or their display name when Jira hides it), and tickets with no assignee
+/// become the Unassigned member's. Emails are compared exactly (see `normalize_email`).
 fn bucket_tickets(
     mut found: Vec<Ticket>,
-    members: &[TeamMember],
+    members: &mut Vec<TeamMember>,
     my_email: &str,
 ) -> (Vec<Ticket>, Vec<Ticket>) {
-    found.sort_by(|a, b| a.key.cmp(&b.key));
+    found.sort_by(|a, b| key_order(&a.key, &b.key));
     found.dedup_by(|a, b| a.key == b.key);
     let (mut mine, mut team) = (Vec::new(), Vec::new());
+    let mut has_unassigned = false;
     for mut ticket in found {
-        if ticket.assignee.is_none() {
-            ticket.assignee = Some(UNASSIGNED_TEAM_NAME.to_string());
-            ticket.assignee_email = Some(UNASSIGNED_TEAM_EMAIL.to_string());
-        } else if let Some(member) = members.iter().find(|member| {
-            ticket
-                .assignee_email
-                .as_deref()
-                .is_some_and(|email| email.eq_ignore_ascii_case(&member.email))
-        }) {
-            ticket.assignee_email = Some(member.email.clone());
-            if member.email.eq_ignore_ascii_case(my_email) {
-                mine.push(ticket.clone());
+        match ticket.assignee.clone() {
+            None => {
+                has_unassigned = true;
+                ticket.assignee = Some(UNASSIGNED_TEAM_NAME.to_string());
+                ticket.assignee_email = Some(UNASSIGNED_TEAM_EMAIL.to_string());
             }
-        } else {
-            continue;
+            Some(name) => {
+                let email = match roster_member(members, &ticket) {
+                    Some(member) => member.email.clone(),
+                    None => {
+                        let email = ticket.assignee_email.clone().unwrap_or(name.clone());
+                        members.push(TeamMember {
+                            name,
+                            email: email.clone(),
+                        });
+                        email
+                    }
+                };
+                ticket.assignee_email = Some(email.clone());
+                if email == my_email {
+                    mine.push(ticket.clone());
+                }
+            }
         }
         team.push(ticket);
     }
+    if has_unassigned {
+        members.push(TeamMember {
+            name: UNASSIGNED_TEAM_NAME.to_string(),
+            email: UNASSIGNED_TEAM_EMAIL.to_string(),
+        });
+    }
     (mine, team)
+}
+
+/// Orders ticket keys as Jira does: by project, then by number (`AMP-9` before `AMP-10`).
+fn key_order(a: &str, b: &str) -> std::cmp::Ordering {
+    let split = |key: &str| {
+        let (project, number) = key.rsplit_once('-').unwrap_or((key, ""));
+        (project.to_string(), number.parse::<u64>().ok())
+    };
+    split(a).cmp(&split(b)).then_with(|| a.cmp(b))
 }
 
 /// The searches that find the children of `epic_keys`, `KEYS_PER_SEARCH` epics to a search. A
@@ -311,7 +350,7 @@ const EPIC_FIELDS: &[&str] = &["summary"];
 /// boundary can repeat an epic or a child, so each is kept once. A ticket whose epic isn't listed
 /// (it's in another project) belongs to no epic here.
 fn group_by_epic(mut listed: Vec<Ticket>, mut found: Vec<Ticket>) -> Vec<Epic> {
-    listed.sort_by(|a, b| a.key.cmp(&b.key));
+    listed.sort_by(|a, b| key_order(&a.key, &b.key));
     listed.dedup_by(|a, b| a.key == b.key);
     let mut epics: Vec<Epic> = listed
         .into_iter()
@@ -327,7 +366,7 @@ fn group_by_epic(mut listed: Vec<Ticket>, mut found: Vec<Ticket>) -> Vec<Epic> {
         .map(|(at, epic)| (epic.key.clone(), at))
         .collect();
 
-    found.sort_by(|a, b| a.key.cmp(&b.key));
+    found.sort_by(|a, b| key_order(&a.key, &b.key));
     found.dedup_by(|a, b| a.key == b.key);
     for mut child in found {
         let at = child.epic_key.as_ref().and_then(|key| index.get(key));
@@ -451,7 +490,7 @@ fn save_my_email(project: &str, email: &str) -> Result<()> {
 
 /// Ask `jira me` for the current user's email, and remember it for later refreshes.
 pub async fn refresh_my_email(project: &str) -> Result<String> {
-    let email = fetch_my_email().await?;
+    let email = crate::cache::normalize_email(&fetch_my_email().await?);
     save_my_email(project, &email)?;
     Ok(email)
 }
@@ -627,10 +666,7 @@ async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result
 
     let project = &config.jira.project;
     let my_email = my_email(project).await?;
-    if !team_members
-        .iter()
-        .any(|member| member.email.eq_ignore_ascii_case(&my_email))
-    {
+    if !team_members.iter().any(|member| member.email == my_email) {
         team_members.push(TeamMember {
             name: name_from_email(&my_email),
             email: my_email.clone(),
@@ -641,16 +677,7 @@ async fn fetch_with_scope(config: &AppConfig, scope: TicketFetchScope) -> Result
     // A failed search returns here, so the caller keeps showing the last snapshot.
     let emails: Vec<&str> = team_members.iter().map(|m| m.email.as_str()).collect();
     let found = crate::jira_rest::search(&lists_jql(config, &emails, scope), LIST_FIELDS).await?;
-    let (mut my_tickets, mut team_tickets) = bucket_tickets(found, &team_members, &my_email);
-    if team_tickets
-        .iter()
-        .any(|ticket| ticket.assignee_email.as_deref() == Some(UNASSIGNED_TEAM_EMAIL))
-    {
-        team_members.push(TeamMember {
-            name: UNASSIGNED_TEAM_NAME.to_string(),
-            email: UNASSIGNED_TEAM_EMAIL.to_string(),
-        });
-    }
+    let (mut my_tickets, mut team_tickets) = bucket_tickets(found, &mut team_members, &my_email);
 
     attach_epics_to_tickets(&mut my_tickets, &mut team_tickets, &epics);
     reconcile_epic_child_statuses(&mut epics, &my_tickets, &team_tickets);
@@ -917,6 +944,10 @@ mod tests {
         ]
     }
 
+    fn ticket_keys(tickets: &[Ticket]) -> Vec<&str> {
+        tickets.iter().map(|t| t.key.as_str()).collect()
+    }
+
     #[test]
     fn one_search_fills_my_work_and_team_by_the_roster_email() {
         let found = vec![
@@ -925,51 +956,120 @@ mod tests {
             assigned("AMP-1", "To Do", "Alex", "alex.rivera@example.com"),
             test_ticket("AMP-4", "To Do"),
         ];
-        let (mine, team) = bucket_tickets(found, &roster(), "alex.rivera@example.com");
-        let keys = |tickets: &[Ticket]| tickets.iter().map(|t| t.key.clone()).collect::<Vec<_>>();
-        assert_eq!(keys(&mine), ["AMP-1", "AMP-2"]);
-        assert_eq!(keys(&team), ["AMP-1", "AMP-2", "AMP-3", "AMP-4"]);
+        let mut members = roster();
+        let (mine, team) = bucket_tickets(found, &mut members, "alex.rivera@example.com");
+        assert_eq!(ticket_keys(&mine), ["AMP-1", "AMP-2"]);
+        assert_eq!(ticket_keys(&team), ["AMP-1", "AMP-2", "AMP-3", "AMP-4"]);
     }
 
     #[test]
-    fn jiras_email_is_mapped_to_the_roster_entry_ignoring_case() {
-        let found = vec![
-            assigned("AMP-1", "To Do", "Sam C.", "Sam.Chen@Example.com"),
-            assigned("AMP-2", "To Do", "Alex R.", "ALEX.RIVERA@example.com"),
-        ];
-        // `jira me` can differ in case from Jira's own email too.
-        let (mine, team) = bucket_tickets(found, &roster(), "Alex.Rivera@example.com");
+    fn an_email_spelled_differently_by_jira_and_the_roster_still_groups() {
+        let mut config = test_config();
+        config
+            .team
+            .insert("Sam Chen".to_string(), "Sam.Chen@Example.com".to_string());
+        let mut members = config.team_members();
+        let body = r#"{"total": 1, "issues": [{"key": "AMP-1", "fields": {
+            "summary": "One", "status": {"name": "To Do"},
+            "assignee": {"displayName": "Sam C.", "emailAddress": "SAM.CHEN@example.com"}}}]}"#;
+        let (found, _) = crate::jira_issue::parse_search_page(body, None).unwrap();
+
+        let (_, team) = bucket_tickets(found, &mut members, "me@example.com");
+
+        assert_eq!(members.len(), 1, "Sam is already on the roster");
         assert_eq!(
             team[0].assignee_email.as_deref(),
             Some("sam.chen@example.com")
         );
-        assert_eq!(
-            team[1].assignee_email.as_deref(),
-            Some("alex.rivera@example.com")
-        );
-        assert_eq!(mine.len(), 1);
-        assert_eq!(mine[0].key, "AMP-2");
         // The name is Jira's own: a display name that differs from the roster's still groups.
         assert_eq!(team[0].assignee.as_deref(), Some("Sam C."));
     }
 
     #[test]
-    fn tickets_without_an_assignee_go_to_the_unassigned_row() {
+    fn an_assignee_whose_email_jira_hides_is_found_on_the_roster_by_display_name() {
+        let mut hidden = test_ticket("AMP-1", "To Do");
+        hidden.assignee = Some("alex rivera".to_string());
+        let mut members = roster();
+
+        let (mine, team) = bucket_tickets(vec![hidden], &mut members, "alex.rivera@example.com");
+
+        assert_eq!(members.len(), 2, "no one new joins the roster");
+        assert_eq!(ticket_keys(&mine), ["AMP-1"]);
+        assert_eq!(
+            team[0].assignee_email.as_deref(),
+            Some("alex.rivera@example.com")
+        );
+    }
+
+    #[test]
+    fn a_ticket_nobody_on_the_roster_matches_stays_visible_under_its_assignee() {
+        // An email the roster doesn't have: the assignee joins Team with that email.
+        let stranger = assigned("AMP-5", "To Do", "Pat Doe", "pat@example.com");
+        // No email at all: the display name stands in for it, which jira-cli can assign to.
+        let mut hidden = test_ticket("AMP-6", "To Do");
+        hidden.assignee = Some("Kim Lo".to_string());
+        let mut hidden_again = test_ticket("AMP-7", "To Do");
+        hidden_again.assignee = Some("Kim Lo".to_string());
+        let mut members = roster();
+
         let (mine, team) = bucket_tickets(
-            vec![test_ticket("AMP-9", "To Do")],
-            &roster(),
+            vec![stranger, hidden, hidden_again],
+            &mut members,
+            "alex.rivera@example.com",
+        );
+
+        assert!(mine.is_empty());
+        assert_eq!(ticket_keys(&team), ["AMP-5", "AMP-6", "AMP-7"]);
+        let joined: Vec<_> = members[2..]
+            .iter()
+            .map(|m| (m.name.as_str(), m.email.as_str()))
+            .collect();
+        assert_eq!(
+            joined,
+            [("Pat Doe", "pat@example.com"), ("Kim Lo", "Kim Lo")],
+            "one member each, however many tickets"
+        );
+        let grouped: Vec<_> = team
+            .iter()
+            .map(|t| t.assignee_email.as_deref().unwrap())
+            .collect();
+        assert_eq!(grouped, ["pat@example.com", "Kim Lo", "Kim Lo"]);
+    }
+
+    #[test]
+    fn tickets_without_an_assignee_go_to_the_unassigned_row() {
+        let mut members = roster();
+        let (mine, team) = bucket_tickets(
+            vec![test_ticket("AMP-9", "To Do"), test_ticket("AMP-8", "To Do")],
+            &mut members,
             "alex.rivera@example.com",
         );
         assert!(mine.is_empty());
         assert_eq!(team[0].assignee.as_deref(), Some("Unassigned"));
         assert_eq!(team[0].assignee_email.as_deref(), Some("__unassigned__"));
+        // The Unassigned member is added once, after the roster.
+        let emails: Vec<_> = members.iter().map(|m| m.email.as_str()).collect();
+        assert_eq!(
+            emails,
+            [
+                "alex.rivera@example.com",
+                "sam.chen@example.com",
+                "__unassigned__"
+            ]
+        );
     }
 
     #[test]
-    fn a_ticket_assigned_to_someone_outside_the_roster_is_left_out() {
-        let found = vec![assigned("AMP-5", "To Do", "Pat", "pat@example.com")];
-        let (mine, team) = bucket_tickets(found, &roster(), "alex.rivera@example.com");
-        assert!(mine.is_empty() && team.is_empty());
+    fn keys_are_ordered_by_project_then_number() {
+        let mut found: Vec<Ticket> = ["AMP-10", "AMP-2", "AMP-9", "ABC-100", "AMP-1"]
+            .iter()
+            .map(|key| test_ticket(key, "To Do"))
+            .collect();
+        found.sort_by(|a, b| key_order(&a.key, &b.key));
+        assert_eq!(
+            ticket_keys(&found),
+            ["ABC-100", "AMP-1", "AMP-2", "AMP-9", "AMP-10"]
+        );
     }
 
     fn epic_keys(count: usize) -> Vec<String> {
