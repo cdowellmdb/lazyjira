@@ -484,7 +484,15 @@ async fn main() -> Result<()> {
         app.flash = Some("Loaded cached data. Refreshing active tickets...".to_string());
         spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::ActiveOnly, &config);
     } else {
-        let cache = jira_client::fetch_active_only(&config).await?;
+        let cache = match jira_client::fetch_active_only(&config).await {
+            Ok(cache) => cache,
+            Err(e) => {
+                // No snapshot to fall back on. Leave the screen first, or the error is lost
+                // in it (a missing JIRA_API_TOKEN lands here on a first run).
+                restore_terminal(&mut terminal)?;
+                return Err(e);
+            }
+        };
         app.replace_cache(cache, app.moves.now());
         app.loading = false;
         app.ticket_sync_stage = Some(TicketSyncStage::Full);
@@ -797,7 +805,11 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Restore terminal
+    restore_terminal(&mut terminal)
+}
+
+/// Leaves raw mode and the alternate screen, so what prints next stays readable.
+fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -806,7 +818,6 @@ async fn main() -> Result<()> {
         DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
-
     Ok(())
 }
 
