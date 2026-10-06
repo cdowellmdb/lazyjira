@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -109,6 +110,81 @@ pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
         .with_context(|| format!("No issue in Jira's answer for {}", key))?;
     ticket.detail_loaded = true;
     Ok(ticket)
+}
+
+/// What the detail overlay shows, plus the list fields `enrich_ticket` copies over the row. The
+/// Epic Link field is added by the search.
+const DETAIL_FIELDS: &[&str] = &[
+    "summary",
+    "status",
+    "assignee",
+    "reporter",
+    "description",
+    "comment",
+    "labels",
+    "parent",
+    "issuetype",
+    "updated",
+];
+
+/// Reads the details of `keys` over Jira's REST search, a chunk of tickets per request instead
+/// of a `jira issue view` process each. See `read_details`.
+pub async fn fetch_ticket_details(
+    keys: &[String],
+    deliver: impl FnMut(String, Result<Ticket, String>),
+) {
+    read_details(
+        keys,
+        |jql| async move { crate::jira_rest::search(&jql, DETAIL_FIELDS).await },
+        deliver,
+    )
+    .await
+}
+
+/// Tickets read by one search. Jira answers up to `SEARCH_PAGE_SIZE` a page, so a chunk of this
+/// size is always a single page.
+const DETAILS_PER_SEARCH: usize = 50;
+
+/// Reads the details of `keys`, `DETAILS_PER_SEARCH` at a time, with `search`, which runs a JQL
+/// query. Each key's outcome goes to `deliver` as its chunk is read. A chunk that fails fails
+/// only its keys, so the rest are still read and the failed ones are asked for again later.
+// ponytail: one chunk after another; read a few at once if a cold start of thousands of
+// tickets is too slow.
+async fn read_details<S, F>(
+    keys: &[String],
+    search: S,
+    mut deliver: impl FnMut(String, Result<Ticket, String>),
+) where
+    S: Fn(String) -> F,
+    F: Future<Output = Result<Vec<Ticket>>>,
+{
+    for chunk in keys.chunks(DETAILS_PER_SEARCH) {
+        let found = match crate::jira_rest::key_list(chunk) {
+            Some(list) => search(format!("key in ({list})")).await,
+            None => Ok(Vec::new()),
+        };
+        let mut found = found
+            .map(|tickets| {
+                tickets
+                    .into_iter()
+                    .map(|ticket| (ticket.key.clone(), ticket))
+                    .collect::<HashMap<_, _>>()
+            })
+            .map_err(|e| format!("{:#}", e));
+        for key in chunk {
+            let result = match &mut found {
+                Ok(found) => found
+                    .remove(key)
+                    .map(|mut ticket| {
+                        ticket.detail_loaded = true;
+                        ticket
+                    })
+                    .ok_or_else(|| "Jira didn't return this ticket".to_string()),
+                Err(e) => Err(e.clone()),
+            };
+            deliver(key.clone(), result);
+        }
+    }
 }
 
 /// What a list row needs. `key` always comes back, and the Epic Link field is added by the
@@ -1241,5 +1317,145 @@ mod tests {
             // The list read's status stands; a detail never overrides it here.
             assert_eq!(ticket.status, "To Do");
         }
+    }
+
+    fn keys(range: std::ops::RangeInclusive<u32>) -> Vec<String> {
+        range.map(|n| format!("DEMO-{n}")).collect()
+    }
+
+    /// Runs `read_details` with a Jira that answers each search with `answer(jql)`, returning
+    /// the searches made and what each key got.
+    async fn read(
+        keys: &[String],
+        answer: impl Fn(&str) -> Result<Vec<Ticket>>,
+    ) -> (Vec<String>, Vec<(String, Result<Ticket, String>)>) {
+        let searches = std::cell::RefCell::new(Vec::new());
+        let mut delivered = Vec::new();
+        read_details(
+            keys,
+            |jql| {
+                let result = answer(&jql);
+                searches.borrow_mut().push(jql);
+                async move { result }
+            },
+            |key, result| delivered.push((key, result)),
+        )
+        .await;
+        (searches.into_inner(), delivered)
+    }
+
+    #[tokio::test]
+    async fn details_are_read_with_one_key_search_and_marked_loaded() {
+        let (searches, delivered) = read(&keys(1..=2), |_| {
+            Ok(vec![
+                test_ticket("DEMO-2", "Done"),
+                test_ticket("DEMO-1", "To Do"),
+            ])
+        })
+        .await;
+
+        assert_eq!(searches, ["key in (DEMO-1,DEMO-2)"]);
+        // Each key gets its own result, in the order asked, whatever order Jira answered in.
+        let got: Vec<_> = delivered
+            .iter()
+            .map(|(key, result)| (key.as_str(), result.as_ref().unwrap().detail_loaded))
+            .collect();
+        assert_eq!(got, [("DEMO-1", true), ("DEMO-2", true)]);
+        assert_eq!(delivered[1].1.as_ref().unwrap().status, "Done");
+    }
+
+    /// A Jira that has every ticket asked for.
+    fn has_all(jql: &str) -> Result<Vec<Ticket>> {
+        let list = jql
+            .strip_prefix("key in (")
+            .unwrap()
+            .strip_suffix(')')
+            .unwrap();
+        Ok(list
+            .split(',')
+            .map(|key| test_ticket(key, "To Do"))
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn details_are_searched_fifty_keys_at_a_time() {
+        // Exactly 50 keys fit one search.
+        let (searches, delivered) = read(&keys(1..=50), has_all).await;
+        assert_eq!(searches.len(), 1);
+        assert_eq!(searches[0].matches("DEMO-").count(), 50);
+        assert_eq!(delivered.len(), 50);
+
+        // The 51st key starts a second search that holds only it.
+        let (searches, delivered) = read(&keys(1..=51), has_all).await;
+        assert_eq!(searches.len(), 2);
+        assert_eq!(searches[0].matches("DEMO-").count(), 50);
+        assert!(!searches[0].contains("DEMO-51"));
+        assert_eq!(searches[1], "key in (DEMO-51)");
+        assert_eq!(delivered.len(), 51);
+        assert!(delivered.iter().all(|(_, result)| result.is_ok()));
+
+        // Nothing to read, nothing to search.
+        let (searches, delivered) = read(&[], has_all).await;
+        assert!(searches.is_empty() && delivered.is_empty());
+    }
+
+    #[test]
+    fn a_detail_search_asks_for_everything_the_detail_overlay_shows() {
+        // `enrich_ticket` copies status and labels over the row, and the overlay shows the rest;
+        // `issuetype` and `parent` keep a sub-task's parent from being read as an epic.
+        for field in [
+            "summary",
+            "status",
+            "assignee",
+            "reporter",
+            "description",
+            "comment",
+            "labels",
+            "parent",
+            "issuetype",
+        ] {
+            assert!(DETAIL_FIELDS.contains(&field), "{field}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_chunk_fails_only_its_keys_and_the_next_chunk_is_still_read() {
+        let (searches, delivered) = read(&keys(1..=51), |jql| {
+            if jql.contains("DEMO-1,") {
+                Err(anyhow::anyhow!("Jira answered 503."))
+            } else {
+                has_all(jql)
+            }
+        })
+        .await;
+
+        assert_eq!(searches.len(), 2);
+        for (key, result) in &delivered[..50] {
+            assert_eq!(result.as_ref().unwrap_err(), "Jira answered 503.", "{key}");
+        }
+        assert_eq!(delivered[50].0, "DEMO-51");
+        assert!(delivered[50].1.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_key_jira_leaves_out_fails_alone_and_a_malformed_key_is_never_searched() {
+        let (searches, delivered) = read(
+            &["DEMO-1".into(), "DEMO-2".into(), "x\") OR 1=1".into()],
+            |_| Ok(vec![test_ticket("DEMO-1", "To Do")]),
+        )
+        .await;
+
+        assert_eq!(searches, ["key in (DEMO-1,DEMO-2)"]);
+        assert!(delivered[0].1.is_ok());
+        assert_eq!(
+            delivered[1].1.as_ref().unwrap_err(),
+            "Jira didn't return this ticket"
+        );
+        assert!(delivered[2].1.is_err());
+
+        // A chunk of nothing but malformed keys makes no search at all.
+        let (searches, delivered) = read(&["no good".into()], has_all).await;
+        assert!(searches.is_empty());
+        assert!(delivered[0].1.is_err());
     }
 }

@@ -2,8 +2,8 @@
 """Fake Jira REST search for recording the README demo.
 
 Serves `POST /rest/api/2/search`, the one endpoint lazyjira reads its ticket lists, epics and
-their children, sub-task parents and (soon) details from. It answers from the same made-up data as the fake `jira` CLI
-next to it, which it imports, so the two never disagree. Moves aren't served.
+their children, sub-task parents and details from. It answers from the same made-up data as the
+fake `jira` CLI next to it, which it imports, so the two never disagree. Moves aren't served.
 
 Binds a free port on 127.0.0.1 and writes it to the file named by the first argument, for
 record.sh to put in the demo's jira-cli config.
@@ -33,7 +33,9 @@ def search(body):
     wanted = body.get("fields")
     issues = []
     for ticket in matched[start : start + size]:
-        fields = cli.base_fields(ticket)
+        # Every field a ticket has, as `issue view` shows it; the changelog is left out because
+        # Jira sends it only on request.
+        fields = cli.issue_payload(ticket)["fields"]
         if wanted is not None:
             fields = {name: value for name, value in fields.items() if name in wanted}
         issues.append({"key": ticket["key"], "fields": fields})
