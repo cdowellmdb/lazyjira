@@ -220,11 +220,8 @@ def base_fields(t):
     }
 
 
-def issue_view(key):
-    rows = [t for t in all_tickets() if t["key"] == key]
-    if not rows:
-        sys.exit(f"issue {key} not found")
-    t = rows[0]
+def issue_payload(t):
+    """One issue as `issue view --raw` shows it: every field, and the changelog."""
     reporter = "priya.shah@example.com" if t["assignee"] != "priya.shah@example.com" else ME
     histories = [
         {
@@ -264,7 +261,7 @@ def issue_view(key):
                 "body": "Draft PR is up. *Tests pass locally*; waiting on {{staging}} to deploy.",
             }
         )
-    payload = {
+    return {
         "key": t["key"],
         "fields": {
             **base_fields(t),
@@ -290,7 +287,13 @@ def issue_view(key):
         },
         "changelog": {"histories": histories},
     }
-    print(json.dumps(payload))
+
+
+def issue_view(key):
+    rows = [t for t in all_tickets() if t["key"] == key]
+    if not rows:
+        sys.exit(f"issue {key} not found")
+    print(json.dumps(issue_payload(rows[0])))
 
 
 def main(args):
