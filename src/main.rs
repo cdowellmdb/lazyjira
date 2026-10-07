@@ -718,10 +718,7 @@ async fn main() -> Result<()> {
                     match result {
                         Ok(tickets) => {
                             let count = tickets.len();
-                            app.filter_results = tickets;
-                            app.reapply_moves_since(requested_at);
-                            app.collapsed_filters.clear();
-                            app.mark_cache_changed();
+                            app.show_filter_results(tickets, requested_at);
                             app.prune_selection_to_visible();
                             app.filter_focus = FilterFocus::Results;
                             app.selected_index = 0;
