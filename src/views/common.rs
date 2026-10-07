@@ -286,6 +286,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn each_selection_mark_is_one_column_wide() {
+        for mark in MARKS {
+            assert_eq!(
+                unicode_width::UnicodeWidthChar::width(mark),
+                Some(1),
+                "{mark}"
+            );
+        }
+    }
+
+    #[test]
     fn age_uses_the_largest_whole_unit() {
         const MIN: i64 = 60;
         const HOUR: i64 = 60 * MIN;

@@ -345,15 +345,19 @@ pub fn register_rows(
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect::<String>();
-            // The row's first mark is its selection mark; each character before it is one column.
+            // The row's first mark is its selection mark, as many columns in as the text before it.
             let mark = text
                 .find(crate::views::common::MARKS)
-                .map_or(0, |at| text[..at].chars().count()) as u16;
+                .map_or(0, |at| unicode_width::UnicodeWidthStr::width(&text[..at]))
+                as u16;
+            // The mark and the cells either side of it, so a click a cell off (or on a font's
+            // wider glyph) still toggles; a header's fold arrow is two cells after the mark.
+            let start = mark.saturating_sub(1);
             targets.push((
                 Rect::new(
-                    rect.x + mark,
+                    rect.x + start,
                     rect.y,
-                    rect.width.saturating_sub(mark).min(1),
+                    rect.width.saturating_sub(start).min(mark + 2 - start),
                     1,
                 ),
                 Target::Mark(index),
@@ -372,7 +376,7 @@ pub fn register_rows(
             } else if let Some(arrow) = text.split(" │ ").next().and_then(|key_cell| {
                 key_cell
                     .find(['▼', '▶'])
-                    .map(|at| key_cell[..at].chars().count())
+                    .map(|at| unicode_width::UnicodeWidthStr::width(&key_cell[..at]))
             }) {
                 // A parent's fold arrow sits in its key cell.
                 targets.push((
@@ -901,6 +905,34 @@ mod tests {
         })
         .await;
         assert!(app.bulk_state.is_none());
+    }
+
+    #[tokio::test]
+    async fn clicking_just_right_of_a_mark_still_toggles_selection() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "To Do")];
+        draw(&app, &config);
+        // The space after the mark, where a click lands when a font draws the mark wide.
+        let mark = locate(&app, "☐ DEMO-1");
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            send(
+                &mut app,
+                &mut config,
+                &tx,
+                kind,
+                Position::new(mark.x + 1, mark.y),
+            )
+            .await;
+        }
+        assert!(app.is_ticket_selected("DEMO-1"));
+        assert!(!app.is_detail_open());
     }
 
     #[tokio::test]

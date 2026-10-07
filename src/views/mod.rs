@@ -664,8 +664,8 @@ mod tests {
         assert_ne!(prefix.0, summary.0);
     }
 
-    /// The drawn cell under each mark target: (symbol, color, on the highlighted row, row text).
-    /// Also checks that each mark target is one column and each fold target sits on an arrow.
+    /// The mark under each mark target: (symbol, color, on the highlighted row, row text).
+    /// Also checks that each fold target sits on an arrow.
     fn marks_drawn(
         terminal: &Terminal<TestBackend>,
         app: &App,
@@ -682,7 +682,11 @@ mod tests {
             let cell = &buffer[(rect.x, rect.y)];
             match target {
                 Target::Mark(_) => {
-                    assert_eq!(rect.width, 1, "a mark is one column: {}", row_text(rect.y));
+                    // The target reaches a cell either side of the mark; report the mark's cell.
+                    let cell = (rect.x..rect.right())
+                        .map(|x| &buffer[(x, rect.y)])
+                        .find(|cell| cell.symbol().starts_with(common::MARKS))
+                        .unwrap_or_else(|| panic!("no mark under {rect:?}: {}", row_text(rect.y)));
                     let highlighted = cell.bg == Color::DarkGray;
                     marks.push((
                         cell.symbol().to_string(),
