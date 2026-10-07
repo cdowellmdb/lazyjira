@@ -4,6 +4,7 @@ mod bulk_actions;
 mod bulk_plan;
 mod bulk_upload;
 mod cache;
+mod cache_refresh;
 mod config;
 mod jira_client;
 mod jira_issue;
@@ -46,9 +47,10 @@ use crate::config::AppConfig;
 use crate::jira_rest::describe;
 use crate::move_picker::JiraCall;
 use app::{
-    App, BulkUploadPreview, BulkUploadState, BulkUploadSummary, CacheRefreshPhase, DetailMode,
-    FilterFocus, Tab, TicketSyncStage,
+    App, BulkUploadPreview, BulkUploadState, BulkUploadSummary, DetailMode, FilterFocus, Tab,
+    TicketSyncStage,
 };
+use cache_refresh::CacheRefreshPhase;
 
 /// Results of background work. `requested_at` is `app.moves.now()` when a Jira read was
 /// requested, so a read that predates a confirmed move can't undo it.
@@ -110,6 +112,7 @@ fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, c
     let requested_at = app.moves.now();
     let request = app.next_request_id();
     app.epic_refresh_request = request;
+    app.epics_refreshing = true;
     let tx = tx.clone();
     let config = config.clone();
     tokio::spawn(async move {
@@ -131,8 +134,7 @@ fn spawn_cache_refresh(
     config: &AppConfig,
 ) {
     let requested_at = app.moves.now();
-    let request = app.next_request_id();
-    app.cache_refresh_request = request;
+    let request = app.begin_cache_refresh();
     let tx = tx.clone();
     let config = config.clone();
     let details = app.details.clone();
@@ -472,7 +474,6 @@ async fn main() -> Result<()> {
     }
 
     spawn_epics_refresh(&mut app, &bg_tx, &config);
-    app.epics_refreshing = true;
     queue_detail_prefetch(&mut app, &bg_tx);
 
     let mut draw_needed = true;
@@ -763,7 +764,6 @@ async fn handle_key(
             app.loading = true;
             app.ticket_sync_stage = None;
             spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
-            app.epics_refreshing = true;
             spawn_epics_refresh(app, bg_tx, config);
         }
     } else if app.is_filter_edit_open() {

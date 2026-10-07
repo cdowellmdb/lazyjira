@@ -26,6 +26,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 
 - **src/main.rs** — Entry point, terminal setup, event loop, key handling, `--dev` flags
 - **src/app.rs** — App state, tab management, selection tracking, cache mutations
+- **src/cache_refresh.rs** — What a list refresh's result does to App and the follow-ups it returns for main.rs
 - **src/cache.rs** — Data types (Ticket, Epic, TeamMember, Status, Cache)
 - **src/config.rs** — `config.toml` schema, defaults, load/save
 - **src/settings.rs** — In-app team, epic, startup, and theme preferences
