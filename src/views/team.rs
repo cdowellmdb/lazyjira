@@ -4,9 +4,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::App;
+use crate::cache::Ticket;
 use crate::views::common::{
     fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
-    KEY_WIDTH,
+    Shared, KEY_WIDTH,
 };
 
 fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
@@ -47,10 +48,50 @@ fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let members = app.team_visible_tickets_by_member();
-    let (key_w, status_w, summary_w, epic_w, labels_w) = team_column_widths(area);
+    let shared = Shared::of(&members);
+    let (key_w, status_w, mut summary_w, epic_w, labels_w) = team_column_widths(area);
+    // A hidden column's width, and its separator's, go to the summary.
+    for (shown, width) in [
+        (shared.epic_column, epic_w),
+        (shared.labels_column, labels_w),
+    ] {
+        if !shown {
+            summary_w += width + 3;
+        }
+    }
     let heading_style = Style::default()
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
+    // The Epic and Labels cells that `shared` leaves on a row; `muted` styles them unselected.
+    let push_epic_and_labels =
+        |row: &mut Line<'_>, ticket: &Ticket, base: Style, is_selected: bool, muted: Style| {
+            if shared.epic_column {
+                let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
+                row.push_span(Span::styled(" │ ", base.fg(Color::DarkGray)));
+                row.push_span(Span::styled(
+                    format!("{:<epic_w$}", truncate(epic_str, epic_w)),
+                    if is_selected {
+                        Style::default().fg(Color::Gray).bg(Color::DarkGray)
+                    } else {
+                        muted
+                    },
+                ));
+            }
+            if shared.labels_column {
+                row.push_span(Span::styled(" │ ", base.fg(Color::DarkGray)));
+                row.push_span(Span::styled(
+                    format!(
+                        "{:<labels_w$}",
+                        truncate(&shared.row_labels(ticket), labels_w)
+                    ),
+                    if is_selected {
+                        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+                    } else {
+                        muted
+                    },
+                ));
+            }
+        };
 
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_visual_line: Option<usize> = None;
@@ -111,17 +152,25 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            lines.push(Line::from(vec![
+            let mut header = Line::from(vec![
                 Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
                 Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
                 Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
-                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:<epic_w$}", "EPIC"), heading_style),
-                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:<labels_w$}", "LABELS"), heading_style),
-            ]));
+            ]);
+            for (shown, title, width) in [
+                (shared.epic_column, "EPIC", epic_w),
+                (shared.labels_column, "LABELS", labels_w),
+            ] {
+                if shown {
+                    header.push_span(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+                    header.push_span(Span::styled(format!("{title:<width$}"), heading_style));
+                }
+            }
+            let header_w = header.width();
+            lines.push(header);
+            lines.extend(shared.line(header_w));
 
             for (index, ticket) in active {
                 mouse_rows.push((lines.len(), *index, false));
@@ -142,12 +191,6 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     Style::default().fg(status_fg)
                 };
-                let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
-                let labels_str = if ticket.labels.is_empty() {
-                    "-".to_string()
-                } else {
-                    ticket.labels.join(", ")
-                };
                 let marker = if app.is_ticket_selected(&ticket.key) {
                     "[x]"
                 } else {
@@ -156,7 +199,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let (key_cell, summary) =
                     ticket_cells(app, group.family.get(index).copied(), ticket, marker);
 
-                lines.push(Line::from(vec![
+                let mut row = Line::from(vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
@@ -165,25 +208,15 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         format!("{:<summary_w$}", truncate(&summary, summary_w)),
                         base,
                     ),
-                    Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<epic_w$}", truncate(epic_str, epic_w)),
-                        if is_selected {
-                            Style::default().fg(Color::Gray).bg(Color::DarkGray)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        },
-                    ),
-                    Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<labels_w$}", truncate(&labels_str, labels_w)),
-                        if is_selected {
-                            Style::default().fg(Color::Yellow).bg(Color::DarkGray)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        },
-                    ),
-                ]));
+                ]);
+                push_epic_and_labels(
+                    &mut row,
+                    ticket,
+                    base,
+                    is_selected,
+                    Style::default().fg(Color::DarkGray),
+                );
+                lines.push(row);
             }
 
             if !done.is_empty() {
@@ -214,12 +247,6 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     Style::default().fg(status_fg).add_modifier(Modifier::DIM)
                 };
-                let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
-                let labels_str = if ticket.labels.is_empty() {
-                    "-".to_string()
-                } else {
-                    ticket.labels.join(", ")
-                };
                 let marker = if app.is_ticket_selected(&ticket.key) {
                     "[x]"
                 } else {
@@ -228,7 +255,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let (key_cell, summary) =
                     ticket_cells(app, group.family.get(index).copied(), ticket, marker);
 
-                lines.push(Line::from(vec![
+                let mut row = Line::from(vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
@@ -237,29 +264,17 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         format!("{:<summary_w$}", truncate(&summary, summary_w)),
                         base,
                     ),
-                    Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<epic_w$}", truncate(epic_str, epic_w)),
-                        if is_selected {
-                            Style::default().fg(Color::Gray).bg(Color::DarkGray)
-                        } else {
-                            Style::default()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::DIM)
-                        },
-                    ),
-                    Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<labels_w$}", truncate(&labels_str, labels_w)),
-                        if is_selected {
-                            Style::default().fg(Color::Yellow).bg(Color::DarkGray)
-                        } else {
-                            Style::default()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::DIM)
-                        },
-                    ),
-                ]));
+                ]);
+                push_epic_and_labels(
+                    &mut row,
+                    ticket,
+                    base,
+                    is_selected,
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::DIM),
+                );
+                lines.push(row);
             }
 
             lines.push(Line::from(vec![

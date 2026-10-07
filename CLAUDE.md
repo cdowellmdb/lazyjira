@@ -92,7 +92,7 @@ Renderers draw with plain ANSI colors, each used for one job: `DarkGray` is mute
 
 ### Current UX behavior
 - Team view includes the current user (if not in the `[team]` config, inferred from `jira me` email).
-- My Work and Team include a separate Labels column.
+- My Work and Team include Epic and Labels columns. An epic or labels every drawn row shares show once, muted, on a line under the column headers instead (`views::common::Shared`, used by My Work, Team, Unassigned and Filters): rows with no epic don't count, the Epic column returns when two rows' epics differ, Labels keeps only the labels some rows lack, and a hidden column's width goes to the summary. The sub-tasks of folded parents count; rows of folded groups don't.
 - Search matches ticket key/summary/assignee/labels and team member name/email.
 - `Enter` works while search is active (opens detail for selected row).
 - `f`/`F` cycle the status focus (My Work and Team) through the statuses shown, in display order, then back to all (`App::cycle_status_focus`). Closed isn't in the cycle; `d` shows and hides it.

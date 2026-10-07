@@ -2,8 +2,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
-use crate::app::App;
-use crate::app::GroupSelectionState;
+use crate::app::{App, GroupSelectionState, VisibleGroup};
 use crate::cache::{Status, StatusRules, Ticket};
 use crate::subtasks::Family;
 
@@ -103,4 +102,83 @@ pub fn ticket_cells(
         _ => ticket.summary.clone(),
     };
     (key, summary)
+}
+
+/// What every row a tab draws has in common, so it is shown once instead of on every row.
+/// Rows with no epic don't count when deciding whether an epic is shared.
+pub struct Shared {
+    pub epic: Option<String>,
+    pub labels: Vec<String>,
+    /// Some rows' epics differ, so rows need their Epic column.
+    pub epic_column: bool,
+    /// Some row has a label not every row has, so rows need their Labels column.
+    pub labels_column: bool,
+}
+
+impl Shared {
+    /// The shared values of the rows `groups` draw, counting the sub-tasks of folded parents
+    /// (as group totals do) but nothing in a folded group.
+    pub fn of<H>(groups: &[VisibleGroup<'_, H>]) -> Self {
+        let rows: Vec<&Ticket> = groups
+            .iter()
+            .flat_map(|group| {
+                let drawn = group.tickets.iter().flatten().map(|(_, ticket)| *ticket);
+                drawn.chain(group.folded.iter().copied())
+            })
+            .collect();
+        let mut epics: Vec<&str> = rows.iter().filter_map(|t| t.epic_name.as_deref()).collect();
+        epics.sort_unstable();
+        epics.dedup();
+        let labels: Vec<String> = rows.first().map_or_else(Vec::new, |first| {
+            first
+                .labels
+                .iter()
+                .filter(|label| rows.iter().all(|t| t.labels.contains(label)))
+                .cloned()
+                .collect()
+        });
+        Shared {
+            epic: (epics.len() == 1).then(|| epics[0].to_string()),
+            epic_column: epics.len() > 1,
+            labels_column: rows
+                .iter()
+                .any(|t| t.labels.iter().any(|label| !labels.contains(label))),
+            labels,
+        }
+    }
+
+    /// A row's Labels cell: its labels that not every row has.
+    pub fn row_labels(&self, ticket: &Ticket) -> String {
+        let own: Vec<&str> = ticket
+            .labels
+            .iter()
+            .filter(|label| !self.labels.contains(label))
+            .map(String::as_str)
+            .collect();
+        if own.is_empty() {
+            "-".to_string()
+        } else {
+            own.join(", ")
+        }
+    }
+
+    /// The muted line under the column headers, cut to `width`; `None` when nothing is shared.
+    pub fn line(&self, width: usize) -> Option<Line<'static>> {
+        if self.epic.is_none() && self.labels.is_empty() {
+            return None;
+        }
+        let mut text = "  all rows".to_string();
+        if let Some(epic) = &self.epic {
+            text.push_str(" · epic ");
+            text.push_str(epic);
+        }
+        if !self.labels.is_empty() {
+            text.push_str(" · ");
+            text.push_str(&self.labels.join(", "));
+        }
+        Some(Line::from(Span::styled(
+            truncate(&text, width),
+            Style::default().fg(Color::DarkGray),
+        )))
+    }
 }

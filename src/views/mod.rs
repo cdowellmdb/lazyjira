@@ -128,6 +128,218 @@ mod tests {
             }
         }
     }
+    /// Draws `tab` and returns each row's text and the foreground color of its first glyph.
+    fn draw(app: &App, tab: Tab, width: u16) -> Vec<(String, Color)> {
+        let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                match tab {
+                    Tab::MyWork => my_work::render(frame, area, app),
+                    Tab::Team => team::render(frame, area, app),
+                    Tab::Epics => epics::render(frame, area, app),
+                    Tab::Unassigned => unassigned::render(frame, area, app),
+                    Tab::Filters => filters::render(frame, area, app, &config),
+                }
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..30)
+            .map(|y| {
+                let text: String = (0..width).map(|x| buffer[(x, y)].symbol()).collect();
+                let fg = (0..width)
+                    .map(|x| &buffer[(x, y)])
+                    .find(|cell| !matches!(cell.symbol(), " " | "│" | "╭" | "╰" | "─"))
+                    .map_or(Color::Reset, |cell| cell.fg);
+                (text, fg)
+            })
+            .collect()
+    }
+
+    fn line_with<'a>(rows: &'a [(String, Color)], text: &str) -> Option<&'a (String, Color)> {
+        rows.iter().find(|(row, _)| row.contains(text))
+    }
+
+    /// A ticket in `epic` carrying `labels`.
+    fn labelled(key: &str, epic: Option<&str>, labels: &[&str]) -> Ticket {
+        let mut ticket = Ticket::for_test(key, "In Progress");
+        ticket.epic_name = epic.map(String::from);
+        ticket.labels = labels.iter().map(|l| l.to_string()).collect();
+        ticket
+    }
+
+    #[test]
+    fn shared_epic_and_labels_show_once_under_the_column_headers() {
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![
+            labelled("DEMO-1", Some("Grading"), &["DSCI", "FY27Q3", "tech-debt"]),
+            labelled("DEMO-2", Some("Grading"), &["DSCI", "FY27Q3"]),
+            // No epic: doesn't stop the epic being shared.
+            labelled("DEMO-3", None, &["FY27Q3", "DSCI"]),
+        ];
+        let rows = draw(&app, Tab::MyWork, 120);
+        let header_y = rows
+            .iter()
+            .position(|(r, _)| r.contains("SEL KEY"))
+            .unwrap();
+        let header = &rows[header_y].0;
+        assert!(
+            !header.contains("EPIC") && header.contains("LABELS"),
+            "{header}"
+        );
+        let (shared, color) = &rows[header_y + 1];
+        assert!(
+            shared.contains("all rows · epic Grading · DSCI, FY27Q3"),
+            "{shared}"
+        );
+        assert_eq!(*color, Color::DarkGray);
+        // Rows keep only the labels that tell them apart.
+        let row = &line_with(&rows, "DEMO-1").unwrap().0;
+        assert!(row.contains("tech-debt") && !row.contains("DSCI"), "{row}");
+        assert!(!line_with(&rows, "DEMO-2").unwrap().0.contains("Grading"));
+
+        // A different epic brings the Epic column back, and with every label shared the Labels
+        // column goes.
+        app.cache.my_tickets = vec![
+            labelled("DEMO-1", Some("Grading"), &["DSCI"]),
+            labelled("DEMO-2", Some("Runner"), &["DSCI"]),
+        ];
+        app.mark_cache_changed();
+        let rows = draw(&app, Tab::MyWork, 120);
+        let header = &line_with(&rows, "SEL KEY").unwrap().0;
+        assert!(
+            header.contains("EPIC") && !header.contains("LABELS"),
+            "{header}"
+        );
+        assert!(line_with(&rows, "all rows · DSCI").is_some());
+        assert!(line_with(&rows, "DEMO-2").unwrap().0.contains("Runner"));
+
+        // Nothing shared: no line, and both columns.
+        app.cache.my_tickets = vec![
+            labelled("DEMO-1", Some("Grading"), &["DSCI"]),
+            labelled("DEMO-2", Some("Runner"), &[]),
+        ];
+        app.mark_cache_changed();
+        let rows = draw(&app, Tab::MyWork, 120);
+        assert!(line_with(&rows, "all rows").is_none());
+        let header = &line_with(&rows, "SEL KEY").unwrap().0;
+        assert!(
+            header.contains("EPIC") && header.contains("LABELS"),
+            "{header}"
+        );
+    }
+
+    #[test]
+    fn a_hidden_column_gives_its_width_to_the_summary() {
+        let summary = format!("{}END", "s".repeat(67));
+        let mut first = labelled("DEMO-1", Some("Grading"), &[]);
+        first.summary = summary.clone();
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![first.clone(), labelled("DEMO-2", Some("Grading"), &[])];
+        let rows = draw(&app, Tab::MyWork, 100);
+        assert!(line_with(&rows, "DEMO-1").unwrap().0.contains(&summary));
+
+        app.cache.my_tickets = vec![first, labelled("DEMO-2", Some("Runner"), &[])];
+        app.mark_cache_changed();
+        let rows = draw(&app, Tab::MyWork, 100);
+        assert!(!line_with(&rows, "DEMO-1").unwrap().0.contains("END"));
+    }
+
+    #[test]
+    fn shared_values_follow_search_status_focus_and_folding() {
+        let epic_column = |app: &App| {
+            line_with(&draw(app, Tab::MyWork, 120), "SEL KEY")
+                .unwrap()
+                .0
+                .contains("EPIC")
+        };
+        let mut app = App::new();
+        app.loading = false;
+        let mut other = labelled("DEMO-2", Some("Runner"), &["x"]);
+        other.status = "To Do".into();
+        app.cache.my_tickets = vec![labelled("DEMO-1", Some("Grading"), &["x"]), other];
+        assert!(epic_column(&app));
+
+        app.search = Some("DEMO-1".into());
+        app.mark_cache_changed();
+        assert!(!epic_column(&app));
+        app.search = None;
+
+        app.status_focus = Some("In Progress".into());
+        app.mark_cache_changed();
+        assert!(!epic_column(&app));
+        app.status_focus = None;
+
+        app.toggle_group_collapse("To Do");
+        assert!(!epic_column(&app));
+        app.toggle_group_collapse("To Do");
+        assert!(epic_column(&app));
+
+        // A folded parent's sub-tasks still count: their missing label isn't shared.
+        let mut subtask = labelled("DEMO-3", None, &[]);
+        subtask.parent_key = Some("DEMO-1".into());
+        app.cache.my_tickets = vec![labelled("DEMO-1", None, &["x"]), subtask];
+        app.collapsed_parents.insert("DEMO-1".into());
+        app.mark_cache_changed();
+        let rows = draw(&app, Tab::MyWork, 120);
+        assert!(line_with(&rows, "all rows").is_none());
+        assert!(line_with(&rows, "SEL KEY").unwrap().0.contains("LABELS"));
+    }
+
+    #[test]
+    fn team_unassigned_and_filters_show_shared_values_once() {
+        let assigned = |key: &str, epic: &str, email: &str| {
+            let mut ticket = labelled(key, Some(epic), &["DSCI"]);
+            ticket.assignee_email = Some(email.into());
+            ticket
+        };
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.team_members = vec![TeamMember {
+            name: "Alex".into(),
+            email: "alex@example.com".into(),
+        }];
+        app.cache.team_tickets = vec![
+            assigned("DEMO-1", "Grading", "alex@example.com"),
+            assigned("DEMO-2", "Grading", "alex@example.com"),
+            assigned("DEMO-3", "Grading", "__unassigned__"),
+            assigned("DEMO-4", "Grading", "__unassigned__"),
+        ];
+        app.filter_results = app.cache.team_tickets.clone();
+        for tab in [Tab::Team, Tab::Unassigned, Tab::Filters] {
+            app.active_tab = tab;
+            app.mark_cache_changed();
+            let rows = draw(&app, tab, 160);
+            let header_y = rows
+                .iter()
+                .position(|(r, _)| r.contains("SEL KEY"))
+                .unwrap();
+            let header = &rows[header_y].0;
+            assert!(
+                !header.contains("EPIC") && !header.contains("LABELS"),
+                "{header}"
+            );
+            let (shared, color) = &rows[header_y + 1];
+            assert!(
+                shared.contains("all rows · epic Grading · DSCI"),
+                "{tab:?}: {shared}"
+            );
+            assert_eq!(*color, Color::DarkGray);
+        }
+
+        // A second epic in Team brings its Epic column back.
+        app.active_tab = Tab::Team;
+        app.cache.team_tickets[1].epic_name = Some("Runner".into());
+        app.mark_cache_changed();
+        let rows = draw(&app, Tab::Team, 160);
+        assert!(line_with(&rows, "SEL KEY").unwrap().0.contains("EPIC"));
+        assert!(line_with(&rows, "all rows · DSCI").is_some());
+        assert!(line_with(&rows, "DEMO-2").unwrap().0.contains("Runner"));
+    }
+
     #[test]
     fn sub_tasks_sit_under_their_parent_or_name_it() {
         let rows_of = |app: &App, tab: Tab| -> Vec<String> {

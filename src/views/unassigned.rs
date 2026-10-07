@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::App;
 use crate::views::common::{
     fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
-    KEY_WIDTH,
+    Shared, KEY_WIDTH,
 };
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
@@ -64,6 +64,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
         ]));
+        lines.extend(Shared::of(&grouped).line(4 + key_w + 3 + status_w + 3 + summary_w));
         lines.push(Line::from(""));
     }
 

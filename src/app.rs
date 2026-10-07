@@ -27,6 +27,8 @@ pub(crate) struct VisibleGroup<'a, H> {
     /// The rows (by index) that are a parent with sub-tasks, or a sub-task under its parent.
     /// The sub-tasks of a folded parent have no row, but `total` still counts them.
     pub family: HashMap<usize, Family>,
+    /// The sub-tasks of folded parents in an expanded group: no row, but still in the list.
+    pub folded: Vec<&'a crate::cache::Ticket>,
 }
 
 #[derive(Debug, Clone)]
@@ -741,22 +743,25 @@ impl App {
                 next_index += 1;
                 let total = rows.len();
                 let mut family = HashMap::new();
+                let mut folded = Vec::new();
                 let tickets = (!self.is_collapsed(tab, &id)).then(|| {
                     rows.into_iter()
-                        .filter(|(ticket, role)| {
-                            !(*role == Some(Family::Child)
+                        .filter_map(|(ticket, role)| {
+                            if role == Some(Family::Child)
                                 && ticket
                                     .parent_key
                                     .as_ref()
-                                    .is_some_and(|parent| self.collapsed_parents.contains(parent)))
-                        })
-                        .map(|(ticket, role)| {
+                                    .is_some_and(|parent| self.collapsed_parents.contains(parent))
+                            {
+                                folded.push(ticket);
+                                return None;
+                            }
                             let index = next_index;
                             next_index += 1;
                             if let Some(role) = role {
                                 family.insert(index, role);
                             }
-                            (index, ticket)
+                            Some((index, ticket))
                         })
                         .collect()
                 });
@@ -767,6 +772,7 @@ impl App {
                     total,
                     tickets,
                     family,
+                    folded,
                 }
             })
             .collect()
