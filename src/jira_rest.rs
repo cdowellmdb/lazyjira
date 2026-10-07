@@ -21,6 +21,17 @@ use crate::cache::Ticket;
 use crate::jira_issue::{parse_search_page, ticket_from_issue};
 use crate::transitions::{parse_transitions, Transition};
 
+/// The ticket's page in the Jira web UI.
+pub fn browse_url(key: &str) -> Result<String> {
+    Ok(format!("{}/browse/{}", server_url()?, key))
+}
+
+/// An error with its whole chain, as the user sees it: "Couldn't reach Jira: connection refused"
+/// rather than just the outermost "Couldn't reach Jira".
+pub fn describe(error: &anyhow::Error) -> String {
+    format!("{:#}", error)
+}
+
 /// Lists the transitions Jira offers for `key`, with their fields.
 pub async fn get_transitions(key: &str) -> Result<Vec<Transition>> {
     shared()?.transitions(key).await
@@ -45,6 +56,13 @@ pub async fn issue(key: &str, fields: &[&str]) -> Result<Ticket> {
     shared()?.issue(key, fields).await
 }
 
+/// Whether lazyjira can reach Jira at all: jira-cli's config is readable and `JIRA_API_TOKEN` is
+/// set. The error says which is missing, so a read checks it first and reports that instead of
+/// whatever a `jira` process says about the same problem.
+pub fn ready() -> Result<()> {
+    shared().map(|_| ())
+}
+
 /// The client for this session, built on first use. `JIRA_API_TOKEN` can't change while the app
 /// runs, so a setup error (such as a missing token) is kept and reported on every call.
 fn shared() -> Result<&'static JiraRest> {
@@ -54,7 +72,7 @@ fn shared() -> Result<&'static JiraRest> {
     }
     static CLIENT: OnceLock<std::result::Result<JiraRest, String>> = OnceLock::new();
     CLIENT
-        .get_or_init(|| JiraRest::from_jira_cli().map_err(|e| format!("{:#}", e)))
+        .get_or_init(|| JiraRest::from_jira_cli().map_err(|e| describe(&e)))
         .as_ref()
         .map_err(|e| anyhow!("{}", e))
 }
@@ -65,19 +83,6 @@ struct JiraCliConfig {
     server: String,
     auth_type: Option<String>,
     login: Option<String>,
-}
-
-/// jira-cli's `epic` settings, read apart from `JiraCliConfig` so that an odd `epic` section
-/// costs the Epic Link field and nothing else.
-#[derive(Deserialize)]
-struct EpicConfig {
-    epic: Option<EpicSettings>,
-}
-
-/// `link` is the id of the Epic Link custom field.
-#[derive(Deserialize)]
-struct EpicSettings {
-    link: Option<String>,
 }
 
 /// The id of the Epic Link custom field (`customfield_10857` on one instance, something else on
@@ -93,9 +98,12 @@ pub fn epic_link_field() -> Option<String> {
         .clone()
 }
 
+/// `epic.link` from jira-cli's config. Read as loose YAML, so an odd `epic` section costs the
+/// Epic Link field and nothing else.
 fn configured_epic_link(yaml: &str) -> Option<String> {
-    let config: EpicConfig = serde_yaml::from_str(yaml).ok()?;
-    config.epic?.link.filter(|link| !link.trim().is_empty())
+    let config: serde_yaml::Value = serde_yaml::from_str(yaml).ok()?;
+    let link = config["epic"]["link"].as_str()?.trim();
+    (!link.is_empty()).then(|| link.to_string())
 }
 
 /// Browser links use the same Jira instance as jira-cli, without needing a REST token.
@@ -214,7 +222,7 @@ impl JiraRest {
 
     async fn issue(&self, key: &str, fields: &[&str]) -> Result<Ticket> {
         let epic_link = epic_link_field();
-        let fields: Vec<&str> = fields.iter().copied().chain(epic_link.as_deref()).collect();
+        let fields = with_epic_link(fields, epic_link.as_deref());
         let response = self
             .request(Method::GET, &issue_path(key, &fields)?)
             .send()
@@ -228,8 +236,7 @@ impl JiraRest {
 
     async fn search(&self, jql: &str, fields: &[&str]) -> Result<Vec<Ticket>> {
         let epic_link = epic_link_field();
-        let fields: Vec<&str> = fields.iter().copied().chain(epic_link.as_deref()).collect();
-        let fields = &fields;
+        let fields = &with_epic_link(fields, epic_link.as_deref());
         read_pages(
             |start_at| async move {
                 let response = self
@@ -246,6 +253,11 @@ impl JiraRest {
     }
 }
 
+/// `fields` and the Epic Link field, when jira-cli's config names one, so `epic_key` is read.
+fn with_epic_link<'a>(fields: &[&'a str], epic_link: Option<&'a str>) -> Vec<&'a str> {
+    fields.iter().copied().chain(epic_link).collect()
+}
+
 /// Everything a search matches, a page at a time. `fetch(start_at)` asks Jira for the page that
 /// starts there and returns its body.
 async fn read_pages<F, Fut>(mut fetch: F, epic_link: Option<&str>) -> Result<Vec<Ticket>>
@@ -257,50 +269,24 @@ where
     let mut start_at = 0;
     loop {
         let page = parse_search_page(&fetch(start_at).await?, epic_link)?;
-        let next = next_start(start_at, page.sent, page.total);
         found.extend(page.tickets);
-        match next {
-            Some(next) => start_at = next,
-            None => return Ok(found),
+        // The next page starts after what the server sent, since it can cap a page below
+        // `SEARCH_PAGE_SIZE`; an empty page ends the search rather than being asked for again.
+        if page.sent == 0 || start_at + page.sent >= page.total {
+            return Ok(found);
         }
+        start_at += page.sent;
     }
 }
 
-/// How many keys one `key in (…)`, `parent in (…)` or `"Epic Link" in (…)` search holds.
-pub const KEYS_PER_SEARCH: usize = 50;
 /// What a page asks for. A server that allows fewer is followed by what it sends, see
-/// `next_start`; the instance this was measured on takes 500. Pages of 100 cost three
+/// `read_pages`; the instance this was measured on takes 500. Pages of 100 cost three
 /// round-trips for a team of 270 tickets, 500 only one.
 const SEARCH_PAGE_SIZE: usize = 500;
 
-/// Whether `key` looks like a Jira key, safe to put in a JQL list.
-pub fn is_key(key: &str) -> bool {
-    !key.is_empty()
-        && key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
-/// `keys` as the inside of a JQL list (`A-1,B-2`). Keys that don't look like Jira keys are left
-/// out so they can't break the query; `None` when none are left.
-pub fn key_list(keys: &[String]) -> Option<String> {
-    let keys: Vec<&str> = keys
-        .iter()
-        .map(String::as_str)
-        .filter(|key| is_key(key))
-        .collect();
-    (!keys.is_empty()).then(|| keys.join(","))
-}
-
-/// `text` as a JQL string literal, quotes included: a `"` or `\` in it can't end the string or
-/// change the query.
-pub fn jql_quote(text: &str) -> String {
-    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
 /// The path, under the API root, that reads `key` with just `fields`.
 fn issue_path(key: &str, fields: &[&str]) -> Result<String> {
-    if !is_key(key) {
+    if !crate::jql::is_key(key) {
         bail!("{key:?} isn't a ticket key");
     }
     Ok(format!("issue/{key}?fields={}", fields.join(",")))
@@ -313,14 +299,6 @@ fn search_body(jql: &str, fields: &[&str], start_at: usize) -> Value {
         "maxResults": SEARCH_PAGE_SIZE,
         "fields": fields,
     })
-}
-
-/// Where the next page starts after one of `sent` issues at `start_at`, `None` once all `total`
-/// matches are read. Follows what the server sent, since it can cap a page below
-/// `SEARCH_PAGE_SIZE`, and stops on an empty page rather than asking for it again.
-fn next_start(start_at: usize, sent: usize, total: usize) -> Option<usize> {
-    let next = start_at + sent;
-    (sent > 0 && next < total).then_some(next)
 }
 
 /// `$JIRA_CONFIG_FILE`, else `~/.config/.jira/.config.yml`, as jira-cli does.
@@ -529,27 +507,6 @@ mod tests {
         for key in ["DEMO-1/transitions", "../DEMO-1", "DEMO 1", ""] {
             assert!(issue_path(key, &["summary"]).is_err(), "{key:?}");
         }
-    }
-
-    #[test]
-    fn jql_quote_keeps_a_value_inside_its_string() {
-        assert_eq!(jql_quote("Platform Team"), "\"Platform Team\"");
-        assert_eq!(jql_quote(r#"say "hi""#), r#""say \"hi\"""#);
-        assert_eq!(jql_quote(r"back\slash"), r#""back\\slash""#);
-        // The backslash is escaped before the quote, so an escaped quote can't be forged.
-        assert_eq!(jql_quote(r#"\""#), r#""\\\"""#);
-    }
-
-    #[test]
-    fn only_keys_shaped_like_jira_keys_reach_a_jql_list() {
-        let keys = |keys: &[&str]| keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            key_list(&keys(&["DSCI-1", "x\") OR 1=1", "", "AB_2"])).as_deref(),
-            Some("DSCI-1,AB_2")
-        );
-        assert_eq!(key_list(&keys(&["no good"])), None);
-        assert_eq!(key_list(&[]), None);
-        assert!(is_key("DSCI-3244") && !is_key("DSCI 1") && !is_key(""));
     }
 
     #[test]

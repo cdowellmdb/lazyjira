@@ -1,4 +1,5 @@
 mod app;
+mod bounded;
 mod bulk_actions;
 mod bulk_plan;
 mod bulk_upload;
@@ -8,6 +9,7 @@ mod jira_client;
 mod jira_issue;
 mod jira_reads;
 mod jira_rest;
+mod jql;
 mod local_cache;
 mod mouse;
 mod move_picker;
@@ -39,6 +41,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::bulk_actions::{BulkAction, BulkCall, BulkSummary, BulkTarget};
 use crate::bulk_plan::{BulkJob, BulkPlan, FetchedTransitions};
 use crate::config::AppConfig;
+use crate::jira_rest::describe;
 use crate::move_picker::JiraCall;
 use app::{
     App, BulkUploadPreview, BulkUploadState, BulkUploadSummary, DetailMode, FilterFocus, Tab,
@@ -106,12 +109,6 @@ enum BackgroundMessage {
         requested_at: u64,
         result: std::result::Result<Vec<crate::cache::Ticket>, String>,
     },
-}
-
-/// An error with its whole chain, as the user sees it: "Couldn't reach Jira: connection refused"
-/// rather than just the outermost "Couldn't reach Jira".
-fn describe(error: &anyhow::Error) -> String {
-    format!("{:#}", error)
 }
 
 fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
@@ -267,18 +264,11 @@ where
     Fut: std::future::Future<Output = (String, std::result::Result<T, String>)> + Send + 'static,
     T: Send + 'static,
 {
-    let mut items = items.into_iter();
-    let mut tasks = tokio::task::JoinSet::new();
-    for item in items.by_ref().take(MAX_BULK_CONCURRENCY) {
-        tasks.spawn(task(item));
-    }
     let mut results = Vec::new();
-    while let Some(joined) = tasks.join_next().await {
+    bounded::for_each_bounded(MAX_BULK_CONCURRENCY, items, task, |_, joined| {
         results.push(joined.unwrap_or_else(|err| ("unknown".to_string(), Err(err.to_string()))));
-        if let Some(item) = items.next() {
-            tasks.spawn(task(item));
-        }
-    }
+    })
+    .await;
     results
 }
 
@@ -457,15 +447,7 @@ async fn main() -> Result<()> {
         .unwrap_or(Tab::MyWork);
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
     app.details = local_cache::DetailCache::spawn(&config.jira.project);
-    // Refreshes use the remembered email; this keeps it current for the next one. A failure
-    // keeps the old one. With none remembered the first refresh asks `jira me` itself, so asking
-    // here too would run it twice at once.
-    let project = config.jira.project.clone();
-    if local_cache::load_my_email(&project).is_some() {
-        tokio::spawn(async move {
-            let _ = jira_client::refresh_my_email(&project).await;
-        });
-    }
+    jira_reads::keep_my_email_current(&config.jira.project);
 
     // Fast startup: load persisted snapshot immediately, then revalidate in stages.
     if let Some(snapshot) = local_cache::load_startup_cache_snapshot(&config.jira.project) {
@@ -797,6 +779,8 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Details recorded in the last moments are saved before the process ends.
+    app.details.close().await;
     restore_terminal(&mut terminal)
 }
 
@@ -1217,8 +1201,9 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
 
     // Status bar
     let status_line = if let Some(ref flash) = app.flash {
+        // One line: the terminal drops a line break, which would run Jira's messages together.
         Line::from(Span::styled(
-            flash.as_str(),
+            flash.lines().collect::<Vec<_>>().join("; "),
             Style::default().fg(Color::Red),
         ))
     } else if let Some(ref search) = app.search {
@@ -1418,7 +1403,7 @@ fn handle_move_failure_keys(app: &mut App, key: KeyCode) {
 }
 
 fn open_ticket_in_browser(app: &mut App, key: &str) {
-    let result = jira_client::browse_url(key)
+    let result = jira_rest::browse_url(key)
         .and_then(|url| Command::new("open").arg(url).spawn().map_err(Into::into));
     if let Err(error) = result {
         app.flash = Some(format!("Couldn't open browser: {error:#}"));
@@ -2248,16 +2233,6 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn a_failed_jira_call_is_shown_with_its_cause() {
-        let error =
-            anyhow::anyhow!("tcp connect error: connection refused").context("Couldn't reach Jira");
-        assert_eq!(
-            describe(&error),
-            "Couldn't reach Jira: tcp connect error: connection refused"
-        );
-    }
-
-    #[test]
     fn dev_mode_prefers_the_active_checkout_over_the_installed_git_source() {
         let root = std::env::temp_dir().join(format!("lazyjira-dev-path-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
@@ -2342,6 +2317,56 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The most calls `run_bounded` has going at once over `count` items that each take a moment.
+    async fn most_at_once(count: usize) -> usize {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        use std::sync::Arc;
+
+        let running = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+        let (r, m) = (running.clone(), most.clone());
+        let results = run_bounded((0..count).collect(), move |n| {
+            let (running, most) = (r.clone(), m.clone());
+            async move {
+                most.fetch_max(running.fetch_add(1, SeqCst) + 1, SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                running.fetch_sub(1, SeqCst);
+                (format!("AMP-{n}"), Ok::<(), String>(()))
+            }
+        })
+        .await;
+        assert_eq!(results.len(), count);
+        most.load(SeqCst)
+    }
+
+    #[tokio::test]
+    async fn a_bulk_action_makes_six_jira_calls_at_a_time() {
+        assert_eq!(most_at_once(5).await, 5);
+        assert_eq!(most_at_once(6).await, 6);
+        // The seventh waits for one of the six to finish.
+        assert_eq!(most_at_once(7).await, 6);
+    }
+
+    #[test]
+    fn a_multi_line_error_reads_as_one_line_in_the_status_bar() {
+        use ratatui::backend::TestBackend;
+
+        let mut app = App::new();
+        app.flash = Some(
+            "Refresh failed: Jira answered 400 Bad Request.\nError in the JQL Query".to_string(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+
+        terminal.draw(|f| ui(f, &app, &sample_config())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let text: String = (0..100).map(|x| buffer[(x, 11)].symbol()).collect();
+        assert!(
+            text.contains("400 Bad Request.; Error in the JQL Query"),
+            "{text}"
+        );
     }
 
     #[test]

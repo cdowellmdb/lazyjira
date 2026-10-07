@@ -1,11 +1,9 @@
 use crate::bulk_actions::BulkState;
-use crate::cache::Cache;
+use crate::cache::{Cache, UNASSIGNED_TEAM_EMAIL, UNASSIGNED_TEAM_NAME};
 use crate::subtasks::{nest, Family};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
-const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
-const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
 const NO_EPIC_KEY: &str = "NO-EPIC";
 const NO_EPIC_SUMMARY: &str = "No Epic";
 
@@ -1754,11 +1752,17 @@ impl App {
             return false;
         }
         self.update_ticket(key, |ticket| {
-            ticket.status = detail.status.clone();
+            if detail.status != crate::cache::UNKNOWN_STATUS {
+                ticket.status = detail.status.clone();
+            }
+            // The list read may have placed the ticket under a roster member by display name and
+            // stamped that member's email on it, so Jira's own address (an alias) replaces it
+            // only when the ticket has none or the assignee is someone else.
+            let reassigned = detail.assignee.is_some() && detail.assignee != ticket.assignee;
             if detail.assignee.is_some() {
                 ticket.assignee = detail.assignee.clone();
             }
-            if detail.assignee_email.is_some() {
+            if detail.assignee_email.is_some() && (reassigned || ticket.assignee_email.is_none()) {
                 ticket.assignee_email = detail.assignee_email.clone();
             }
             if detail.reporter.is_some() {
@@ -2899,20 +2903,73 @@ mod tests {
         assert!(!app.is_ticket_selected("AMP-32"));
     }
 
-    #[test]
-    fn a_detail_fetch_replaces_the_assignees_email() {
-        let mut app = App::new();
-        let mut team_ticket = Ticket::for_test("AMP-1", "To Do");
-        team_ticket.assignee_email = Some("sam.chen@example.com".to_string());
-        app.cache.team_tickets = vec![team_ticket];
+    fn assigned_to(key: &str, name: &str, email: &str) -> Ticket {
+        Ticket {
+            assignee: Some(name.to_string()),
+            assignee_email: Some(email.to_string()),
+            ..Ticket::for_test(key, "To Do")
+        }
+    }
 
-        // A different assignee is a reassignment, and replaces it.
-        let mut detail = Ticket::for_test("AMP-1", "To Do");
-        detail.assignee_email = Some("alex@example.com".to_string());
+    #[test]
+    fn a_detail_fetch_replaces_the_assignees_email_when_the_ticket_was_reassigned() {
+        let mut app = App::new();
+        app.cache.team_tickets = vec![assigned_to("AMP-1", "Sam Chen", "sam.chen@example.com")];
+
+        let detail = assigned_to("AMP-1", "Alex Rivera", "alex@example.com");
         assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+
+        let ticket = &app.cache.team_tickets[0];
+        assert_eq!(ticket.assignee.as_deref(), Some("Alex Rivera"));
+        assert_eq!(ticket.assignee_email.as_deref(), Some("alex@example.com"));
+    }
+
+    #[test]
+    fn a_detail_fetch_leaves_a_ticket_under_the_roster_member_it_was_placed_with() {
+        let mut app = App::new();
+        app.cache.team_members = vec![crate::cache::TeamMember {
+            name: "Sam Chen".to_string(),
+            email: "sam.chen@example.com".to_string(),
+        }];
+        // The list read placed this ticket by display name and stamped the roster's email on
+        // it, because Jira's own address for Sam (an alias) isn't the roster's.
+        app.cache.team_tickets = vec![assigned_to("AMP-1", "Sam C.", "sam.chen@example.com")];
+
+        // The same person, with the address Jira shows.
+        let detail = assigned_to("AMP-1", "Sam C.", "sam.alias@example.com");
+        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+
         assert_eq!(
             app.cache.team_tickets[0].assignee_email.as_deref(),
-            Some("alex@example.com")
+            Some("sam.chen@example.com")
         );
+        assert_eq!(app.team_visible_tickets_by_member()[0].total, 1);
+    }
+
+    #[test]
+    fn a_detail_fetch_gives_a_ticket_with_no_email_the_one_jira_shows() {
+        let mut app = App::new();
+        let mut ticket = assigned_to("AMP-1", "Sam C.", "unused");
+        ticket.assignee_email = None;
+        app.cache.my_tickets = vec![ticket];
+
+        let detail = assigned_to("AMP-1", "Sam C.", "sam@example.com");
+        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+
+        assert_eq!(
+            app.cache.my_tickets[0].assignee_email.as_deref(),
+            Some("sam@example.com")
+        );
+    }
+
+    #[test]
+    fn a_detail_without_a_status_does_not_replace_the_ticket_status() {
+        let mut app = App::new();
+        app.cache.my_tickets = vec![Ticket::for_test("AMP-1", "In Progress")];
+
+        let detail = Ticket::for_test("AMP-1", crate::cache::UNKNOWN_STATUS);
+        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+
+        assert_eq!(app.cache.my_tickets[0].status, "In Progress");
     }
 }

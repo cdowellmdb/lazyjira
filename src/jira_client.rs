@@ -1,19 +1,8 @@
 //! What goes through the `jira` CLI: `jira me`, creating tickets, comments, assignment and field
-//! edits, plus the browser URL of a ticket. Ticket reads are in `jira_reads`.
+//! edits. Ticket reads are in `jira_reads` and the REST calls in `jira_rest`.
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
-
-use crate::local_cache::{load_my_email, remember_my_email};
-
-/// The ticket's page in the Jira web UI.
-pub fn browse_url(key: &str) -> Result<String> {
-    Ok(format!(
-        "{}/browse/{}",
-        crate::jira_rest::server_url()?,
-        key
-    ))
-}
 
 /// Run a CLI command and return stdout as a String.
 async fn run_cmd(program: &str, args: &[&str]) -> Result<String> {
@@ -38,42 +27,6 @@ async fn run_cmd(program: &str, args: &[&str]) -> Result<String> {
 /// Fetch current user email via `jira me`.
 pub async fn fetch_my_email() -> Result<String> {
     run_cmd("jira", &["me"]).await
-}
-
-pub fn name_from_email(email: &str) -> String {
-    let local = email.split('@').next().unwrap_or(email);
-    local
-        .split('.')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => {
-                    let mut out = String::new();
-                    out.push(first.to_ascii_uppercase());
-                    out.push_str(chars.as_str());
-                    out
-                }
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Ask `jira me` for the current user's email, and remember it for later refreshes.
-pub async fn refresh_my_email(project: &str) -> Result<String> {
-    let email = crate::cache::normalize_email(&fetch_my_email().await?);
-    remember_my_email(project, &email);
-    Ok(email)
-}
-
-/// The remembered email, so a refresh doesn't wait on `jira me`; asks Jira only the first time.
-pub async fn my_email(project: &str) -> Result<String> {
-    match load_my_email(project) {
-        Some(email) => Ok(email),
-        None => refresh_my_email(project).await,
-    }
 }
 
 /// Add a comment to a ticket via `jira issue comment add`.

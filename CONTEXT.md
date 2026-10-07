@@ -9,7 +9,7 @@ A Jira issue with a key, summary, status, and optional assignee, labels, descrip
 _Avoid_: Task when referring to every ticket type; task is one type of ticket.
 
 **Status**:
-The name Jira gives a ticket's current workflow position, such as In Progress or Resolved.
+The name Jira gives a ticket's current workflow position, such as In Progress or Resolved. A read whose answer has no status shows Unknown, which is never a real status.
 _Avoid_: Transition when referring to the ticket's current position.
 
 **Done**:
@@ -66,7 +66,7 @@ A restriction of My Work or Team to one displayed active status.
 The expanded view of a ticket's fields, description, and comments.
 
 **Activity**:
-A ticket's history of field changes and comments.
+A ticket's comments with their authors and times, newest first. Lazyjira's reads don't ask Jira for field changes.
 
 **Bulk action**:
 A move or assignment applied to selected tickets, with success, failure, or a reason for skipping each ticket.

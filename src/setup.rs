@@ -90,7 +90,7 @@ pub async fn run_setup(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
 
 fn build_config(state: &SetupState) -> AppConfig {
     let mut team = std::collections::BTreeMap::new();
-    let user_name = crate::jira_client::name_from_email(&state.user_email);
+    let user_name = crate::cache::name_from_email(&state.user_email);
     team.insert(user_name, state.user_email.clone());
 
     // Try to migrate legacy team.yml

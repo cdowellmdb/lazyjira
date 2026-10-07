@@ -1,22 +1,29 @@
 //! What lazyjira reads from Jira: the one search behind My Work, Team and Unassigned, saved
-//! filters, epics with their children and sub-tasks, and ticket details. All of it goes through
-//! `jira_rest`'s search, and what a read returns replaces what's shown through `App`'s
-//! `replace_cache`, `replace_epics` and `enrich_ticket`.
+//! filters, epics with their children and sub-tasks, and ticket details. Reads go through
+//! `jira_rest`'s search, except one ticket's fresh detail, which is read as the issue itself.
+//! What a read returns replaces what's shown through `App`'s `replace_cache`, `replace_epics`
+//! and `enrich_ticket`.
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
-use crate::cache::{Cache, Epic, TeamMember, Ticket};
+use crate::bounded::for_each_bounded;
+use crate::cache::{
+    name_from_email, normalize_email, Cache, Epic, TeamMember, Ticket, UNASSIGNED_TEAM_EMAIL,
+    UNASSIGNED_TEAM_NAME,
+};
 use crate::config::AppConfig;
-use crate::jira_client::{my_email, name_from_email};
-use crate::jira_rest::{is_key, jql_quote, key_list, KEYS_PER_SEARCH};
-use crate::local_cache::{load_epics_cache, save_epics_cache, DetailCache};
+use crate::jira_client::fetch_my_email;
+use crate::jira_rest::describe;
+use crate::jql::{self, is_key, key_list, KEYS_PER_SEARCH};
+use crate::local_cache::{
+    load_epics_cache, load_my_email, remember_my_email, save_epics_cache, DetailCache,
+};
 use crate::subtasks;
-
-const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
-const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
 
 #[derive(Debug, Clone, Copy)]
 enum TicketFetchScope {
@@ -29,7 +36,8 @@ enum TicketFetchScope {
 const SEARCHES_AT_ONCE: usize = 4;
 
 /// Runs `search` on each of `jqls`, `SEARCHES_AT_ONCE` at a time, and gives each answer to `done`
-/// with the position of its query in `jqls`, as it arrives rather than in order.
+/// with the position of its query in `jqls`, as it arrives rather than in order. A search that
+/// panics answers with an error.
 async fn search_each<S, F>(
     jqls: Vec<String>,
     search: S,
@@ -38,41 +46,48 @@ async fn search_each<S, F>(
     S: Fn(String) -> F,
     F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
 {
-    let mut waiting = jqls.into_iter().enumerate();
-    let mut running = tokio::task::JoinSet::new();
-    loop {
-        while running.len() < SEARCHES_AT_ONCE {
-            let Some((at, jql)) = waiting.next() else {
-                break;
-            };
-            let answer = search(jql);
-            running.spawn(async move { (at, answer.await) });
-        }
-        match running.join_next().await {
-            Some(joined) => {
-                let (at, found) = joined.expect("a search task panicked");
-                done(at, found);
-            }
-            None => return,
-        }
-    }
+    for_each_bounded(SEARCHES_AT_ONCE, jqls, search, |at, joined| {
+        done(
+            at,
+            joined.unwrap_or_else(|e| Err(anyhow!("A search task failed: {e}"))),
+        )
+    })
+    .await
 }
 
-/// The tickets every one of `jqls` finds, in the order of the queries. The first query that
-/// fails, in that order, fails them all.
+/// The tickets every one of `jqls` finds, in the order of the queries. A search that fails stops
+/// the queued ones from being sent, and the first failure in query order fails them all (a query
+/// sent after the failure is later in that order than the one that failed).
 async fn search_in_order<S, F>(jqls: Vec<String>, search: S) -> Result<Vec<Ticket>>
 where
     S: Fn(String) -> F,
     F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
 {
-    let mut answers: Vec<Option<Result<Vec<Ticket>>>> =
-        std::iter::repeat_with(|| None).take(jqls.len()).collect();
-    search_each(jqls, search, |at, found| answers[at] = Some(found)).await;
-    let mut found = Vec::new();
-    for answer in answers {
-        found.extend(answer.expect("every query is answered")?);
-    }
-    Ok(found)
+    let failed = Arc::new(AtomicBool::new(false));
+    let stop_after_failure = |jql: String| {
+        let (failed, search) = (failed.clone(), search(jql));
+        async move {
+            if failed.load(Ordering::SeqCst) {
+                anyhow::bail!("not sent, as an earlier search failed");
+            }
+            let found = search.await;
+            if found.is_err() {
+                failed.store(true, Ordering::SeqCst);
+            }
+            found
+        }
+    };
+    let mut answers = Vec::new();
+    search_each(jqls, stop_after_failure, |at, found| {
+        answers.push((at, found))
+    })
+    .await;
+    answers.sort_by_key(|(at, _)| *at);
+    let found = answers
+        .into_iter()
+        .map(|(_, found)| found)
+        .collect::<Result<Vec<_>>>()?;
+    Ok(found.concat())
 }
 
 /// Every ticket `jqls` find (see `search_in_order`), asking Jira for `fields`.
@@ -84,8 +99,11 @@ async fn search_all(jqls: Vec<String>, fields: &'static [&'static str]) -> Resul
 }
 
 /// The searches that find the sub-tasks among `keys` and under them, `KEYS_PER_SEARCH` keys to a
-/// search. A chunk with no usable key sends no search.
+/// search, each key once. A chunk with no usable key sends no search.
 fn subtasks_jqls(keys: &[String]) -> Vec<String> {
+    let mut keys = keys.to_vec();
+    keys.sort();
+    keys.dedup();
     keys.chunks(KEYS_PER_SEARCH)
         .filter_map(key_list)
         .map(|list| {
@@ -97,9 +115,7 @@ fn subtasks_jqls(keys: &[String]) -> Vec<String> {
 /// The sub-tasks among `tickets` and under them. Jira doesn't link a sub-task to its parent's
 /// epic, so the epic children's search can't find them.
 async fn load_subtasks<'a>(tickets: impl Iterator<Item = &'a Ticket>) -> Result<Vec<Ticket>> {
-    let mut keys: Vec<String> = tickets.map(|ticket| ticket.key.clone()).collect();
-    keys.sort();
-    keys.dedup();
+    let keys: Vec<String> = tickets.map(|ticket| ticket.key.clone()).collect();
     search_all(subtasks_jqls(&keys), LIST_FIELDS).await
 }
 
@@ -110,8 +126,14 @@ const DETAIL_ONLY_FIELDS: &[&str] = &["reporter", "description", "comment"];
 /// Reads one ticket's detail fresh from Jira: when it's opened, and after a move. It reads the
 /// issue itself rather than searching, so it can't miss a change made a moment ago.
 pub async fn fetch_ticket_detail(key: &str) -> Result<Ticket> {
-    let fields = [LIST_FIELDS, DETAIL_ONLY_FIELDS].concat();
-    Ok(as_detail(crate::jira_rest::issue(key, &fields).await?))
+    Ok(as_detail(
+        crate::jira_rest::issue(key, &detail_fields()).await?,
+    ))
+}
+
+/// What a detail read asks for: the list fields and the detail-only ones.
+fn detail_fields() -> Vec<&'static str> {
+    [LIST_FIELDS, DETAIL_ONLY_FIELDS].concat()
 }
 
 /// Reads the details of `keys` over Jira's REST search, a chunk of tickets per request. See
@@ -120,7 +142,7 @@ pub async fn fetch_ticket_details(
     keys: &[String],
     deliver: impl FnMut(String, Result<Ticket, String>),
 ) {
-    let fields = [LIST_FIELDS, DETAIL_ONLY_FIELDS].concat();
+    let fields = detail_fields();
     read_details(
         keys,
         |jql| {
@@ -141,7 +163,8 @@ fn as_detail(mut ticket: Ticket) -> Ticket {
 /// Reads the details of `keys`, `KEYS_PER_SEARCH` at a time (usually one page of results), with
 /// `search`, which runs a JQL query, a few chunks at once (`SEARCHES_AT_ONCE`). Each key's
 /// outcome goes to `deliver` as its chunk is read. A chunk that fails fails only its keys, so the
-/// rest are still read and the failed ones are asked for again later.
+/// rest are still read and the failed ones are asked for again later. A key that isn't shaped
+/// like a ticket key is refused without being searched, and takes no place in a chunk.
 async fn read_details<S, F>(
     keys: &[String],
     search: S,
@@ -150,46 +173,36 @@ async fn read_details<S, F>(
     S: Fn(String) -> F,
     F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
 {
-    let chunks: Vec<&[String]> = keys.chunks(KEYS_PER_SEARCH).collect();
-    // The chunk each query is for. A chunk with no usable key sends no search.
-    let mut searched = Vec::new();
-    let mut jqls = Vec::new();
-    for (at, chunk) in chunks.iter().enumerate() {
-        match key_list(chunk) {
-            Some(list) => {
-                searched.push(at);
-                jqls.push(format!("key in ({list})"));
-            }
-            None => {
-                for key in *chunk {
-                    deliver(key.clone(), Err(format!("{key:?} isn't a ticket key")));
-                }
-            }
-        }
+    let (valid, malformed): (Vec<String>, Vec<String>) =
+        keys.iter().cloned().partition(|key| is_key(key));
+    for key in malformed {
+        let error = format!("{key:?} isn't a ticket key");
+        deliver(key, Err(error));
     }
 
-    search_each(jqls, search, |query, found| {
-        let chunk = chunks[searched[query]];
-        match found {
-            Ok(tickets) => {
-                let mut found: HashMap<_, _> = tickets
-                    .into_iter()
-                    .map(|ticket| (ticket.key.clone(), ticket))
-                    .collect();
-                for key in chunk {
-                    let result = match found.remove(key) {
-                        Some(ticket) => Ok(as_detail(ticket)),
-                        None if is_key(key) => Err("Jira didn't return this ticket".to_string()),
-                        None => Err(format!("{key:?} isn't a ticket key")),
-                    };
-                    deliver(key.clone(), result);
-                }
+    let chunks: Vec<&[String]> = valid.chunks(KEYS_PER_SEARCH).collect();
+    let jqls = chunks
+        .iter()
+        .map(|chunk| format!("key in ({})", chunk.join(",")))
+        .collect();
+    search_each(jqls, search, |at, found| match found {
+        Ok(tickets) => {
+            let mut found: HashMap<_, _> = tickets
+                .into_iter()
+                .map(|ticket| (ticket.key.clone(), ticket))
+                .collect();
+            for key in chunks[at] {
+                let result = found
+                    .remove(key)
+                    .map(as_detail)
+                    .ok_or_else(|| "Jira didn't return this ticket".to_string());
+                deliver(key.clone(), result);
             }
-            Err(e) => {
-                let error = format!("{:#}", e);
-                for key in chunk {
-                    deliver(key.clone(), Err(error.clone()));
-                }
+        }
+        Err(e) => {
+            let error = describe(&e);
+            for key in chunks[at] {
+                deliver(key.clone(), Err(error.clone()));
             }
         }
     })
@@ -216,7 +229,7 @@ const LIST_FIELDS: &[&str] = &[
 fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchScope) -> String {
     let assignees = assignee_emails
         .iter()
-        .map(|email| jql_quote(email))
+        .map(|email| jql::quote(email))
         .collect::<Vec<_>>()
         .join(", ");
     let active = config.active_status_clause();
@@ -232,23 +245,25 @@ fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchSco
         "project = {} AND ((assignee in ({assignees}) AND {statuses}) \
          OR (assignee is EMPTY AND \"Assigned Teams\" = {} AND status in {active})) \
          ORDER BY key",
-        jql_quote(&config.jira.project),
-        jql_quote(&config.jira.team_name)
+        jql::quote(&config.jira.project),
+        jql::quote(&config.jira.team_name)
     )
 }
 
 /// The roster member `ticket` is assigned to: the one with the assignee's email, else the one
 /// with their display name, for when Jira hides the email (or the roster has another address).
+/// The list search only finds tickets assigned to a roster email, so an email the roster lacks
+/// is another address of someone on it, and the name is how to tell who.
 fn roster_member<'a>(members: &'a [TeamMember], ticket: &Ticket) -> Option<&'a TeamMember> {
     let by_email = ticket
         .assignee_email
         .as_deref()
         .and_then(|email| members.iter().find(|member| member.email == email));
     by_email.or_else(|| {
-        let name = ticket.assignee.as_deref()?;
+        let name = ticket.assignee.as_deref()?.to_lowercase();
         members
             .iter()
-            .find(|member| member.name.eq_ignore_ascii_case(name))
+            .find(|member| member.name.to_lowercase() == name)
     })
 }
 
@@ -326,7 +341,7 @@ fn epic_children_jqls(project: &str, epic_keys: &[String], has_epic_link: bool) 
             };
             format!(
                 "project = {} AND ({link}parent in ({list})) ORDER BY key",
-                jql_quote(project)
+                jql::quote(project)
             )
         })
         .collect()
@@ -342,7 +357,7 @@ fn scoped_jql(project: &str, jql: &str) -> String {
         Some(at) => (jql[..at].trim(), jql[at..].trim()),
         None => (jql.trim(), "ORDER BY created DESC"),
     };
-    let project = jql_quote(project);
+    let project = jql::quote(project);
     if condition.is_empty() {
         format!("project = {project} {order}")
     } else {
@@ -355,7 +370,7 @@ fn scoped_jql(project: &str, jql: &str) -> String {
 fn epics_jql(project: &str) -> String {
     format!(
         "project = {} AND issuetype = Epic ORDER BY key",
-        jql_quote(project)
+        jql::quote(project)
     )
 }
 
@@ -480,11 +495,39 @@ pub async fn refresh_epics_cache(config: &AppConfig) -> Result<Vec<Epic>> {
     Ok(epics)
 }
 
+/// Asks `jira me` for the current user's email, and remembers it for later refreshes.
+async fn refresh_my_email(project: &str) -> Result<String> {
+    let email = normalize_email(&fetch_my_email().await?);
+    remember_my_email(project, &email);
+    Ok(email)
+}
+
+/// The remembered email, so a refresh doesn't wait on `jira me`; asks Jira only the first time.
+async fn my_email(project: &str) -> Result<String> {
+    match load_my_email(project) {
+        Some(email) => Ok(email),
+        None => refresh_my_email(project).await,
+    }
+}
+
+/// Keeps the remembered email current for the next refresh, in the background; a failure keeps
+/// the old one. With none remembered the first refresh asks `jira me` itself, so asking here too
+/// would run it twice at once.
+pub fn keep_my_email_current(project: &str) {
+    if load_my_email(project).is_some() {
+        let project = project.to_string();
+        tokio::spawn(async move {
+            let _ = refresh_my_email(&project).await;
+        });
+    }
+}
+
 async fn fetch_with_scope(
     config: &AppConfig,
     scope: TicketFetchScope,
     details: &DetailCache,
 ) -> Result<Cache> {
+    crate::jira_rest::ready()?;
     let mut team_members = config.team_members();
 
     let project = &config.jira.project;
@@ -686,6 +729,21 @@ mod tests {
     }
 
     #[test]
+    fn display_names_match_whatever_the_case_even_beyond_ascii() {
+        let mut members = vec![TeamMember {
+            name: "José Álvarez".into(),
+            email: "jose@example.com".into(),
+        }];
+        let mut hidden = test_ticket("AMP-1", "To Do");
+        hidden.assignee = Some("JOSÉ ÁLVAREZ".to_string());
+
+        let (_, team) = bucket_tickets(vec![hidden], &mut members, "me@example.com");
+
+        assert_eq!(members.len(), 1, "José is already on the roster");
+        assert_eq!(team[0].assignee_email.as_deref(), Some("jose@example.com"));
+    }
+
+    #[test]
     fn a_ticket_nobody_on_the_roster_matches_stays_visible_under_its_assignee() {
         // An email the roster doesn't have: the assignee joins Team with that email.
         let stranger = assigned("AMP-5", "To Do", "Pat Doe", "pat@example.com");
@@ -880,7 +938,7 @@ mod tests {
     }
 
     #[test]
-    fn epic_progress_counts_the_children_and_sub_tasks_it_did_before() {
+    fn epic_progress_counts_the_children_and_their_sub_tasks() {
         let found = children_page();
         let listed = epic_tickets(&[
             ("AMP-100", "Checkout"),
@@ -1075,6 +1133,27 @@ mod tests {
         assert!(searches.is_empty() && delivered.is_empty());
     }
 
+    #[tokio::test]
+    async fn a_malformed_key_takes_no_place_in_a_chunk() {
+        // 50 usable keys and a malformed one: still one search of exactly the 50.
+        let mut asked = keys(1..=50);
+        asked.insert(10, "no good".to_string());
+        let (searches, delivered) = read(&asked, has_all).await;
+        assert_eq!(searches, [format!("key in ({})", keys(1..=50).join(","))]);
+        assert_eq!(delivered.len(), 51);
+
+        // The 51st usable key starts the second search, alone.
+        asked.push("DEMO-51".to_string());
+        let (searches, _) = read(&asked, has_all).await;
+        assert_eq!(
+            searches,
+            [
+                format!("key in ({})", keys(1..=50).join(",")),
+                "key in (DEMO-51)".to_string()
+            ]
+        );
+    }
+
     /// A search for jql "n" that answers one ticket, T-n, after a while: the earlier the query
     /// the longer it takes, so answers arrive out of order. `running` and `most` count how many
     /// searches are at it at once, and the most there were.
@@ -1124,16 +1203,67 @@ mod tests {
         // Seven queries (0 to 6) are answered in order too, still four at a time.
         let (found, most) = run_queries(7).await;
         assert_eq!(most, 4);
-        assert_eq!(found.unwrap().len(), 7);
+        assert_eq!(
+            ticket_keys(&found.unwrap()),
+            ["T-0", "T-1", "T-2", "T-3", "T-4", "T-5", "T-6"]
+        );
         // No queries, nothing to run.
         assert!(run_queries(0).await.0.unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn one_failed_search_fails_them_all() {
-        // Query "7" fails, and 0 to 9 are all run.
+    async fn one_failed_search_fails_them_all_and_the_first_in_query_order_is_reported() {
+        // Query "7" fails after a while, and nothing is found for the read.
         let (found, _) = run_queries(10).await;
         assert_eq!(found.unwrap_err().to_string(), "Jira answered 503.");
+    }
+
+    /// A search for jql "n" that records it was sent, then answers T-n after 20 ms, except "1",
+    /// which fails after 5 ms.
+    fn recorded_search(
+        sent: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        jql: String,
+    ) -> impl Future<Output = Result<Vec<Ticket>>> + Send + 'static {
+        let sent = sent.clone();
+        async move {
+            sent.lock().unwrap().push(jql.clone());
+            if jql == "1" {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                anyhow::bail!("Jira answered 401.");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            Ok(vec![test_ticket(&format!("T-{jql}"), "To Do")])
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_search_stops_the_queued_ones_from_being_sent() {
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let jqls = (0..10).map(|n| n.to_string()).collect();
+
+        let found = search_in_order(jqls, |jql| recorded_search(&sent, jql)).await;
+
+        assert_eq!(found.unwrap_err().to_string(), "Jira answered 401.");
+        // The first four were out together when "1" failed; the other six never were.
+        let mut sent = sent.lock().unwrap().clone();
+        sent.sort();
+        assert_eq!(sent, ["0", "1", "2", "3"]);
+    }
+
+    #[tokio::test]
+    async fn a_search_that_panics_fails_the_read_instead_of_hanging_it() {
+        let jqls = vec!["0".to_string(), "1".to_string()];
+
+        let found = search_in_order(jqls, |jql| async move {
+            if jql == "1" {
+                panic!("a parser bug");
+            }
+            Ok(vec![test_ticket("T-0", "To Do")])
+        })
+        .await;
+
+        let error = format!("{:#}", found.unwrap_err());
+        assert!(error.contains("search task"), "{error}");
     }
 
     #[tokio::test]
@@ -1164,14 +1294,17 @@ mod tests {
         .await;
 
         assert_eq!(searches, ["key in (DEMO-1,DEMO-2)"]);
-        assert!(delivered[0].1.is_ok());
+        // The malformed key is refused before anything is searched.
         assert_eq!(
-            delivered[1].1.as_ref().unwrap_err(),
-            "Jira didn't return this ticket"
+            delivered[0].1.as_ref().unwrap_err(),
+            "\"x\\\") OR 1=1\" isn't a ticket key"
         );
+        assert_eq!(delivered[1].0, "DEMO-1");
+        assert!(delivered[1].1.is_ok());
+        assert_eq!(delivered[2].0, "DEMO-2");
         assert_eq!(
             delivered[2].1.as_ref().unwrap_err(),
-            "\"x\\\") OR 1=1\" isn't a ticket key"
+            "Jira didn't return this ticket"
         );
 
         // A chunk of nothing but malformed keys makes no search at all.
@@ -1188,16 +1321,23 @@ mod tests {
         let sub_task_search = |list: String| {
             format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
         };
+        // Zero-padded, so the order the searches sort the keys into is the order of the numbers.
+        let padded = |range: std::ops::RangeInclusive<u32>| -> Vec<String> {
+            range.map(|n| format!("AMP-{n:03}")).collect()
+        };
         // Exactly 50 keys: one search holding all of them.
-        let fifty = subtasks_jqls(&epic_keys(50));
-        assert_eq!(fifty, [sub_task_search(epic_keys(50).join(","))]);
-        // 51 keys: a second search that holds only the 51st.
-        let more = subtasks_jqls(&epic_keys(51));
+        let fifty = subtasks_jqls(&padded(1..=50));
+        assert_eq!(fifty, [sub_task_search(padded(1..=50).join(","))]);
+        // 51 keys: a second search that holds only the 51st, however the keys arrive: each
+        // key is searched once, even when it is given twice and out of order.
+        let mut shuffled = padded(1..=51);
+        shuffled.reverse();
+        shuffled.extend(padded(1..=51));
         assert_eq!(
-            more,
+            subtasks_jqls(&shuffled),
             [
-                sub_task_search(epic_keys(50).join(",")),
-                sub_task_search("AMP-51".to_string())
+                sub_task_search(padded(1..=50).join(",")),
+                sub_task_search("AMP-051".to_string())
             ]
         );
         // Anything that isn't shaped like a key stays out; nothing left, no search.

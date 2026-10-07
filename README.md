@@ -14,7 +14,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 - Step through tickets in the detail view with `←`/`→`, and press `z` for full screen
 - Fold status groups and a parent's sub-tasks; `f` focuses one status, `d` hides Done
 - Opens instantly from a local cache, then refreshes from Jira without losing your place
-- Ticket detail renders Jira markup and shows comments and activity history
+- Ticket detail renders Jira markup and shows comments; `h` lists them newest first
 - Epic progress bars, with an optional list of the epics you care about
 
 **Change tickets safely**
@@ -129,7 +129,7 @@ accent = "#4fd1c5"
 | `jira.team_name` | required | Your team's `Assigned Teams` value. Used by the Unassigned tab. |
 | `jira.done_window_days` | `14` | How many days of recently finished tickets to load. |
 | `jira.epics_i_care_about` | empty (all epics) | Limits the Epics tab to these epics, in this order. Must be in the `[jira]` section. |
-| `team` | you | Display name mapped to Jira email for everyone shown in the Team tab. |
+| `team` | you | Display name mapped to Jira email for everyone shown in the Team tab. If your Jira hides assignee emails, tickets are matched to people by display name (your own entry is named from your email, like `Sam Chen` for `sam.chen@…`), so give `team` the names Jira shows. |
 | `statuses.active`, `statuses.done` | shown above | Which statuses are loaded, and which count as done: `d` hides done tickets, epic progress counts them, and Team lists them after active work. So adding e.g. `"Cancelled"` or `"Won't Do"` to `done` treats them as finished. The order is also the order status groups are shown in My Work, Filters and Epics: active statuses first, then statuses not listed, then done. Tickets show Jira's own status name (Resolved stays Resolved). A status not listed follows a listed one it's a synonym of (Resolved follows Done, Open follows To Do); otherwise Done/Closed/Resolved-like names count as done and the rest as active. |
 | `filters` | empty | Saved JQL filters for the Filters tab. |
 | `preferences.show_done` | `true` | Whether Done tickets are visible. Updated when you press `d` or save preferences. |
@@ -272,7 +272,7 @@ The preview also warns about summaries that match an existing ticket or repeat w
 
 - On startup, lazyjira shows the last saved snapshot, then refreshes active tickets, then recently finished ones.
 - Epic relationships and ticket details are cached and refreshed in the background.
-- Cache files are per project, named `lazyjira_*` in `~/.cache/lazyjira/`: a snapshot, epic and ticket-detail caches, and your email from `jira me`.
+- Cache files are per project, named `lazyjira_*` in `~/.cache/lazyjira/` and readable only by you: a snapshot, epic and ticket-detail caches, and your email from `jira me`.
 
 ## Limitations
 
