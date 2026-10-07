@@ -1,5 +1,6 @@
 //! Running many Jira calls a few at a time, for the reads (`jira_reads`) and the bulk actions.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::ops::ControlFlow;
 
@@ -8,7 +9,8 @@ use tokio::task::{JoinError, JoinSet};
 /// Runs `task` on each of `items`, at most `limit` at a time, and hands each output to `done`
 /// with its item's position in `items`, as it finishes rather than in order. A task that panics
 /// reaches `done` as its `JoinError` instead of ending the others. `done` can answer `Break` to
-/// start no more items: the ones already running finish and still reach `done`.
+/// start no more items: the ones already running finish and still reach `done`. Dropping the
+/// returned future cancels the tasks still running.
 ///
 /// # Panics
 /// If `limit` is 0, which would run nothing.
@@ -25,23 +27,24 @@ pub async fn for_each_bounded<I, T, F, Fut>(
     assert!(limit > 0, "a pool of none never runs anything");
     let mut waiting = items.into_iter().enumerate();
     let mut running = JoinSet::new();
+    let mut position = HashMap::new();
     let mut stopped = false;
     loop {
         while !stopped && running.len() < limit {
             let Some((at, item)) = waiting.next() else {
                 break;
             };
-            // The task has a spawn of its own so a panic comes back to this loop with its
-            // position, rather than as an anonymous error from the set.
-            let work = tokio::spawn(task(item));
-            running.spawn(async move { (at, work.await) });
+            position.insert(running.spawn(task(item)).id(), at);
         }
-        match running.join_next().await {
-            Some(Ok((at, output))) => stopped |= done(at, output).is_break(),
-            // The wrapper only awaits, so this is it being cancelled as the runtime shuts down.
-            Some(Err(_)) => {}
-            None => return,
-        }
+        let Some(finished) = running.join_next_with_id().await else {
+            return;
+        };
+        let (id, output) = match finished {
+            Ok((id, output)) => (id, Ok(output)),
+            Err(error) => (error.id(), Err(error)),
+        };
+        let at = position.remove(&id).expect("every task has a position");
+        stopped |= done(at, output).is_break();
     }
 }
 
@@ -149,5 +152,38 @@ mod tests {
             .build()
             .unwrap()
             .block_on(run);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropping_the_pool_cancels_the_tasks_still_running() {
+        /// Counts how many of its kind have been dropped.
+        struct Dropped(Arc<AtomicUsize>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, SeqCst);
+            }
+        }
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let count = dropped.clone();
+        let pool = for_each_bounded(
+            2,
+            vec![0, 1, 2],
+            move |_| {
+                let guard = Dropped(count.clone());
+                async move {
+                    let _guard = guard;
+                    std::future::pending::<()>().await
+                }
+            },
+            |_, _| ControlFlow::Continue(()),
+        );
+
+        // Nothing finishes, so the pool is dropped when the timeout fires, with two running.
+        assert!(tokio::time::timeout(Duration::from_millis(10), pool)
+            .await
+            .is_err());
+        tokio::task::yield_now().await;
+
+        assert_eq!(dropped.load(SeqCst), 2);
     }
 }
