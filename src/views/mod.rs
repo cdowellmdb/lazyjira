@@ -14,7 +14,6 @@ mod tests {
 
     #[test]
     fn rendered_selection_matches_navigation_across_tabs_and_collapsed_groups() {
-        let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
         for &tab in Tab::all() {
             for search in [None, Some("needle")] {
                 for collapse in [false, true] {
@@ -65,18 +64,7 @@ mod tests {
                         app.selected_index = index;
                         let selected = app.selected_item().unwrap();
                         let mut terminal = Terminal::new(TestBackend::new(160, 60)).unwrap();
-                        terminal
-                            .draw(|frame| {
-                                let area = frame.area();
-                                match tab {
-                                    Tab::MyWork => my_work::render(frame, area, &app),
-                                    Tab::Team => team::render(frame, area, &app),
-                                    Tab::Epics => epics::render(frame, area, &app),
-                                    Tab::Unassigned => unassigned::render(frame, area, &app),
-                                    Tab::Filters => filters::render(frame, area, &app, &config),
-                                }
-                            })
-                            .unwrap();
+                        terminal.draw(|frame| render_tab(frame, &app, tab)).unwrap();
                         let buffer = terminal.backend().buffer();
                         assert_eq!(buffer[(0, 0)].symbol(), "╭");
                         let mut highlighted = Vec::new();
@@ -128,22 +116,23 @@ mod tests {
             }
         }
     }
+    /// Renders `tab` over the whole frame, with a config that has no saved filters.
+    fn render_tab(frame: &mut ratatui::Frame, app: &App, tab: Tab) {
+        let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let area = frame.area();
+        match tab {
+            Tab::MyWork => my_work::render(frame, area, app),
+            Tab::Team => team::render(frame, area, app),
+            Tab::Epics => epics::render(frame, area, app),
+            Tab::Unassigned => unassigned::render(frame, area, app),
+            Tab::Filters => filters::render(frame, area, app, &config),
+        }
+    }
+
     /// Draws `tab` and returns each row's text and the foreground color of its first glyph.
     fn draw(app: &App, tab: Tab, width: u16) -> Vec<(String, Color)> {
-        let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
         let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                match tab {
-                    Tab::MyWork => my_work::render(frame, area, app),
-                    Tab::Team => team::render(frame, area, app),
-                    Tab::Epics => epics::render(frame, area, app),
-                    Tab::Unassigned => unassigned::render(frame, area, app),
-                    Tab::Filters => filters::render(frame, area, app, &config),
-                }
-            })
-            .unwrap();
+        terminal.draw(|frame| render_tab(frame, app, tab)).unwrap();
         let buffer = terminal.backend().buffer();
         (0..30)
             .map(|y| {
@@ -393,14 +382,8 @@ mod tests {
     #[test]
     fn done_groups_start_folded_and_stay_unfolded_across_refreshes() {
         let screen = |app: &App, tab: Tab| -> String {
-            let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
             let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
-            terminal
-                .draw(|frame| match tab {
-                    Tab::MyWork => my_work::render(frame, frame.area(), app),
-                    _ => filters::render(frame, frame.area(), app, &config),
-                })
-                .unwrap();
+            terminal.draw(|frame| render_tab(frame, app, tab)).unwrap();
             let buffer = terminal.backend().buffer();
             (0..30)
                 .map(|y| {
@@ -728,7 +711,6 @@ mod tests {
 
     #[test]
     fn selection_marks_show_unselected_selected_and_partial_in_their_colors() {
-        let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
         let mut picked = Ticket::for_test("DEMO-1", "In Progress");
         picked.assignee = Some("Alex".into());
         picked.assignee_email = Some("alex@example.com".into());
@@ -741,18 +723,7 @@ mod tests {
         let mut unpicked_unassigned = picked_unassigned.clone();
         unpicked_unassigned.key = "DEMO-4".into();
         let draw = |terminal: &mut Terminal<TestBackend>, app: &App, tab: Tab| {
-            terminal
-                .draw(|frame| {
-                    let area = frame.area();
-                    match tab {
-                        Tab::MyWork => my_work::render(frame, area, app),
-                        Tab::Team => team::render(frame, area, app),
-                        Tab::Epics => epics::render(frame, area, app),
-                        Tab::Unassigned => unassigned::render(frame, area, app),
-                        Tab::Filters => filters::render(frame, area, app, &config),
-                    }
-                })
-                .unwrap();
+            terminal.draw(|frame| render_tab(frame, app, tab)).unwrap();
         };
         let cursor_on = |app: &mut App, keys: &[&str]| {
             app.selected_index = (0..app.item_count())
