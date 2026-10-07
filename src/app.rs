@@ -671,7 +671,7 @@ impl App {
 
     /// Opens `key`'s detail and returns the key when its fetch should start: always, unless one
     /// is already running. A cached detail shows at once, but Jira's copy may have changed since
-    /// (the cache is never invalidated otherwise), so it's replaced when the fetch lands.
+    /// (a cached detail is never refreshed otherwise), so it's replaced when the fetch lands.
     pub fn open_fresh_detail(&mut self, key: String) -> Option<String> {
         self.open_detail(key.clone());
         self.begin_detail_fetch(&key).then_some(key)
@@ -1695,6 +1695,20 @@ impl App {
         }
     }
 
+    /// The keys of the tickets in any loaded list: My Work, Team, every epic's children and the
+    /// filter results. The details cache keeps only these at quit.
+    pub fn listed_keys(&self) -> HashSet<&str> {
+        let epic_children = self.cache.epics.iter().flat_map(|epic| &epic.children);
+        self.cache
+            .my_tickets
+            .iter()
+            .chain(&self.cache.team_tickets)
+            .chain(epic_children)
+            .chain(&self.filter_results)
+            .map(|ticket| ticket.key.as_str())
+            .collect()
+    }
+
     /// Find a ticket by key across all cached data.
     pub fn find_ticket(&self, key: &str) -> Option<&crate::cache::Ticket> {
         self.cache
@@ -1883,6 +1897,29 @@ mod tests {
         assert_eq!(app.selected_ticket_key().as_deref(), Some("DEMO-1"));
         assert_eq!(app.selected_group_id().as_deref(), Some("DEMO-200"));
         assert_eq!(app.selected_index, 4);
+    }
+
+    #[test]
+    fn every_loaded_list_keeps_its_tickets_in_the_listed_keys() {
+        let mut app = App::new();
+        assert!(
+            app.listed_keys().is_empty(),
+            "nothing loaded, nothing listed"
+        );
+        app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "To Do")];
+        app.cache.team_tickets = vec![Ticket::for_test("DEMO-2", "To Do")];
+        app.cache.epics = vec![Epic {
+            key: "DEMO-100".into(),
+            summary: "Epic".into(),
+            children: vec![Ticket::for_test("DEMO-3", "To Do")],
+        }];
+        app.filter_results = vec![Ticket::for_test("DEMO-4", "To Do")];
+
+        let mut listed: Vec<_> = app.listed_keys().into_iter().collect();
+        listed.sort();
+
+        // One key from each list, and not the epic's own key: no read looks its detail up.
+        assert_eq!(listed, ["DEMO-1", "DEMO-2", "DEMO-3", "DEMO-4"]);
     }
 
     #[test]

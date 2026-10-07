@@ -780,7 +780,7 @@ async fn main() -> Result<()> {
     }
 
     // Details recorded in the last moments are saved before the process ends.
-    app.details.close();
+    app.details.close(&app.listed_keys());
     restore_terminal(&mut terminal)
 }
 
