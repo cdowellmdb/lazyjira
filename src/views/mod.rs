@@ -323,10 +323,13 @@ mod tests {
                 "{header}"
             );
             let (shared, color) = &rows[header_y + 1];
-            assert!(
-                shared.contains("all rows · epic Grading · DSCI"),
-                "{tab:?}: {shared}"
-            );
+            // Unassigned's groups are its epics, so its line leaves the epic out.
+            let expected = if tab == Tab::Unassigned {
+                "all rows · DSCI"
+            } else {
+                "all rows · epic Grading · DSCI"
+            };
+            assert!(shared.contains(expected), "{tab:?}: {shared}");
             assert_eq!(*color, Color::DarkGray);
         }
 
@@ -338,6 +341,53 @@ mod tests {
         assert!(line_with(&rows, "SEL KEY").unwrap().0.contains("EPIC"));
         assert!(line_with(&rows, "all rows · DSCI").is_some());
         assert!(line_with(&rows, "DEMO-2").unwrap().0.contains("Runner"));
+    }
+
+    #[test]
+    fn team_draws_the_shared_line_once_under_the_first_column_headers() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Team;
+        app.cache.team_members = ["alex", "sam"]
+            .map(|name| TeamMember {
+                name: name.into(),
+                email: format!("{name}@example.com"),
+            })
+            .to_vec();
+        app.cache.team_tickets = ["alex", "sam"]
+            .iter()
+            .enumerate()
+            .map(|(n, name)| {
+                let mut ticket = labelled(&format!("DEMO-{n}"), Some("Grading"), &["DSCI"]);
+                ticket.assignee_email = Some(format!("{name}@example.com"));
+                ticket
+            })
+            .collect();
+        let rows = draw(&app, Tab::Team, 160);
+        let shared: Vec<usize> = (0..rows.len())
+            .filter(|&y| rows[y].0.contains("all rows"))
+            .collect();
+        let first_header = rows.iter().position(|(r, _)| r.contains("SEL KEY"));
+        assert_eq!(shared, [first_header.unwrap() + 1], "{rows:?}");
+    }
+
+    #[test]
+    fn unassigned_shared_line_leaves_the_epic_to_its_groups() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Unassigned;
+        app.cache.team_tickets = ["DEMO-1", "DEMO-2"]
+            .map(|key| {
+                let mut ticket = labelled(key, Some("Grading"), &["DSCI"]);
+                ticket.epic_key = Some("EPIC-1".into());
+                ticket.assignee_email = Some("__unassigned__".into());
+                ticket
+            })
+            .to_vec();
+        let rows = draw(&app, Tab::Unassigned, 160);
+        let (line, _) = line_with(&rows, "all rows").expect("labels are shared");
+        assert!(line.contains("all rows · DSCI"), "{line}");
+        assert!(!line.contains("epic"), "{line}");
     }
 
     #[test]

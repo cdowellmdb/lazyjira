@@ -57,6 +57,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let mut mouse_rows = Vec::new();
 
     if !grouped.is_empty() {
+        // Rows are grouped by epic, so the group headers already name it.
+        let mut shared = Shared::of(&grouped);
+        shared.epic = None;
         lines.push(Line::from(vec![
             Span::styled(format!("    {:<key_w$}", "SEL KEY"), heading_style),
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
@@ -66,9 +69,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled("UPDATED", heading_style),
         ]));
-        lines.extend(
-            Shared::of(&grouped).line(4 + key_w + 3 + status_w + 3 + summary_w + 3 + UPDATED_WIDTH),
-        );
+        lines.extend(shared.line(4 + key_w + 3 + status_w + 3 + summary_w + 3 + UPDATED_WIDTH));
         lines.push(Line::from(""));
     }
 

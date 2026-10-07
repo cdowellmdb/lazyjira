@@ -98,6 +98,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         };
 
     let mut lines: Vec<Line> = Vec::new();
+    // The shared line goes under the first column headers only: it describes every member's rows.
+    let mut shared_line_drawn = false;
     let mut selected_visual_line: Option<usize> = None;
     let mut mouse_rows = Vec::new();
 
@@ -175,7 +177,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             }
             let header_w = header.width();
             lines.push(header);
-            lines.extend(shared.line(header_w));
+            if !std::mem::replace(&mut shared_line_drawn, true) {
+                lines.extend(shared.line(header_w));
+            }
 
             for (index, ticket) in active {
                 mouse_rows.push((lines.len(), *index, false));
