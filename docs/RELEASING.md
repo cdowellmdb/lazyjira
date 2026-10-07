@@ -5,7 +5,7 @@
 ## Normal Release Flow
 
 1. Make sure the changes you want are merged to `main`.
-2. Bump `version` in `Cargo.toml` to match the new tag.
+2. Bump `version` in `Cargo.toml`, and the `--tag` in README.md's install command, to match the new tag (`cargo test` checks the two agree).
 3. Run `cargo check` so `Cargo.lock` picks up the new version. The release workflow builds with `--locked` and fails if the lockfile is stale.
 4. Update the `--tag` in README.md's install command to the new tag.
 5. Commit the version bump on `main`.
