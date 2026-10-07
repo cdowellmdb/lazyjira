@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::cache::{Cache, Epic, Ticket};
@@ -169,28 +169,21 @@ fn hydrate_ticket_from_details_cache(
 #[derive(Clone)]
 pub struct DetailCache {
     by_key: Arc<Mutex<HashMap<String, Ticket>>>,
-    changed: mpsc::UnboundedSender<Signal>,
-}
-
-/// What the writer is told: a detail was recorded, or the app is closing (the writer answers on
-/// the sender once it has saved).
-enum Signal {
-    Changed,
-    Close(oneshot::Sender<()>),
+    changed: mpsc::UnboundedSender<()>,
+    /// The file the writer saves to, for `close`; none when nothing is saved.
+    path: Option<PathBuf>,
 }
 
 /// How long details must stop changing before the writer saves them.
 const FLUSH_AFTER_IDLE: Duration = Duration::from_millis(750);
 
-/// How long closing waits for the writer to finish saving.
-const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
-
 impl DetailCache {
     /// Read the details cache file once, and start the task that writes it back.
     pub fn spawn(project: &str) -> Self {
-        let (details, changed) = Self::new(load_details_cache(project));
+        let path = cache_path(DETAILS_CACHE_PREFIX, project);
+        let (details, changed) = Self::new(load_details_cache(project), Some(path.clone()));
         tokio::spawn(write_details(
-            cache_path(DETAILS_CACHE_PREFIX, project),
+            path,
             details.by_key.clone(),
             changed,
             FLUSH_AFTER_IDLE,
@@ -200,14 +193,18 @@ impl DetailCache {
 
     /// A cache with nothing in it and no writer, so what's recorded stays in memory only.
     pub fn in_memory() -> Self {
-        Self::new(HashMap::new()).0
+        Self::new(HashMap::new(), None).0
     }
 
-    fn new(by_key: HashMap<String, Ticket>) -> (Self, mpsc::UnboundedReceiver<Signal>) {
+    fn new(
+        by_key: HashMap<String, Ticket>,
+        path: Option<PathBuf>,
+    ) -> (Self, mpsc::UnboundedReceiver<()>) {
         let (changed, rx) = mpsc::unbounded_channel();
         let details = DetailCache {
             by_key: Arc::new(Mutex::new(by_key)),
             changed,
+            path,
         };
         (details, rx)
     }
@@ -215,17 +212,17 @@ impl DetailCache {
     /// Keep a freshly fetched detail. False when the writer has stopped, so it won't reach disk.
     pub fn record(&self, detail: Ticket) -> bool {
         lock_details(&self.by_key).insert(detail.key.clone(), detail);
-        self.changed.send(Signal::Changed).is_ok()
+        self.changed.send(()).is_ok()
     }
 
-    /// Saves any details not yet saved and waits (up to `CLOSE_TIMEOUT`) for the write, for when
-    /// the app closes: details recorded in the last moments are still inside their quiet
-    /// period then. Clones elsewhere (a refresh still running) don't matter, so it doesn't rely
-    /// on the writer's channel closing.
-    pub async fn close(&self) {
-        let (done, saved) = oneshot::channel();
-        if self.changed.send(Signal::Close(done)).is_ok() {
-            let _ = timeout(CLOSE_TIMEOUT, saved).await;
+    /// Saves the details, for when the app quits: details recorded in the last moments are still
+    /// inside the writer's quiet period then. It writes the file itself rather than asking the
+    /// writer, so a refresh still holding the writer's channel open, or a stalled writer, can't
+    /// hold up quitting. If the writer happens to be saving at that moment too, the file may
+    /// come out torn; a file that doesn't parse is ignored and refetched, as any cache is.
+    pub fn close(&self) {
+        if let Some(path) = &self.path {
+            save_details(path, &self.by_key);
         }
     }
 
@@ -261,44 +258,17 @@ fn save_details(path: &Path, by_key: &Mutex<HashMap<String, Ticket>>) {
     let _ = write_cache_text(path, &json);
 }
 
-/// Saves the details once they've stayed unchanged for `idle`, at once when the app closes, and
-/// when the channel closes. Nothing is written while nothing has changed since the last save.
+/// Saves the details once they've stayed unchanged for `idle`, and once more when the channel
+/// closes.
 async fn write_details(
     path: PathBuf,
     by_key: Arc<Mutex<HashMap<String, Ticket>>>,
-    mut signals: mpsc::UnboundedReceiver<Signal>,
+    mut changed: mpsc::UnboundedReceiver<()>,
     idle: Duration,
 ) {
-    let mut unsaved = false;
-    loop {
-        let signal = if unsaved {
-            match timeout(idle, signals.recv()).await {
-                Ok(signal) => signal,
-                Err(_quiet) => {
-                    save_details(&path, &by_key);
-                    unsaved = false;
-                    continue;
-                }
-            }
-        } else {
-            signals.recv().await
-        };
-        match signal {
-            Some(Signal::Changed) => unsaved = true,
-            Some(Signal::Close(done)) => {
-                if unsaved {
-                    save_details(&path, &by_key);
-                }
-                let _ = done.send(());
-                return;
-            }
-            None => {
-                if unsaved {
-                    save_details(&path, &by_key);
-                }
-                return;
-            }
-        }
+    while changed.recv().await.is_some() {
+        while let Ok(Some(())) = timeout(idle, changed.recv()).await {}
+        save_details(&path, &by_key);
     }
 }
 
@@ -556,7 +526,7 @@ mod tests {
     async fn details_are_saved_once_none_has_changed_for_the_quiet_period() {
         let path = cache_path(DETAILS_CACHE_PREFIX, &project("QUIET"));
         let _remove = Remove::new(vec![path.clone()]);
-        let (details, changed) = DetailCache::new(HashMap::new());
+        let (details, changed) = DetailCache::new(HashMap::new(), None);
         let writer = tokio::spawn(write_details(
             path.clone(),
             details.by_key.clone(),
@@ -580,11 +550,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn details_are_saved_when_the_app_closes_even_before_they_go_quiet() {
+    async fn details_are_saved_when_the_channel_closes_even_before_they_go_quiet() {
         let path = cache_path(DETAILS_CACHE_PREFIX, &project("CLOSING"));
         let _remove = Remove::new(vec![path.clone()]);
-        let (details, changed) = DetailCache::new(HashMap::new());
-        // A quiet period far longer than the test: only closing can trigger this save.
+        let (details, changed) = DetailCache::new(HashMap::new(), None);
+        // A quiet period far longer than the test: only the channel closing can trigger this save.
         let writer = tokio::spawn(write_details(
             path.clone(),
             details.by_key.clone(),
@@ -602,45 +572,18 @@ mod tests {
         assert_eq!(saved_keys(&path), ["DEMO-1"]);
     }
 
-    #[tokio::test]
-    async fn closing_saves_at_once_even_while_a_refresh_still_holds_the_cache() {
+    #[test]
+    fn closing_saves_what_is_recorded_without_the_writer() {
         let path = cache_path(DETAILS_CACHE_PREFIX, &project("CLOSE"));
         let _remove = Remove::new(vec![path.clone()]);
-        let (details, changed) = DetailCache::new(HashMap::new());
-        // A quiet period far longer than the test: only closing can trigger this save.
-        let writer = tokio::spawn(write_details(
-            path.clone(),
-            details.by_key.clone(),
-            changed,
-            Duration::from_secs(3600),
-        ));
-        // A refresh in flight holds a clone, so the channel doesn't close with `details`.
-        let _refresh = details.clone();
+        // No writer is running, as when a refresh holds the channel open or the writer is stuck
+        // behind a slow disk: the caller does the save itself.
+        let (details, _changed) = DetailCache::new(HashMap::new(), Some(path.clone()));
 
         details.record(test_ticket("DEMO-1", "To Do"));
-        details.close().await;
+        details.close();
 
         assert_eq!(saved_keys(&path), ["DEMO-1"]);
-        writer.await.expect("the writer stops once it has saved");
-    }
-
-    #[tokio::test]
-    async fn closing_with_nothing_unsaved_writes_nothing() {
-        let path = cache_path(DETAILS_CACHE_PREFIX, &project("IDLE"));
-        let _remove = Remove::new(vec![path.clone()]);
-        let (details, changed) = DetailCache::new(HashMap::new());
-        tokio::spawn(write_details(
-            path.clone(),
-            details.by_key.clone(),
-            changed,
-            Duration::from_secs(3600),
-        ));
-
-        details.close().await;
-
-        assert!(!path.exists());
-        // Closing a cache whose writer is gone doesn't wait for it.
-        details.close().await;
     }
 
     #[test]
