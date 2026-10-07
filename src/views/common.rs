@@ -66,11 +66,61 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+const UNSELECTED: char = '☐';
+/// The selection marks, each one column wide (East Asian Width "N"): unselected, selected, and a
+/// group with some of its tickets selected.
+pub const MARKS: [char; 3] = [UNSELECTED, '☒', '⊟'];
+
+pub fn ticket_marker(selected: bool) -> &'static str {
+    if selected {
+        "☒"
+    } else {
+        "☐"
+    }
+}
+
 pub fn group_marker(state: GroupSelectionState) -> &'static str {
     match state {
-        GroupSelectionState::None => "[ ]",
-        GroupSelectionState::Partial => "[~]",
-        GroupSelectionState::All => "[x]",
+        GroupSelectionState::None => "☐",
+        GroupSelectionState::Partial => "⊟",
+        GroupSelectionState::All => "☒",
+    }
+}
+
+/// Colors each line's selection mark: muted when unselected (gray on the highlighted row, so it
+/// shows against the highlight), cyan when selected or partial. Only a line's first mark is the
+/// selection, since a summary may contain one. Call after `highlight_row`.
+pub fn color_marks(lines: &mut [Line<'_>]) {
+    for line in lines {
+        let Some((index, at)) = line
+            .spans
+            .iter()
+            .enumerate()
+            .find_map(|(index, span)| span.content.find(MARKS).map(|at| (index, at)))
+        else {
+            continue;
+        };
+        let span = line.spans.remove(index);
+        let (before, rest) = span.content.split_at(at);
+        let mark_len = rest.chars().next().map_or(0, char::len_utf8);
+        let (mark, after) = rest.split_at(mark_len);
+        let highlighted = line.style.bg.or(span.style.bg) == Some(Color::DarkGray);
+        let fg = if !mark.starts_with(UNSELECTED) {
+            Color::Cyan
+        } else if highlighted {
+            Color::Gray
+        } else {
+            Color::DarkGray
+        };
+        let parts = [
+            Span::styled(before.to_string(), span.style),
+            Span::styled(mark.to_string(), span.style.fg(fg)),
+            Span::styled(after.to_string(), span.style),
+        ];
+        line.spans.splice(
+            index..index,
+            parts.into_iter().filter(|part| !part.content.is_empty()),
+        );
     }
 }
 

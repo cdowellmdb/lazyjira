@@ -5,8 +5,8 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, FilterFocus};
 use crate::views::common::{
-    fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
-    Shared, KEY_WIDTH,
+    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
+    ticket_marker, truncate, Shared, KEY_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -189,11 +189,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     selected_visual_line = Some(lines.len());
                 }
 
-                let marker = if app.is_ticket_selected(&ticket.key) {
-                    "[x]"
-                } else {
-                    "[ ]"
-                };
+                let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let base = if is_selected {
                     Style::default().bg(Color::DarkGray)
                 } else {
@@ -234,6 +230,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);
+    color_marks(&mut lines);
 
     // Scroll to keep selected row visible
     let visible = area.height.saturating_sub(2) as usize;
