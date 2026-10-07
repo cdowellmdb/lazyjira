@@ -121,8 +121,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             shared.push_trailing_headings(&mut header, heading_style, epic_w, labels_w);
             let header_w = header.width();
             lines.push(header);
-            if !std::mem::replace(&mut shared_line_drawn, true) {
+            if !shared_line_drawn {
                 lines.extend(shared.line(header_w));
+                shared_line_drawn = true;
             }
 
             for (index, ticket) in active {

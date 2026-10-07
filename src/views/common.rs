@@ -99,8 +99,7 @@ pub fn muted(base: Style) -> Style {
     })
 }
 
-/// Colors each line's selection mark: muted when unselected (gray on the highlighted row, so it
-/// shows against the highlight), cyan when selected or partial. Only a line's first mark is the
+/// Colors each line's selection mark: `muted` when unselected, cyan when selected or partial. Only a line's first mark is the
 /// selection, since a summary may contain one. Call after `highlight_row`.
 pub fn color_marks(lines: &mut [Line<'_>]) {
     for line in lines {
@@ -116,17 +115,16 @@ pub fn color_marks(lines: &mut [Line<'_>]) {
         let (before, rest) = span.content.split_at(at);
         let mark_len = rest.chars().next().map_or(0, char::len_utf8);
         let (mark, after) = rest.split_at(mark_len);
-        let highlighted = line.style.bg.or(span.style.bg) == Some(Color::DarkGray);
-        let fg = if !mark.starts_with(UNSELECTED) {
-            Color::Cyan
-        } else if highlighted {
-            Color::Gray
+        // The mark's style with the row's, so `muted` sees the highlight.
+        let row = line.style.patch(span.style);
+        let mark_style = if mark.starts_with(UNSELECTED) {
+            muted(row)
         } else {
-            Color::DarkGray
+            row.fg(Color::Cyan)
         };
         let parts = [
             Span::styled(before.to_string(), span.style),
-            Span::styled(mark.to_string(), span.style.fg(fg)),
+            Span::styled(mark.to_string(), mark_style),
             Span::styled(after.to_string(), span.style),
         ];
         line.spans.splice(
