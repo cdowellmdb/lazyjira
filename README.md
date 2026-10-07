@@ -13,6 +13,10 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 **Triage fast**
 - Step through tickets in the detail view with `←`/`→`, and press `z` for full screen
 - Fold status groups and a parent's sub-tasks; `f` focuses one status, `d` hides Done
+- Done groups in My Work and Filters start folded, and list the most recently updated tickets first
+- An Updated column shows each ticket's age (`12m`, `5h`, `2d`, `3w`)
+- An epic or labels every row shares show once under the column headers, not on every row
+- Sub-tasks nest under their parent, or lead with its key when the parent is elsewhere
 - Opens instantly from a local cache, then refreshes from Jira without losing your place
 - Ticket detail renders Jira markup and shows comments; `h` lists them newest first
 - Epic progress bars, with an optional list of the epics you care about
@@ -26,7 +30,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 
 **Keyboard or mouse**
 - Click to select, click again to open; works on rows, menus, and pickers
-- Click checkboxes to select tickets, fold arrows to fold groups, and **[×]** to close a detail
+- Click checkboxes (`☐`, `☒`) to select tickets, fold arrows to fold groups, and **[×]** to close a detail
 - Click into form fields and buttons; scroll lists and details with the wheel
 - Drag across text to select it, then copy with `Ctrl+C`
 - Edit in `$EDITOR`, paste multiple lines, and filter pickers by typing
@@ -88,7 +92,7 @@ Press `S` or click **Settings** to manage teammates, pinned epics, Done visibili
 
 ## Configuration
 
-Config lives at `~/.config/lazyjira/config.toml`. lazyjira reads it at startup, so edit it by hand only while lazyjira isn't running. Changes made in the app (preferences with `S`, saved filters, the `d` toggle) apply right away and are saved to this file.
+Config lives at `~/.config/lazyjira/config.toml`. lazyjira reads it at startup, so edit it by hand only while lazyjira isn't running. Changes made in the app (preferences with `S`, saved filters, the `d` toggle) apply right away and are saved to this file. Saving rewrites the whole file, so any comments you added are lost.
 
 ```toml
 [jira]
@@ -143,7 +147,7 @@ accent = "#4fd1c5"
 
 Pick a theme from the **Theme** list in preferences (`S`), next to **Starting tab**. The app recolors as you move through the list, so you see each theme before choosing it; **Save** keeps it and **Cancel** goes back. The `default` theme uses your terminal's own colors. The other presets set their own background and need a terminal with true color.
 
-To make your own, add a `[themes.<name>]` table and pick it in preferences. Each role takes a hex color (`"#4fd1c5"`) or a color name (`"red"`, `"light-blue"`). Roles you leave out keep your terminal's color. A custom theme named after a preset replaces the whole preset, so copy the preset's colors from [`src/theme.rs`](src/theme.rs) if you only want to change a few.
+To make your own, add a `[themes.<name>]` table and pick it in preferences. Each role takes a hex color (`"#4fd1c5"`) or a color name (`"red"`, `"light-blue"`). Roles you leave out keep your terminal's color. A misspelled role is an error: lazyjira stops at startup with `Failed to parse config.toml`. A custom theme named after a preset replaces the whole preset, so copy the preset's colors from [`src/theme.rs`](src/theme.rs) if you only want to change a few.
 
 | Role | Used for |
 |------|----------|
@@ -159,8 +163,6 @@ To make your own, add a `[themes.<name>]` table and pick it in preferences. Each
 | `info` | Ready for Work, info markers, selected text |
 | `special` | Statuses lazyjira doesn't know |
 
-Saved filter and preference changes rewrite this file, and any comments you added are lost.
-
 ## Keybindings
 
 ### Global
@@ -171,7 +173,7 @@ Saved filter and preference changes rewrite this file, and any comments you adde
 | `Shift+Tab` | Previous tab (in Filters: back to sidebar) |
 | `j/k`, `Up/Down` | Navigate |
 | `Enter` | Open ticket detail (or epic detail on an Epics header) |
-| `/` | Search tickets, labels, and team members (`Esc` to exit) |
+| `/` | Search tickets, labels, and team members. While searching, `Up/Down`, `Ctrl+j/k` or `Ctrl+n/p` move the selection, `Enter` opens it, and `Esc` exits |
 | `Space` | Toggle ticket/group selection |
 | `A` | Select all visible tickets |
 | `u` | Clear selected tickets |
@@ -186,7 +188,11 @@ Saved filter and preference changes rewrite this file, and any comments you adde
 | `?` | Keybindings help |
 | `q` | Quit |
 
-Each tab remembers its selection, search, status focus, and folded groups during the session. A folded parent shows `▶` and how many sub-tasks are hidden. Refresh keeps the loaded list visible and follows the selected ticket even when other rows are added or reordered.
+Each tab remembers its selection, search, status focus, and folded groups during the session. Folded parents are one set shared by every tab: a parent folded in My Work is folded in Epics too. A folded parent shows `▶` and how many sub-tasks are hidden, and a sub-task whose parent is in another group leads with the parent's key, muted. Done groups start folded in My Work and each time a filter runs, and list the most recently updated tickets first.
+
+Rows are marked `☐`, or `☒` when selected; a group header shows `⊟` when only some of its tickets are selected. My Work, Team, Unassigned and Filters show an Updated column with how long ago Jira last changed each ticket (`12m`, `5h`, `2d`, `3w`). When every row shares an epic or labels, a muted line under the column headers names them once, like `all rows · epic PAY: Payments Platform Revamp · DEMO, Q3`. My Work and Team then drop the Epic column, and their Labels column keeps only the labels that differ.
+
+Refresh keeps the loaded list visible and follows the selected ticket even when other rows are added or reordered.
 
 ### Mouse
 
@@ -200,7 +206,7 @@ Drag across visible text in lists, ticket details, or form fields to select it. 
 
 ### Writing
 
-Create tickets with a summary, labels, and description. Edit these fields with `e` in ticket detail. Text fields support arrow keys, Home/End, Delete/Backspace, and paste. Comments and descriptions accept multiline paste; `Shift+Enter` or `Ctrl+J` inserts a newline, and `Enter` submits.
+Create tickets with a type (Task, Bug, or Story), summary, assignee, epic, labels, and description. Edit the summary, labels, and description with `e` in ticket detail. Text fields support arrow keys, Home/End, Delete/Backspace, and paste. Comments and descriptions accept multiline paste; `Shift+Enter` or `Ctrl+J` inserts a newline, and `Enter` submits.
 
 `Ctrl+E`, `F4`, or the **Editor** button opens the focused text field in `$VISUAL`, then `$EDITOR`, then `vi`. Returning from the editor brings the text back into the form for review before submission. In preferences, use one `Name = email` line per teammate and comma-separated epic keys; an empty epic list shows all epics.
 
@@ -225,7 +231,7 @@ Descriptions and comments render Jira's wiki markup: headings, bold/italic/strik
 | `e` | Edit summary, labels, and description |
 | `h` | Activity: comments, newest first |
 
-The move picker lists the transitions Jira offers for the ticket, as "transition → status" (for example `Resume Progress → In Progress`), so it only offers moves the ticket's workflow allows. Choose one with `j/k` and `Enter`, then press `Enter` or `y` to confirm.
+The move picker lists the transitions Jira offers for the ticket, as "transition → status" when the two names differ (for example `Resume Progress → In Progress`) and by name alone when they don't, so it only offers moves the ticket's workflow allows. Choose one with `j/k` and `Enter`, then press `Enter` or `y` to confirm.
 
 `p/w/n/t/v/b/c` pick a transition by the status it leads to: In Progress, Ready for Work, Needs Triage, To Do (also Open), In Review, Blocked, and Closed (also Done and Resolved). If exactly one transition matches, it is selected for you to confirm; the uppercase letter moves right away. If several match, the picker lists just those. If none does, nothing is sent and the status bar says so.
 
@@ -239,7 +245,7 @@ A bulk move loads every selected ticket's transitions, then offers the statuses 
 
 | Key | Action |
 |-----|--------|
-| `j/k` | Navigate within focused pane |
+| `j/k`, `Up/Down` | Navigate within focused pane |
 | `Tab` | Switch to results / next tab |
 | `Shift+Tab` | Back to sidebar |
 | `Enter` | Run filter (sidebar) / open ticket (results) |
@@ -283,7 +289,7 @@ The preview also warns about summaries that match an existing ticket or repeat w
 - Ticket lists, details and moves need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read. Without it a refresh fails with an error and the last saved data stays on screen; with no saved data lazyjira exits with the error.
 - Only jira-cli's `basic` and `bearer` `auth_type`s work; others fail with an error.
 - Epic children linked by the Epic Link field are found through jira-cli's `epic.link` setting. If your jira-cli config has none, only children whose `parent` is the epic appear.
-- A sub-task is indented under its parent only when the parent is in the same group (for example the same epic, or the same status in My Work). Elsewhere its summary starts with the parent's key, like `DSCI-3244 › ...`.
+- A sub-task is indented under its parent only when the parent is in the same group (for example the same epic, or the same status in My Work). Elsewhere its summary starts with the parent's key, like `DEMO-144 › ...`.
 - New tickets, from the create form or a CSV, can only be `Task`, `Bug`, or `Story`.
 
 ## Development
@@ -293,10 +299,12 @@ cargo test
 cargo run --release
 ```
 
-A pre-commit hook in `.githooks/` runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` on commits that touch Rust files. Enable it once per clone with `git config core.hooksPath .githooks`. Skip it for a single commit with `git commit --no-verify`.
-
-`lazyjira --dev` rebuilds and runs the lazyjira checkout in your current directory (or a parent directory). `--dev-release` does the same with an optimized build. The command prints which manifest it builds. Outside a checkout, it falls back to the source directory the binary was built from, if that directory still exists.
+`lazyjira --dev` (or `--rebuild`) rebuilds and runs the lazyjira checkout in your current directory (or a parent directory). `--dev-release` does the same with an optimized build. The command prints which manifest it builds. Outside a checkout, it falls back to the source directory the binary was built from, if that directory still exists.
 
 To re-record the demo GIF, install [VHS](https://github.com/charmbracelet/vhs) and run `docs/demo/record.sh`. It uses a fake `jira` CLI, a fake Jira REST search endpoint and a throwaway `HOME`, so no real Jira data ends up in the recording.
 
 Releases are published by pushing a `v*` tag. See [`docs/RELEASING.md`](docs/RELEASING.md).
+
+## Contributing
+
+Follow [`CODING_STANDARDS.md`](CODING_STANDARDS.md) for changes and pull requests, and [`COMMIT_STYLING.md`](COMMIT_STYLING.md) for commit messages. A pre-commit hook in `.githooks/` runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` on commits that touch Rust files. Enable it once per clone with `git config core.hooksPath .githooks`.
