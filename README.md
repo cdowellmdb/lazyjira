@@ -2,7 +2,7 @@
 
 A fast terminal UI for Jira, with keyboard and mouse controls for daily triage and keeping an eye on your team's work.
 
-lazyjira runs on top of the [`jira` CLI](https://github.com/ankitpokhrel/jira-cli). It uses your existing CLI login and Jira server, opens instantly from a local cache, and refreshes in the background. See [Limitations](#limitations) for workflow and platform requirements.
+lazyjira reads tickets and moves them through Jira's REST API, using the [`jira` CLI](https://github.com/ankitpokhrel/jira-cli)'s config and your `JIRA_API_TOKEN`; creating tickets, commenting, assigning and editing fields go through the `jira` CLI itself. It opens instantly from a local cache, and refreshes in the background. See [Limitations](#limitations) for workflow and platform requirements.
 
 ![lazyjira showing ticket detail with a close control, live preferences, searchable ticket creation, and the five workspace tabs](docs/images/demo.gif)
 
@@ -36,7 +36,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 ## Requirements
 
 - The [`jira` CLI](https://github.com/ankitpokhrel/jira-cli) on your `PATH` and logged in (`jira init`). Running `jira me` should print your email.
-- `JIRA_API_TOKEN` set in your environment, as jira-cli normally uses it. Ticket lists (My Work, Team, Unassigned, Epics and filters), ticket details and moves go through Jira's REST API with jira-cli's `server`, `auth_type` and `epic.link` settings and this token. Earlier versions needed the token only for moves and sub-task nesting, so set it before upgrading if you never did.
+- `JIRA_API_TOKEN` set in your environment, as jira-cli normally uses it. Ticket lists (My Work, Team, Unassigned, Epics and filters), ticket details and moves go through Jira's REST API with jira-cli's `server`, `auth_type`, `login` (basic auth, jira-cli's default) and `epic.link` settings and this token. Earlier versions needed the token only for moves and sub-task nesting, so set it before upgrading if you never did.
 - A Jira Server or Data Center instance. Lists are read with the `/rest/api/2/search` endpoint, so Jira Cloud isn't supported.
 - macOS (Apple Silicon or Intel) or Linux x86_64. Windows is not supported.
 - A stable Rust toolchain, only if you build from source.
@@ -68,7 +68,7 @@ To build from source instead:
 cargo install --path . --force
 
 # From a release tag
-cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.9.0
+cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.10.0
 ```
 
 ## Quick start
@@ -177,10 +177,10 @@ Saved filter and preference changes rewrite this file, and any comments you adde
 | `u` | Clear selected tickets |
 | `B` | Open bulk action menu (move/assign) |
 | `U` | Open bulk CSV upload |
-| `c` | Create ticket |
+| `c` | Create ticket (not on Filters) |
 | `S` | Preferences: teammates, pinned epics, Done visibility, starting tab, theme |
 | `z/Z` | Fold the current group, or a parent's sub-tasks when a parent or one of its sub-tasks is selected / fold all groups |
-| `d` | Toggle visibility of done statuses (`statuses.done`) |
+| `d` | Toggle visibility of done statuses (`statuses.done`); not on Filters |
 | `f/F` | Focus the next / previous status in My Work or Team, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that) |
 | `r` | Refresh |
 | `?` | Keybindings help |
@@ -271,7 +271,7 @@ The preview also warns about summaries that match an existing ticket or repeat w
 ## Cache
 
 - On startup, lazyjira shows the last saved snapshot, then refreshes active tickets, then recently finished ones.
-- Epic relationships and ticket details are cached and refreshed in the background.
+- Epic relationships and ticket details are cached. Missing details are fetched in the background, and opening a ticket always fetches Jira's latest copy.
 - Cache files are per project, named `lazyjira_*` in `~/.cache/lazyjira/` and readable only by you: a snapshot, epic and ticket-detail caches, and your email from `jira me`.
 
 ## Limitations
@@ -281,6 +281,7 @@ The preview also warns about summaries that match an existing ticket or repeat w
 - The Unassigned tab queries the `Assigned Teams` custom field. It doesn't work on Jira instances that don't have that field.
 - A move sends one transition. Reaching a status that is several transitions away takes several moves, and transitions that require fields other than a resolution fail with Jira's error; press `o` to finish those in the browser.
 - Ticket lists, details and moves need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read. Without it a refresh fails with an error and the last saved data stays on screen; with no saved data lazyjira exits with the error.
+- Only jira-cli's `basic` and `bearer` `auth_type`s work; others fail with an error.
 - Epic children linked by the Epic Link field are found through jira-cli's `epic.link` setting. If your jira-cli config has none, only children whose `parent` is the epic appear.
 - A sub-task is indented under its parent only when the parent is in the same group (for example the same epic, or the same status in My Work). Elsewhere its summary starts with the parent's key, like `DSCI-3244 › ...`.
 - New tickets, from the create form or a CSV, can only be `Task`, `Bug`, or `Story`.
