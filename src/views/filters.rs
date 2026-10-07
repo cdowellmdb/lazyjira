@@ -192,14 +192,19 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     "[ ]"
                 };
-                let (key_cell, summary) =
-                    ticket_cells(app, group.family.get(index).copied(), ticket, marker);
-
                 let base = if is_selected {
                     Style::default().bg(Color::DarkGray)
                 } else {
                     Style::default()
                 };
+                let (key_cell, summary) = ticket_cells(
+                    app,
+                    group.family.get(index).copied(),
+                    ticket,
+                    marker,
+                    summary_w,
+                    base,
+                );
 
                 let status_style = if is_selected {
                     Style::default()
@@ -209,7 +214,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Style::default().fg(status_color(&ticket.status, app.status_rules()))
                 };
 
-                lines.push(Line::from(vec![
+                let mut row = vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
@@ -217,11 +222,9 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         status_style,
                     ),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<summary_w$}", truncate(&summary, summary_w)),
-                        base,
-                    ),
-                ]));
+                ];
+                row.extend(summary);
+                lines.push(Line::from(row));
             }
 
             lines.push(Line::from(""));

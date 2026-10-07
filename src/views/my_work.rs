@@ -135,8 +135,14 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 "[ ]"
             };
-            let (key_cell, summary) =
-                ticket_cells(app, group.family.get(index).copied(), ticket, marker);
+            let (key_cell, summary) = ticket_cells(
+                app,
+                group.family.get(index).copied(),
+                ticket,
+                marker,
+                summary_w,
+                base,
+            );
 
             let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
             let labels_str = if ticket.labels.is_empty() {
@@ -145,13 +151,12 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 ticket.labels.join(", ")
             };
 
-            lines.push(Line::from(vec![
+            let mut row = vec![
                 Span::styled(format!("  {:<key_w$}", key_cell), base),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:<summary_w$}", truncate(&summary, summary_w)),
-                    base,
-                ),
+            ];
+            row.extend(summary);
+            row.extend([
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:<epic_w$}", truncate(epic_str, epic_w)),
@@ -170,7 +175,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         Style::default().fg(Color::DarkGray)
                     },
                 ),
-            ]));
+            ]);
+            lines.push(Line::from(row));
         }
 
         // Blank line between groups
