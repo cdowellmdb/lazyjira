@@ -414,6 +414,22 @@ mod tests {
     }
 
     #[test]
+    fn a_done_group_that_first_appears_on_a_refresh_starts_unfolded() {
+        let mut cache = crate::cache::Cache::empty();
+        cache.my_tickets = vec![Ticket::for_test("DEMO-1", "In Progress")];
+        let mut app = App::new();
+        app.loading = false;
+        app.replace_cache(cache.clone(), app.moves.now());
+
+        // Closed mid-session: the refresh brings a Closed group My Work hasn't shown before.
+        cache.my_tickets[0].status = "Closed".into();
+        app.replace_cache(cache, app.moves.now());
+        let rows = draw(&app, Tab::MyWork, 120);
+        assert!(line_with(&rows, "▼ CLOSED (1)").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "DEMO-1").is_some(), "{rows:?}");
+    }
+
+    #[test]
     fn sub_tasks_sit_under_their_parent_or_name_it() {
         let rows_of = |app: &App, tab: Tab| -> Vec<String> {
             let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
