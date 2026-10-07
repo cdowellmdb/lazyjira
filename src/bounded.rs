@@ -9,6 +9,9 @@ use tokio::task::{JoinError, JoinSet};
 /// with its item's position in `items`, as it finishes rather than in order. A task that panics
 /// reaches `done` as its `JoinError` instead of ending the others. `done` can answer `Break` to
 /// start no more items: the ones already running finish and still reach `done`.
+///
+/// # Panics
+/// If `limit` is 0, which would run nothing.
 pub async fn for_each_bounded<I, T, F, Fut>(
     limit: usize,
     items: Vec<I>,
@@ -19,6 +22,7 @@ pub async fn for_each_bounded<I, T, F, Fut>(
     Fut: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
+    assert!(limit > 0, "a pool of none never runs anything");
     let mut waiting = items.into_iter().enumerate();
     let mut running = JoinSet::new();
     let mut stopped = false;
@@ -135,5 +139,15 @@ mod tests {
         assert_eq!(*started.lock().unwrap(), [0, 1]);
         heard.sort();
         assert_eq!(heard, [0, 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "a pool of none never runs anything")]
+    fn a_pool_of_none_is_refused_instead_of_quietly_running_nothing() {
+        let run = for_each_bounded(0, vec![1], |_| async {}, |_, _| ControlFlow::Continue(()));
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(run);
     }
 }
