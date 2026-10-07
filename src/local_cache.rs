@@ -44,9 +44,9 @@ fn cache_dir_in(home: Option<std::ffi::OsString>) -> PathBuf {
 
 fn cache_dir() -> PathBuf {
     if cfg!(test) {
-        // Tests keep off the real ~/.cache, and off the files of another test run sharing this
-        // temp dir.
-        return std::env::temp_dir().join(format!("lazyjira-test-{}", std::process::id()));
+        // Tests keep off the real ~/.cache. Test runs share this directory and leave it behind,
+        // empty: the files in it carry the process id (`project`), so runs don't meet.
+        return std::env::temp_dir().join("lazyjira-test");
     }
     cache_dir_in(std::env::var_os("HOME"))
 }
@@ -280,31 +280,13 @@ mod tests {
         Ticket::for_test(key, status)
     }
 
-    /// How many `Remove`s are alive. The test cache directory goes with the last one, and the
-    /// lock makes a test starting up wait out a removal, so it never loses the directory it is
-    /// about to write into.
-    static LIVE: Mutex<usize> = Mutex::new(0);
-
-    /// Removes the cache files a test wrote, even when it fails, and the test cache directory
-    /// once no test is using it. Made before the test writes anything.
+    /// Removes the cache files a test wrote, even when it fails.
     struct Remove(Vec<PathBuf>);
-
-    impl Remove {
-        fn new(paths: Vec<PathBuf>) -> Self {
-            *LIVE.lock().unwrap_or_else(PoisonError::into_inner) += 1;
-            Remove(paths)
-        }
-    }
 
     impl Drop for Remove {
         fn drop(&mut self) {
             for path in &self.0 {
                 let _ = std::fs::remove_file(path);
-            }
-            let mut live = LIVE.lock().unwrap_or_else(PoisonError::into_inner);
-            *live -= 1;
-            if *live == 0 {
-                let _ = std::fs::remove_dir(cache_dir());
             }
         }
     }
@@ -403,7 +385,7 @@ mod tests {
     #[test]
     fn my_email_is_remembered_per_project() {
         let (a, b) = (project("EMAIL_A"), project("EMAIL_B"));
-        let _remove = Remove::new(vec![cache_path(MY_EMAIL_PREFIX, &a)]);
+        let _remove = Remove(vec![cache_path(MY_EMAIL_PREFIX, &a)]);
         assert_eq!(load_my_email(&a), None);
         remember_my_email(&a, "me@example.com");
 
@@ -416,7 +398,7 @@ mod tests {
         // A file from before emails were normalized, or edited by hand.
         let project = project("EMAIL_CASE");
         let path = cache_path(MY_EMAIL_PREFIX, &project);
-        let _remove = Remove::new(vec![path.clone()]);
+        let _remove = Remove(vec![path.clone()]);
         write_cache_file(&path, &" Me@Example.COM ").unwrap();
 
         assert_eq!(load_my_email(&project).as_deref(), Some("me@example.com"));
@@ -427,7 +409,7 @@ mod tests {
         // A file stands where the cache directory for this project would be made.
         let project = project("BLOCKED");
         let blocker = cache_path(MY_EMAIL_PREFIX, &format!("{project}-dir"));
-        let _remove = Remove::new(vec![blocker.clone()]);
+        let _remove = Remove(vec![blocker.clone()]);
         std::fs::create_dir_all(blocker.parent().unwrap()).unwrap();
         std::fs::write(&blocker, "in the way").unwrap();
         let unwritable = format!("{project}-dir.json/x");
@@ -471,7 +453,7 @@ mod tests {
         }];
         // Where the epics cache lived before it moved: straight in the system temp dir.
         let old = std::env::temp_dir().join(format!("lazyjira_epics_cache_{project}.json"));
-        let _remove = Remove::new(vec![old.clone(), cache_path(EPICS_CACHE_PREFIX, &project)]);
+        let _remove = Remove(vec![old.clone(), cache_path(EPICS_CACHE_PREFIX, &project)]);
         std::fs::write(&old, serde_json::to_string(&epics).unwrap()).unwrap();
 
         assert!(load_epics_cache(&project).is_empty());
@@ -525,7 +507,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn details_are_saved_once_none_has_changed_for_the_quiet_period() {
         let path = cache_path(DETAILS_CACHE_PREFIX, &project("QUIET"));
-        let _remove = Remove::new(vec![path.clone()]);
+        let _remove = Remove(vec![path.clone()]);
         let (details, changed) = DetailCache::new(HashMap::new(), None);
         let writer = tokio::spawn(write_details(
             path.clone(),
@@ -552,7 +534,7 @@ mod tests {
     #[tokio::test]
     async fn details_are_saved_when_the_channel_closes_even_before_they_go_quiet() {
         let path = cache_path(DETAILS_CACHE_PREFIX, &project("CLOSING"));
-        let _remove = Remove::new(vec![path.clone()]);
+        let _remove = Remove(vec![path.clone()]);
         let (details, changed) = DetailCache::new(HashMap::new(), None);
         // A quiet period far longer than the test: only the channel closing can trigger this save.
         let writer = tokio::spawn(write_details(
@@ -575,7 +557,7 @@ mod tests {
     #[test]
     fn closing_saves_what_is_recorded_without_the_writer() {
         let path = cache_path(DETAILS_CACHE_PREFIX, &project("CLOSE"));
-        let _remove = Remove::new(vec![path.clone()]);
+        let _remove = Remove(vec![path.clone()]);
         // No writer is running, as when a refresh holds the channel open or the writer is stuck
         // behind a slow disk: the caller does the save itself.
         let (details, _changed) = DetailCache::new(HashMap::new(), Some(path.clone()));
@@ -593,7 +575,7 @@ mod tests {
 
         // A file an earlier build made readable by everyone is tightened when it's rewritten.
         let existing = cache_path(MY_EMAIL_PREFIX, &project("MODE"));
-        let _remove = Remove::new(vec![existing.clone()]);
+        let _remove = Remove(vec![existing.clone()]);
         std::fs::create_dir_all(existing.parent().unwrap()).unwrap();
         std::fs::write(&existing, "\"old\"").unwrap();
         std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o644)).unwrap();
