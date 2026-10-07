@@ -77,13 +77,17 @@ pub fn group_marker(state: GroupSelectionState) -> &'static str {
 
 /// A ticket row's key and summary cells, given its place in a parent's family. A sub-task under
 /// its parent is indented, and a parent shows whether its sub-tasks are folded, with how many are
-/// hidden. A sub-task whose parent is elsewhere leads its summary with the parent's key.
+/// hidden. A sub-task whose parent is elsewhere leads its summary with the parent's key, muted so
+/// the summary reads first (gray on the selected row, as other muted cells are). The summary is
+/// drawn in `base`, truncated and padded to `width`.
 pub fn ticket_cells(
     app: &App,
     family: Option<Family>,
     ticket: &Ticket,
     marker: &str,
-) -> (String, String) {
+    width: usize,
+    base: Style,
+) -> (String, Vec<Span<'static>>) {
     let folded = app.is_parent_folded(&ticket.key);
     let key = match family {
         Some(Family::Child) => format!("  {} {}", marker, ticket.key),
@@ -92,15 +96,35 @@ pub fn ticket_cells(
         }
         None => format!("{} {}", marker, ticket.key),
     };
-    let summary = match (family, &ticket.parent_key) {
-        (Some(Family::Parent(count)), _) if folded => format!(
-            "({} sub-task{}) {}",
-            count,
-            if count == 1 { "" } else { "s" },
-            ticket.summary
+    let (prefix, summary) = match (family, &ticket.parent_key) {
+        (Some(Family::Parent(count)), _) if folded => (
+            String::new(),
+            format!(
+                "({} sub-task{}) {}",
+                count,
+                if count == 1 { "" } else { "s" },
+                ticket.summary
+            ),
         ),
-        (None, Some(parent)) => format!("{} › {}", parent, ticket.summary),
-        _ => ticket.summary.clone(),
+        (None, Some(parent)) => (format!("{} › ", parent), ticket.summary.clone()),
+        _ => (String::new(), ticket.summary.clone()),
     };
-    (key, summary)
+    let cell = format!("{:<width$}", truncate(&(prefix.clone() + &summary), width));
+    let split = cell
+        .char_indices()
+        .nth(prefix.chars().count())
+        .map_or(cell.len(), |(i, _)| i);
+    let (prefix, summary) = cell.split_at(split);
+    let muted = base.fg(if base.bg.is_some() {
+        Color::Gray
+    } else {
+        Color::DarkGray
+    });
+    (
+        key,
+        vec![
+            Span::styled(prefix.to_string(), muted),
+            Span::styled(summary.to_string(), base),
+        ],
+    )
 }

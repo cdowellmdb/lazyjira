@@ -153,18 +153,23 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     "[ ]"
                 };
-                let (key_cell, summary) =
-                    ticket_cells(app, group.family.get(index).copied(), ticket, marker);
+                let (key_cell, summary) = ticket_cells(
+                    app,
+                    group.family.get(index).copied(),
+                    ticket,
+                    marker,
+                    summary_w,
+                    base,
+                );
 
-                lines.push(Line::from(vec![
+                let mut row = vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<summary_w$}", truncate(&summary, summary_w)),
-                        base,
-                    ),
+                ];
+                row.extend(summary);
+                row.extend([
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<epic_w$}", truncate(epic_str, epic_w)),
@@ -183,7 +188,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                             Style::default().fg(Color::DarkGray)
                         },
                     ),
-                ]));
+                ]);
+                lines.push(Line::from(row));
             }
 
             if !done.is_empty() {
@@ -225,18 +231,23 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     "[ ]"
                 };
-                let (key_cell, summary) =
-                    ticket_cells(app, group.family.get(index).copied(), ticket, marker);
+                let (key_cell, summary) = ticket_cells(
+                    app,
+                    group.family.get(index).copied(),
+                    ticket,
+                    marker,
+                    summary_w,
+                    base,
+                );
 
-                lines.push(Line::from(vec![
+                let mut row = vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<summary_w$}", truncate(&summary, summary_w)),
-                        base,
-                    ),
+                ];
+                row.extend(summary);
+                row.extend([
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         format!("{:<epic_w$}", truncate(epic_str, epic_w)),
@@ -259,7 +270,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                                 .add_modifier(Modifier::DIM)
                         },
                     ),
-                ]));
+                ]);
+                lines.push(Line::from(row));
             }
 
             lines.push(Line::from(vec![

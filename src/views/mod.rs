@@ -264,4 +264,56 @@ mod tests {
         assert_eq!(column(&rows, "DEMO-3"), column(&rows, "DEMO-1"));
         assert!(rows[row(&rows, "DEMO-3")].contains("DEMO-1 › DEMO-3"));
     }
+
+    #[test]
+    fn a_sub_tasks_parent_key_prefix_is_muted_and_readable_when_selected() {
+        let parent = Ticket::for_test("DEMO-1", "In Progress");
+        let mut subtask = Ticket::for_test("DEMO-3", "Closed");
+        subtask.summary = "Write the docs".into();
+        subtask.parent_key = Some("DEMO-1".into());
+        let mut app = App::new();
+        app.loading = false;
+        app.show_done = true;
+        app.active_tab = Tab::MyWork;
+        app.cache.my_tickets = vec![parent, subtask];
+
+        // The prefix's and the summary's (foreground, background), from the drawn buffer.
+        let colors = |app: &App| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|frame| my_work::render(frame, frame.area(), app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let rows: Vec<String> = (0..30)
+                .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            let y = rows
+                .iter()
+                .position(|r| r.contains("Write the docs"))
+                .unwrap();
+            let x_of = |text: &str| rows[y][..rows[y].find(text).unwrap()].chars().count();
+            let cell = |x: usize| {
+                let cell = &buffer[(x as u16, y as u16)];
+                (cell.fg, cell.bg)
+            };
+            (cell(x_of("DEMO-1 ›")), cell(x_of("Write the docs")))
+        };
+
+        let (prefix, summary) = colors(&app);
+        assert_eq!(prefix.0, Color::DarkGray);
+        assert_ne!(prefix.0, summary.0);
+
+        app.selected_index = (0..app.item_count())
+            .find(|&index| {
+                app.selected_index = index;
+                app.selected_ticket_key().as_deref() == Some("DEMO-3")
+            })
+            .unwrap();
+        let (prefix, summary) = colors(&app);
+        assert_ne!(
+            prefix.0, prefix.1,
+            "the prefix must not vanish into the highlight"
+        );
+        assert_ne!(prefix.0, summary.0);
+    }
 }
