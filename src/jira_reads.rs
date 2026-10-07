@@ -837,6 +837,28 @@ mod tests {
         assert!(epic_children_jqls("AMP", &["no good".to_string()], false).is_empty());
     }
 
+    #[test]
+    fn a_malformed_epic_key_takes_no_place_in_a_search() {
+        let search =
+            |list: String| format!("project = \"AMP\" AND (parent in ({list})) ORDER BY key");
+        // 50 usable keys and a malformed one: still one search of exactly the 50 epics.
+        let mut keys = epic_keys(50);
+        keys.insert(10, "no good".to_string());
+        assert_eq!(
+            epic_children_jqls("AMP", &keys, false),
+            [search(epic_keys(50).join(","))]
+        );
+        // The 51st usable key starts the second search, alone.
+        keys.push("AMP-51".to_string());
+        assert_eq!(
+            epic_children_jqls("AMP", &keys, false),
+            [
+                search(epic_keys(50).join(",")),
+                search("AMP-51".to_string())
+            ]
+        );
+    }
+
     /// What the children searches answer, as Jira shapes it (the Epic Link field is a plain
     /// string): three children of AMP-100, one found twice (two searches can both match it), one
     /// of AMP-200 through `parent`, one through Epic Link, and one of an epic outside the list.
@@ -1362,6 +1384,33 @@ mod tests {
         assert_eq!(subtasks_jqls(&keys), [sub_task_search("AMP-1".to_string())]);
         assert!(subtasks_jqls(&["no good".to_string()]).is_empty());
         assert!(subtasks_jqls(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_malformed_key_takes_no_place_in_a_sub_task_search() {
+        let sub_task_search = |list: String| {
+            format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
+        };
+        let padded = |range: std::ops::RangeInclusive<u32>| -> Vec<String> {
+            range.map(|n| format!("AMP-{n:03}")).collect()
+        };
+        // 50 usable keys and a malformed one, which sorts first: still one search of exactly
+        // the 50.
+        let mut keys = padded(1..=50);
+        keys.insert(10, "!no good".to_string());
+        assert_eq!(
+            subtasks_jqls(&keys),
+            [sub_task_search(padded(1..=50).join(","))]
+        );
+        // The 51st usable key starts the second search, alone.
+        keys.push("AMP-051".to_string());
+        assert_eq!(
+            subtasks_jqls(&keys),
+            [
+                sub_task_search(padded(1..=50).join(",")),
+                sub_task_search("AMP-051".to_string())
+            ]
+        );
     }
 
     #[test]
