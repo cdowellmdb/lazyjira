@@ -152,18 +152,18 @@ mod tests {
     }
 
     fn keys(count: usize) -> Vec<String> {
-        (1..=count).map(|n| format!("DSCI-{n}")).collect()
+        (1..=count).map(|n| format!("DEMO-{n}")).collect()
     }
 
     #[test]
     fn only_keys_shaped_like_jira_keys_reach_a_jql_list() {
-        let keys: Vec<String> = ["DSCI-1", "x\") OR 1=1", "", "AB_2"]
+        let keys: Vec<String> = ["DEMO-1", "x\") OR 1=1", "", "AB_2"]
             .map(String::from)
             .into();
-        assert_eq!(key_chunks(&keys), [["DSCI-1", "AB_2"]]);
+        assert_eq!(key_chunks(&keys), [["DEMO-1", "AB_2"]]);
         assert!(key_chunks(&["no good".to_string()]).is_empty());
         assert!(key_chunks(&[]).is_empty());
-        assert!(is_key("DSCI-3244") && !is_key("DSCI 1") && !is_key(""));
+        assert!(is_key("DEMO-3244") && !is_key("DEMO 1") && !is_key(""));
     }
 
     #[test]
@@ -173,7 +173,7 @@ mod tests {
         assert_eq!(sizes(&keys(50)), [50]);
         let fifty_one = keys(51);
         assert_eq!(sizes(&fifty_one), [50, 1]);
-        assert_eq!(key_chunks(&fifty_one)[1], ["DSCI-51"]);
+        assert_eq!(key_chunks(&fifty_one)[1], ["DEMO-51"]);
         // A malformed key among 50 real ones doesn't push the 50th into a second search.
         let mut with_bad = keys(50);
         with_bad.insert(10, "bad key".to_string());

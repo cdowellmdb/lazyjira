@@ -784,7 +784,7 @@ mod tests {
 
     fn ticket() -> Ticket {
         Ticket {
-            key: "DSCI-3228".to_string(),
+            key: "DEMO-3228".to_string(),
             summary: "MAGE: MongoDB Agent Grading & Evaluation benchmark".to_string(),
             status: "In Progress".to_string(),
             assignee: Some("Christian Dowell".to_string()),
@@ -793,7 +793,7 @@ mod tests {
                 "*Stakeholders:* Christian Dowell (owner)\n\nh2. Goals\n# Replay the changes\n# Grade the result"
                     .to_string(),
             ),
-            labels: vec!["DSCI".to_string(), "data-science".to_string()],
+            labels: vec!["DEMO".to_string(), "data-science".to_string()],
             detail_loaded: true,
             activity: vec![
                 comment("2026-09-02T10:00:00.000+0000", "Eliza Spang", "Second *reply*"),
@@ -844,7 +844,7 @@ mod tests {
 
     #[tokio::test]
     async fn top_left_close_button_closes_the_popup() {
-        let mut config = toml::from_str("[jira]\nproject = 'DSCI'\nteam_name = 'Demo'\n").unwrap();
+        let mut config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         for (width, height, fullscreen) in [(55, 50, false), (40, 18, false), (80, 24, true)] {
             for mode in [
@@ -886,7 +886,7 @@ mod tests {
     fn header_fields_and_comments_oldest_first() {
         let lines = draw(&app_showing(ticket()), 70, 34);
         assert!(lines[row(&lines, "Status")].contains("● In Progress"));
-        assert!(lines[row(&lines, "Labels")].contains(" DSCI   data-science "));
+        assert!(lines[row(&lines, "Labels")].contains(" DEMO   data-science "));
         assert!(lines[row(&lines, "── Comments (2) ─")].contains('─'));
         assert!(row(&lines, "Christian Dowell  2026-09-01 09:30") < row(&lines, "Eliza Spang"));
         assert!(lines[row(&lines, "Second reply")].contains("   Second reply"));
@@ -921,7 +921,7 @@ mod tests {
         row(&lines, "Loading details…");
         assert!(!lines.iter().any(|l| l.contains("Comments")));
 
-        app.fail_detail_fetch("DSCI-3228", "jira: timed out".to_string());
+        app.fail_detail_fetch("DEMO-3228", "jira: timed out".to_string());
         let lines = draw(&app, 70, 34);
         row(&lines, "Couldn't load details: jira: timed out");
     }

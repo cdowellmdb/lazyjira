@@ -2042,7 +2042,7 @@ mod tests {
 
     #[test]
     fn step_detail_moves_between_tickets_skipping_headers() {
-        let mut app = my_work_app(&[("DSCI-1", "In Progress"), ("DSCI-2", "Backlog")]);
+        let mut app = my_work_app(&[("DEMO-1", "In Progress"), ("DEMO-2", "Backlog")]);
         fn row_of(app: &mut App, key: &str) -> usize {
             (0..app.item_count())
                 .find(|&i| {
@@ -2051,25 +2051,25 @@ mod tests {
                 })
                 .unwrap()
         }
-        let first = row_of(&mut app, "DSCI-1");
-        let second = row_of(&mut app, "DSCI-2");
+        let first = row_of(&mut app, "DEMO-1");
+        let second = row_of(&mut app, "DEMO-2");
         assert!(second > first + 1, "a status header sits between them");
 
         app.selected_index = first;
-        app.open_detail("DSCI-1".to_string());
+        app.open_detail("DEMO-1".to_string());
         assert_eq!(app.detail_position(), Some((1, 2)));
 
-        // DSCI-2's detail isn't loaded, so it needs fetching.
-        assert_eq!(app.step_detail(true), Some("DSCI-2".to_string()));
-        assert_eq!(app.detail_ticket_key.as_deref(), Some("DSCI-2"));
+        // DEMO-2's detail isn't loaded, so it needs fetching.
+        assert_eq!(app.step_detail(true), Some("DEMO-2".to_string()));
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("DEMO-2"));
         assert_eq!(app.selected_index, second);
         assert_eq!(app.detail_position(), Some((2, 2)));
 
         // Nothing after the last ticket.
         assert_eq!(app.step_detail(true), None);
-        assert_eq!(app.detail_ticket_key.as_deref(), Some("DSCI-2"));
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("DEMO-2"));
 
-        assert_eq!(app.step_detail(false), Some("DSCI-1".to_string()));
+        assert_eq!(app.step_detail(false), Some("DEMO-1".to_string()));
         assert_eq!(app.selected_index, first);
         // Its fetch is already running.
         app.step_detail(true);
@@ -2078,20 +2078,20 @@ mod tests {
 
     #[test]
     fn opening_a_loaded_detail_still_fetches_jiras_copy() {
-        let mut app = my_work_app(&[("DSCI-1", "In Progress")]);
+        let mut app = my_work_app(&[("DEMO-1", "In Progress")]);
         app.cache.my_tickets[0].detail_loaded = true;
         // The cached detail shows at once, and its fetch starts anyway: Jira's may be newer.
         assert_eq!(
-            app.open_fresh_detail("DSCI-1".into()),
-            Some("DSCI-1".into())
+            app.open_fresh_detail("DEMO-1".into()),
+            Some("DEMO-1".into())
         );
-        assert_eq!(app.detail_ticket_key.as_deref(), Some("DSCI-1"));
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("DEMO-1"));
         // Not twice while one is running.
-        assert_eq!(app.open_fresh_detail("DSCI-1".into()), None);
-        app.end_detail_fetch("DSCI-1");
+        assert_eq!(app.open_fresh_detail("DEMO-1".into()), None);
+        app.end_detail_fetch("DEMO-1");
         assert_eq!(
-            app.open_fresh_detail("DSCI-1".into()),
-            Some("DSCI-1".into())
+            app.open_fresh_detail("DEMO-1".into()),
+            Some("DEMO-1".into())
         );
     }
 
@@ -2117,12 +2117,12 @@ mod tests {
     #[test]
     fn detail_fetch_error_clears_on_retry() {
         let mut app = App::new();
-        assert!(app.begin_detail_fetch("DSCI-1"));
-        app.end_detail_fetch("DSCI-1");
-        app.fail_detail_fetch("DSCI-1", "timed out".to_string());
-        assert_eq!(app.detail_fetch_error("DSCI-1"), Some("timed out"));
-        assert!(app.begin_detail_fetch("DSCI-1"));
-        assert_eq!(app.detail_fetch_error("DSCI-1"), None);
+        assert!(app.begin_detail_fetch("DEMO-1"));
+        app.end_detail_fetch("DEMO-1");
+        app.fail_detail_fetch("DEMO-1", "timed out".to_string());
+        assert_eq!(app.detail_fetch_error("DEMO-1"), Some("timed out"));
+        assert!(app.begin_detail_fetch("DEMO-1"));
+        assert_eq!(app.detail_fetch_error("DEMO-1"), None);
     }
 
     fn my_work_group_names(app: &App) -> Vec<String> {
@@ -2331,12 +2331,12 @@ mod tests {
     #[test]
     fn my_work_groups_workflow_statuses_before_done() {
         let mut app = my_work_app(&[
-            ("DSCI-2000", "Stalled"),
-            ("DSCI-2478", "Backlog"),
-            ("DSCI-3100", "In Progress"),
-            ("DSCI-3240", "On Deck"),
-            ("DSCI-3241", "On Deck"),
-            ("DSCI-3300", "Done"),
+            ("DEMO-2000", "Stalled"),
+            ("DEMO-2478", "Backlog"),
+            ("DEMO-3100", "In Progress"),
+            ("DEMO-3240", "On Deck"),
+            ("DEMO-3241", "On Deck"),
+            ("DEMO-3300", "Done"),
         ]);
 
         // Configured statuses first, then unlisted ones in first-seen (key) order, then done.
@@ -2347,12 +2347,12 @@ mod tests {
         // 5 headers + 6 tickets; the last workflow-status row sits just above Done.
         assert_eq!(app.item_count(), 11);
         app.selected_index = 8;
-        assert_eq!(app.selected_ticket_key(), Some("DSCI-3241".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-3241".to_string()));
         app.selected_index = 10;
-        assert_eq!(app.selected_ticket_key(), Some("DSCI-3300".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-3300".to_string()));
     }
 
-    fn dsci_statuses() -> crate::config::StatusConfig {
+    fn demo_statuses() -> crate::config::StatusConfig {
         let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect();
         crate::config::StatusConfig {
             active: names(&[
@@ -2369,12 +2369,12 @@ mod tests {
     #[test]
     fn my_work_filters_and_epics_follow_the_configured_status_order() {
         let statuses = [
-            ("DSCI-1", "Resolved"),
-            ("DSCI-2", "Stalled"),
-            ("DSCI-3", "In Team Review"),
-            ("DSCI-4", "Backlog"),
-            ("DSCI-5", "Blocked"),
-            ("DSCI-6", "On Deck"),
+            ("DEMO-1", "Resolved"),
+            ("DEMO-2", "Stalled"),
+            ("DEMO-3", "In Team Review"),
+            ("DEMO-4", "Backlog"),
+            ("DEMO-5", "Blocked"),
+            ("DEMO-6", "On Deck"),
         ];
         let expected = [
             "Backlog",
@@ -2386,11 +2386,11 @@ mod tests {
         ];
 
         let mut app = my_work_app(&statuses);
-        app.set_status_rules(&dsci_statuses());
+        app.set_status_rules(&demo_statuses());
         assert_eq!(my_work_group_names(&app), expected);
 
         let mut app = filters_app(tickets_with_statuses(&statuses));
-        app.set_status_rules(&dsci_statuses());
+        app.set_status_rules(&demo_statuses());
         let filter_groups: Vec<_> = app
             .filters_visible_by_status()
             .iter()
@@ -2399,11 +2399,11 @@ mod tests {
         assert_eq!(filter_groups, expected);
 
         let mut app = epics_app(vec![Epic {
-            key: "DSCI-100".to_string(),
+            key: "DEMO-100".to_string(),
             summary: "Epic".to_string(),
             children: tickets_with_statuses(&statuses),
         }]);
-        app.set_status_rules(&dsci_statuses());
+        app.set_status_rules(&demo_statuses());
         let groups = app.epics_visible_epics();
         let children = groups[0].tickets.as_ref().unwrap();
         let child_statuses: Vec<_> = children.iter().map(|(_, t)| t.status.as_str()).collect();
@@ -2413,12 +2413,12 @@ mod tests {
     #[test]
     fn my_work_collapses_workflow_status_groups() {
         let mut app = my_work_app(&[
-            ("DSCI-1", "In Progress"),
-            ("DSCI-2", "On Deck"),
-            ("DSCI-3", "On Deck"),
+            ("DEMO-1", "In Progress"),
+            ("DEMO-2", "On Deck"),
+            ("DEMO-3", "On Deck"),
         ]);
 
-        app.selected_index = 4; // T(DSCI-3)
+        app.selected_index = 4; // T(DEMO-3)
         app.toggle_group_collapse("On Deck");
         assert_eq!(app.item_count(), 3);
         assert_eq!(app.selected_header_group_id(), Some("On Deck".to_string()));
@@ -2433,9 +2433,9 @@ mod tests {
     #[test]
     fn my_work_focus_done_and_search_apply_to_workflow_statuses() {
         let mut app = my_work_app(&[
-            ("DSCI-1", "In Progress"),
-            ("DSCI-2", "On Deck"),
-            ("DSCI-3", "Done"),
+            ("DEMO-1", "In Progress"),
+            ("DEMO-2", "On Deck"),
+            ("DEMO-3", "Done"),
         ]);
 
         app.cycle_status_focus(true);
@@ -2446,20 +2446,20 @@ mod tests {
         app.cycle_status_focus(false);
         assert_eq!(app.status_focus, None);
         assert_eq!(my_work_group_names(&app), ["In Progress", "On Deck"]);
-        app.search = Some("dsci-2".to_string());
+        app.search = Some("demo-2".to_string());
         assert_eq!(my_work_group_names(&app), ["On Deck"]);
     }
 
     #[test]
     fn focus_cycles_through_the_workflow_statuses_shown_then_back_to_all() {
         let mut app = my_work_app(&[
-            ("DSCI-1", "In Team Review"),
-            ("DSCI-2", "On Deck"),
-            ("DSCI-3", "Done"),
-            ("DSCI-4", "Backlog"),
-            ("DSCI-5", "On Deck"),
+            ("DEMO-1", "In Team Review"),
+            ("DEMO-2", "On Deck"),
+            ("DEMO-3", "Done"),
+            ("DEMO-4", "Backlog"),
+            ("DEMO-5", "On Deck"),
         ]);
-        app.set_status_rules(&dsci_statuses());
+        app.set_status_rules(&demo_statuses());
 
         // Only statuses the tickets are in, in display order, and never a done one.
         assert_eq!(
@@ -2472,7 +2472,7 @@ mod tests {
         assert_eq!(app.status_focus_message(), "Focus: On Deck (2 of 3)");
         assert_eq!(my_work_group_names(&app), ["On Deck", "Done"]);
         app.selected_index = 2;
-        assert_eq!(app.selected_ticket_key(), Some("DSCI-5".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-5".to_string()));
 
         app.cycle_status_focus(true);
         assert_eq!(app.status_focus, Some("In Team Review".to_string()));
@@ -2486,8 +2486,8 @@ mod tests {
 
     #[test]
     fn focus_skips_statuses_hidden_by_search_and_restarts_from_a_stale_focus() {
-        let mut app = my_work_app(&[("DSCI-1", "In Progress"), ("DSCI-2", "On Deck")]);
-        app.search = Some("dsci-2".to_string());
+        let mut app = my_work_app(&[("DEMO-1", "In Progress"), ("DEMO-2", "On Deck")]);
+        app.search = Some("demo-2".to_string());
         assert_eq!(app.focusable_statuses(), ["On Deck"]);
 
         // A focused status that is no longer shown (moved away, say) restarts the cycle.
@@ -2520,14 +2520,14 @@ mod tests {
             },
         ];
         app.cache.team_tickets = tickets_with_statuses(&[
-            ("DSCI-1", "Stalled"),
-            ("DSCI-2", "On Deck"),
-            ("DSCI-3", "Closed"),
+            ("DEMO-1", "Stalled"),
+            ("DEMO-2", "On Deck"),
+            ("DEMO-3", "Closed"),
         ]);
         app.cache.team_tickets[0].assignee_email = Some("dev@example.com".to_string());
         app.cache.team_tickets[1].assignee_email = Some("ops@example.com".to_string());
         app.cache.team_tickets[2].assignee_email = Some("ops@example.com".to_string());
-        app.set_status_rules(&dsci_statuses());
+        app.set_status_rules(&demo_statuses());
 
         assert_eq!(app.focusable_statuses(), ["On Deck", "Stalled"]);
         app.cycle_status_focus(true);
@@ -2535,7 +2535,7 @@ mod tests {
         assert_eq!(app.item_count(), 4);
         assert_eq!(app.selected_ticket_key(), None);
         app.selected_index = 2;
-        assert_eq!(app.selected_ticket_key(), Some("DSCI-2".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-2".to_string()));
 
         app.active_tab = Tab::Epics;
         assert!(app.focusable_statuses().is_empty());
@@ -2549,11 +2549,11 @@ mod tests {
             done: names(&["Done", "Cancelled", "Won't Do", "Denied"]),
         };
         let tickets = [
-            ("DSCI-1", "In Progress"),
-            ("DSCI-2", "Cancelled"),
-            ("DSCI-3", "Won't Do"),
-            ("DSCI-4", "Denied"),
-            ("DSCI-5", "On Deck"),
+            ("DEMO-1", "In Progress"),
+            ("DEMO-2", "Cancelled"),
+            ("DEMO-3", "Won't Do"),
+            ("DEMO-4", "Denied"),
+            ("DEMO-5", "On Deck"),
         ];
 
         // My Work: done groups come last, `d` hides them, and focus skips them.
@@ -2604,7 +2604,7 @@ mod tests {
 
         // Epics: they count toward progress.
         let epic = Epic {
-            key: "DSCI-100".to_string(),
+            key: "DEMO-100".to_string(),
             summary: "Epic".to_string(),
             children: tickets_with_statuses(&tickets),
         };
@@ -2644,9 +2644,9 @@ mod tests {
             email: "dev@example.com".to_string(),
         }];
         app.cache.team_tickets = tickets_with_statuses(&[
-            ("DSCI-1", "In Progress"),
-            ("DSCI-2", "On Deck"),
-            ("DSCI-3", "Done"),
+            ("DEMO-1", "In Progress"),
+            ("DEMO-2", "On Deck"),
+            ("DEMO-3", "Done"),
         ]);
         for t in &mut app.cache.team_tickets {
             t.assignee_email = Some("dev@example.com".to_string());
@@ -2661,7 +2661,7 @@ mod tests {
         app.toggle_show_done();
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("DSCI-1".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-1".to_string()));
     }
 
     #[test]

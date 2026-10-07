@@ -2794,11 +2794,11 @@ mod tests {
     async fn move_failure_stays_on_screen_until_dismissed() {
         let mut app = App::new();
         app.loading = false;
-        app.cache.my_tickets = vec![ticket("DSCI-2478", "Epic", "Backlog")];
-        app.open_detail("DSCI-2478".to_string());
-        assert!(app.moves.start("DSCI-2478", "Done"));
+        app.cache.my_tickets = vec![ticket("DEMO-2478", "Epic", "Backlog")];
+        app.open_detail("DEMO-2478".to_string());
+        assert!(app.moves.start("DEMO-2478", "Done"));
         app.finish_move(
-            "DSCI-2478",
+            "DEMO-2478",
             Err("Jira answered 400 Bad Request.\nresolution: Resolution is required.".to_string()),
         );
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();

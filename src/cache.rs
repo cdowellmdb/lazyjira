@@ -467,7 +467,7 @@ mod tests {
         let tickets: Vec<Ticket> = statuses
             .iter()
             .enumerate()
-            .map(|(i, status)| Ticket::for_test(&format!("DSCI-{}", i), status))
+            .map(|(i, status)| Ticket::for_test(&format!("DEMO-{}", i), status))
             .collect();
         rules
             .group(&tickets)
@@ -476,7 +476,7 @@ mod tests {
             .collect()
     }
 
-    fn dsci() -> StatusRules {
+    fn demo_rules() -> StatusRules {
         StatusRules::new(
             &names(&[
                 "Backlog",
@@ -523,7 +523,7 @@ mod tests {
 
     #[test]
     fn configured_names_keep_their_own_groups_in_config_order() {
-        let rules = dsci();
+        let rules = demo_rules();
         assert_eq!(
             group_names(
                 &rules,
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn done_comes_from_config_with_closed_like_names_as_the_fallback() {
-        let rules = dsci();
+        let rules = demo_rules();
         for done in ["Cancelled", "won't do", "Done", "Resolved"] {
             assert!(rules.is_done(done), "{done} should be done");
         }
@@ -579,15 +579,15 @@ mod tests {
     fn sort_tickets_orders_by_status_then_key() {
         let rules = StatusRules::default();
         let tickets = [
-            Ticket::for_test("DSCI-3", "Closed"),
-            Ticket::for_test("DSCI-2", "In Progress"),
-            Ticket::for_test("DSCI-9", "On Deck"),
-            Ticket::for_test("DSCI-1", "In Progress"),
+            Ticket::for_test("DEMO-3", "Closed"),
+            Ticket::for_test("DEMO-2", "In Progress"),
+            Ticket::for_test("DEMO-9", "On Deck"),
+            Ticket::for_test("DEMO-1", "In Progress"),
         ];
         let mut refs: Vec<&Ticket> = tickets.iter().collect();
         rules.sort_tickets(&mut refs);
         let keys: Vec<&str> = refs.iter().map(|t| t.key.as_str()).collect();
-        assert_eq!(keys, ["DSCI-1", "DSCI-2", "DSCI-9", "DSCI-3"]);
+        assert_eq!(keys, ["DEMO-1", "DEMO-2", "DEMO-9", "DEMO-3"]);
     }
 
     #[test]
@@ -613,7 +613,7 @@ mod tests {
     #[test]
     fn updated_secs_reads_jiras_timestamp_in_its_offset() {
         let at = |updated: Option<&str>| {
-            let mut ticket = Ticket::for_test("DSCI-1", "Closed");
+            let mut ticket = Ticket::for_test("DEMO-1", "Closed");
             ticket.updated = updated.map(String::from);
             ticket.updated_secs()
         };
