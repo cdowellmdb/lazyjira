@@ -1751,7 +1751,8 @@ impl App {
         if self.moves.is_stale(key, requested_at) {
             return false;
         }
-        let members = self.cache.team_members.clone();
+        let roster_email =
+            roster_member(&self.cache.team_members, detail).map(|member| member.email.clone());
         self.update_ticket(key, |ticket| {
             if detail.status != crate::cache::UNKNOWN_STATUS {
                 ticket.status = detail.status.clone();
@@ -1766,8 +1767,8 @@ impl App {
                 ticket.assignee = detail.assignee.clone();
             }
             if reassigned || ticket.assignee_email.is_none() {
-                ticket.assignee_email = roster_member(&members, detail)
-                    .map(|member| member.email.clone())
+                ticket.assignee_email = roster_email
+                    .clone()
                     .or_else(|| detail.assignee_email.clone());
             }
             if detail.reporter.is_some() {
