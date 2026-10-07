@@ -7,6 +7,8 @@ The commit message should be structured as follows:
 [optional body]
 [optional footer(s)]
 ```
+
+Merge commits on feature or integration branches keep git's default message, with no type: PRs are squash-merged, so the squash title is what lands on `main`, and it follows these rules.
 The commit contains the following structural elements, to communicate intent to the consumers of your library:
 
 - fix: a commit of the type fix patches a bug in your codebase (this correlates with PATCH in Semantic Versioning).
