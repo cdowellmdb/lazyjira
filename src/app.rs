@@ -539,7 +539,7 @@ impl App {
 
     pub fn replace_epics(&mut self, epics: Vec<crate::cache::Epic>, requested_at: u64) {
         self.ensure_visible_keys_cache();
-        crate::jira_reads::attach_epics_to_tickets(
+        crate::lists::attach_epics_to_tickets(
             &mut self.cache.my_tickets,
             &mut self.cache.team_tickets,
             &epics,

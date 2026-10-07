@@ -11,6 +11,7 @@ mod jira_reads;
 mod jira_rest;
 mod jira_search;
 mod jql;
+mod lists;
 mod local_cache;
 mod mouse;
 mod move_picker;
