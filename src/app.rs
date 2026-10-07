@@ -1409,7 +1409,7 @@ impl App {
                 let ids: Vec<String> = self
                     .sorted_team_members()
                     .iter()
-                    .filter(|m| m.email != "__unassigned__")
+                    .filter(|m| m.email != UNASSIGNED_TEAM_EMAIL)
                     .map(|m| m.email.clone())
                     .collect();
                 (&mut self.collapsed_team, ids)
