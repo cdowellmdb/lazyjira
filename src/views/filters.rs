@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, FilterFocus};
 use crate::views::common::{
     fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
-    KEY_WIDTH,
+    Shared, KEY_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -137,13 +137,15 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
         ]));
 
         let header_w = 2 + key_w + 3 + status_w + 3 + summary_w;
+        let groups = app.filters_visible_by_status();
+        lines.extend(Shared::of(&groups).line(header_w));
         lines.push(Line::from(Span::styled(
             "─".repeat(header_w),
             Style::default().fg(Color::DarkGray),
         )));
         lines.push(Line::from(""));
 
-        for group in app.filters_visible_by_status() {
+        for group in groups {
             let status = &group.header;
             mouse_rows.push((lines.len(), group.index, true));
             let is_header_selected = results_focused && group.index == app.selected_index;
