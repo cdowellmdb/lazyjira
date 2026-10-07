@@ -23,7 +23,7 @@ const VIEW_HINTS: &[(&str, &str)] = &[
     ("C", "comment"),
     ("a", "assign"),
     ("e", "edit"),
-    ("h", "history"),
+    ("h", "activity"),
     ("o", "browser"),
     ("z", "zoom"),
     ("Esc", "close"),
