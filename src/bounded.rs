@@ -1,4 +1,4 @@
-//! Running many Jira calls a few at a time, for the reads (`jira_reads`) and the bulk actions.
+//! Running many Jira calls a few at a time, for the reads (`jira_search`) and the bulk actions.
 
 use std::collections::HashMap;
 use std::future::Future;
