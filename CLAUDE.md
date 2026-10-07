@@ -96,6 +96,7 @@ Renderers draw with plain ANSI colors, each used for one job: `DarkGray` is mute
 - Search matches ticket key/summary/assignee/labels and team member name/email.
 - `Enter` works while search is active (opens detail for selected row).
 - `f`/`F` cycle the status focus (My Work and Team) through the statuses shown, in display order, then back to all (`App::cycle_status_focus`). Closed isn't in the cycle; `d` shows and hides it.
+- Done status groups start folded: in My Work the first time `replace_cache` brings each one (so a group the user unfolds stays open through refreshes), in Filters on every query (`App::show_filter_results`).
 - Epics child rows are sorted by status with Done at the bottom.
 - Epics show an accurate progress bar and percentage complete.
 - The detail overlay shows the ticket's fields, its description (Jira markup, via `widgets/markup.rs`) and its comments, oldest first. The body is pre-wrapped to the overlay's width, so its line count is its height: the renderer records the scroll limit in `App::detail_scroll_max` for the scroll keys.

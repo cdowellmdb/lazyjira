@@ -155,17 +155,20 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 "[ ]"
             };
-            let (key_cell, summary) =
-                ticket_cells(app, group.family.get(index).copied(), ticket, marker);
+            let (key_cell, summary) = ticket_cells(
+                app,
+                group.family.get(index).copied(),
+                ticket,
+                marker,
+                summary_w,
+                base,
+            );
 
             let mut row = Line::from(vec![
                 Span::styled(format!("  {:<key_w$}", key_cell), base),
                 separator(base),
-                Span::styled(
-                    format!("{:<summary_w$}", truncate(&summary, summary_w)),
-                    base,
-                ),
             ]);
+            row.spans.extend(summary);
             if shared.epic_column {
                 let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
                 row.push_span(separator(base));

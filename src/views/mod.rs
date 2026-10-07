@@ -341,6 +341,79 @@ mod tests {
     }
 
     #[test]
+    fn done_groups_start_folded_and_stay_unfolded_across_refreshes() {
+        let screen = |app: &App, tab: Tab| -> String {
+            let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|frame| match tab {
+                    Tab::MyWork => my_work::render(frame, frame.area(), app),
+                    _ => filters::render(frame, frame.area(), app, &config),
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..30)
+                .map(|y| {
+                    (0..120)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                        + "\n"
+                })
+                .collect()
+        };
+        let tickets = vec![
+            Ticket::for_test("DEMO-1", "In Progress"),
+            Ticket::for_test("DEMO-2", "Closed"),
+            Ticket::for_test("DEMO-3", "Closed"),
+            Ticket::for_test("DEMO-4", "Resolved"),
+        ];
+        let mut cache = crate::cache::Cache::empty();
+        cache.my_tickets = tickets.clone();
+
+        let mut app = App::new();
+        app.loading = false;
+        app.replace_cache(cache.clone(), app.moves.now());
+        let text = screen(&app, Tab::MyWork);
+        assert!(text.contains("▼ IN PROGRESS (1)"), "{text}");
+        assert!(text.contains("DEMO-1"), "{text}");
+        // Folded, each done group keeps its header and count but draws no rows.
+        assert!(text.contains("▶ CLOSED (2)"), "{text}");
+        assert!(text.contains("▶ RESOLVED (1)"), "{text}");
+        for key in ["DEMO-2", "DEMO-3", "DEMO-4"] {
+            assert!(!text.contains(key), "{key} is folded away: {text}");
+        }
+
+        // Unfolded by the user, Closed stays open through a background refresh.
+        app.toggle_group_collapse("Closed");
+        app.replace_cache(cache.clone(), app.moves.now());
+        let text = screen(&app, Tab::MyWork);
+        assert!(text.contains("▼ CLOSED (2)"), "{text}");
+        assert!(text.contains("DEMO-2") && text.contains("DEMO-3"), "{text}");
+        assert!(text.contains("▶ RESOLVED (1)"), "{text}");
+
+        // `d` still hides done tickets, headers included, and shows them again.
+        app.toggle_show_done();
+        let text = screen(&app, Tab::MyWork);
+        assert!(
+            !text.contains("CLOSED") && !text.contains("RESOLVED"),
+            "{text}"
+        );
+        app.toggle_show_done();
+        assert!(screen(&app, Tab::MyWork).contains("▼ CLOSED (2)"));
+
+        // A filter's results start with their done groups folded too.
+        app.active_tab = Tab::Filters;
+        app.filter_focus = FilterFocus::Results;
+        app.show_filter_results(tickets, app.moves.now());
+        let text = screen(&app, Tab::Filters);
+        assert!(text.contains("DEMO-1"), "{text}");
+        assert!(
+            !text.contains("DEMO-2") && !text.contains("DEMO-4"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn sub_tasks_sit_under_their_parent_or_name_it() {
         let rows_of = |app: &App, tab: Tab| -> Vec<String> {
             let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
@@ -402,5 +475,57 @@ mod tests {
         let rows = rows_of(&app, Tab::MyWork);
         assert_eq!(column(&rows, "DEMO-3"), column(&rows, "DEMO-1"));
         assert!(rows[row(&rows, "DEMO-3")].contains("DEMO-1 › DEMO-3"));
+    }
+
+    #[test]
+    fn a_sub_tasks_parent_key_prefix_is_muted_and_readable_when_selected() {
+        let parent = Ticket::for_test("DEMO-1", "In Progress");
+        let mut subtask = Ticket::for_test("DEMO-3", "Closed");
+        subtask.summary = "Write the docs".into();
+        subtask.parent_key = Some("DEMO-1".into());
+        let mut app = App::new();
+        app.loading = false;
+        app.show_done = true;
+        app.active_tab = Tab::MyWork;
+        app.cache.my_tickets = vec![parent, subtask];
+
+        // The prefix's and the summary's (foreground, background), from the drawn buffer.
+        let colors = |app: &App| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|frame| my_work::render(frame, frame.area(), app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let rows: Vec<String> = (0..30)
+                .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            let y = rows
+                .iter()
+                .position(|r| r.contains("Write the docs"))
+                .unwrap();
+            let x_of = |text: &str| rows[y][..rows[y].find(text).unwrap()].chars().count();
+            let cell = |x: usize| {
+                let cell = &buffer[(x as u16, y as u16)];
+                (cell.fg, cell.bg)
+            };
+            (cell(x_of("DEMO-1 ›")), cell(x_of("Write the docs")))
+        };
+
+        let (prefix, summary) = colors(&app);
+        assert_eq!(prefix.0, Color::DarkGray);
+        assert_ne!(prefix.0, summary.0);
+
+        app.selected_index = (0..app.item_count())
+            .find(|&index| {
+                app.selected_index = index;
+                app.selected_ticket_key().as_deref() == Some("DEMO-3")
+            })
+            .unwrap();
+        let (prefix, summary) = colors(&app);
+        assert_ne!(
+            prefix.0, prefix.1,
+            "the prefix must not vanish into the highlight"
+        );
+        assert_ne!(prefix.0, summary.0);
     }
 }
