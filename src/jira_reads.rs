@@ -6,8 +6,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::ops::ControlFlow;
 
 use anyhow::{anyhow, Result};
 
@@ -37,11 +36,12 @@ const SEARCHES_AT_ONCE: usize = 4;
 
 /// Runs `search` on each of `jqls`, `SEARCHES_AT_ONCE` at a time, and gives each answer to `done`
 /// with the position of its query in `jqls`, as it arrives rather than in order. A search that
-/// panics answers with an error.
+/// panics answers with an error. `done` can answer `Break` to send no more queries; the ones
+/// already sent still answer.
 async fn search_each<S, F>(
     jqls: Vec<String>,
     search: S,
-    mut done: impl FnMut(usize, Result<Vec<Ticket>>),
+    mut done: impl FnMut(usize, Result<Vec<Ticket>>) -> ControlFlow<()>,
 ) where
     S: Fn(String) -> F,
     F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
@@ -57,29 +57,20 @@ async fn search_each<S, F>(
 
 /// The tickets every one of `jqls` finds, in the order of the queries. A search that fails stops
 /// the queued ones from being sent, and the first failure in query order fails them all (a query
-/// sent after the failure is later in that order than the one that failed).
+/// that wasn't sent has no answer to fail with).
 async fn search_in_order<S, F>(jqls: Vec<String>, search: S) -> Result<Vec<Ticket>>
 where
     S: Fn(String) -> F,
     F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
 {
-    let failed = Arc::new(AtomicBool::new(false));
-    let stop_after_failure = |jql: String| {
-        let (failed, search) = (failed.clone(), search(jql));
-        async move {
-            if failed.load(Ordering::SeqCst) {
-                anyhow::bail!("not sent, as an earlier search failed");
-            }
-            let found = search.await;
-            if found.is_err() {
-                failed.store(true, Ordering::SeqCst);
-            }
-            found
-        }
-    };
     let mut answers = Vec::new();
-    search_each(jqls, stop_after_failure, |at, found| {
-        answers.push((at, found))
+    search_each(jqls, search, |at, found| {
+        let flow = match found {
+            Ok(_) => ControlFlow::Continue(()),
+            Err(_) => ControlFlow::Break(()),
+        };
+        answers.push((at, found));
+        flow
     })
     .await;
     answers.sort_by_key(|(at, _)| *at);
@@ -185,26 +176,30 @@ async fn read_details<S, F>(
         .iter()
         .map(|chunk| format!("key in ({})", chunk.join(",")))
         .collect();
-    search_each(jqls, search, |at, found| match found {
-        Ok(tickets) => {
-            let mut found: HashMap<_, _> = tickets
-                .into_iter()
-                .map(|ticket| (ticket.key.clone(), ticket))
-                .collect();
-            for key in chunks[at] {
-                let result = found
-                    .remove(key)
-                    .map(as_detail)
-                    .ok_or_else(|| "Jira didn't return this ticket".to_string());
-                deliver(key.clone(), result);
+    search_each(jqls, search, |at, found| {
+        match found {
+            Ok(tickets) => {
+                let mut found: HashMap<_, _> = tickets
+                    .into_iter()
+                    .map(|ticket| (ticket.key.clone(), ticket))
+                    .collect();
+                for key in chunks[at] {
+                    let result = found
+                        .remove(key)
+                        .map(as_detail)
+                        .ok_or_else(|| "Jira didn't return this ticket".to_string());
+                    deliver(key.clone(), result);
+                }
+            }
+            Err(e) => {
+                let error = describe(&e);
+                for key in chunks[at] {
+                    deliver(key.clone(), Err(error.clone()));
+                }
             }
         }
-        Err(e) => {
-            let error = describe(&e);
-            for key in chunks[at] {
-                deliver(key.clone(), Err(error.clone()));
-            }
-        }
+        // A failed chunk fails only its keys; the other chunks are still read.
+        ControlFlow::Continue(())
     })
     .await
 }
@@ -1248,6 +1243,47 @@ mod tests {
         let mut sent = sent.lock().unwrap().clone();
         sent.sort();
         assert_eq!(sent, ["0", "1", "2", "3"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_search_that_panics_stops_the_queued_ones_too() {
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let jqls = (0..10).map(|n| n.to_string()).collect();
+
+        let found = search_in_order(jqls, |jql| {
+            let sent = sent.clone();
+            async move {
+                sent.lock().unwrap().push(jql.clone());
+                if jql == "1" {
+                    panic!("a parser bug");
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                Ok(vec![test_ticket(&format!("T-{jql}"), "To Do")])
+            }
+        })
+        .await;
+
+        assert!(found.is_err());
+        let mut sent = sent.lock().unwrap().clone();
+        sent.sort();
+        assert_eq!(sent, ["0", "1", "2", "3"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn when_two_searches_fail_the_earlier_query_is_the_one_reported() {
+        // Query 1 fails first (5 ms), query 0 later (20 ms): the report is query 0's.
+        let found = search_in_order(vec!["0".to_string(), "1".to_string()], |jql| async move {
+            let (wait, error) = if jql == "0" {
+                (20, "query 0 failed")
+            } else {
+                (5, "query 1 failed")
+            };
+            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+            anyhow::bail!(error)
+        })
+        .await;
+
+        assert_eq!(found.unwrap_err().to_string(), "query 0 failed");
     }
 
     #[tokio::test]

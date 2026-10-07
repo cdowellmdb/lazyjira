@@ -1,17 +1,19 @@
 //! Running many Jira calls a few at a time, for the reads (`jira_reads`) and the bulk actions.
 
 use std::future::Future;
+use std::ops::ControlFlow;
 
 use tokio::task::{JoinError, JoinSet};
 
 /// Runs `task` on each of `items`, at most `limit` at a time, and hands each output to `done`
 /// with its item's position in `items`, as it finishes rather than in order. A task that panics
-/// reaches `done` as its `JoinError` instead of ending the others.
+/// reaches `done` as its `JoinError` instead of ending the others. `done` can answer `Break` to
+/// start no more items: the ones already running finish and still reach `done`.
 pub async fn for_each_bounded<I, T, F, Fut>(
     limit: usize,
     items: Vec<I>,
     task: F,
-    mut done: impl FnMut(usize, Result<T, JoinError>),
+    mut done: impl FnMut(usize, Result<T, JoinError>) -> ControlFlow<()>,
 ) where
     F: Fn(I) -> Fut,
     Fut: Future<Output = T> + Send + 'static,
@@ -19,8 +21,9 @@ pub async fn for_each_bounded<I, T, F, Fut>(
 {
     let mut waiting = items.into_iter().enumerate();
     let mut running = JoinSet::new();
+    let mut stopped = false;
     loop {
-        while running.len() < limit {
+        while !stopped && running.len() < limit {
             let Some((at, item)) = waiting.next() else {
                 break;
             };
@@ -30,7 +33,7 @@ pub async fn for_each_bounded<I, T, F, Fut>(
             running.spawn(async move { (at, work.await) });
         }
         match running.join_next().await {
-            Some(Ok((at, output))) => done(at, output),
+            Some(Ok((at, output))) => stopped |= done(at, output).is_break(),
             // The wrapper only awaits, so this is it being cancelled as the runtime shuts down.
             Some(Err(_)) => {}
             None => return,
@@ -42,7 +45,7 @@ pub async fn for_each_bounded<I, T, F, Fut>(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     /// Runs `count` tasks, each of which takes a moment, `limit` at a time, returning the most
@@ -66,6 +69,7 @@ mod tests {
             |at, done| {
                 done.unwrap();
                 positions.push(at);
+                ControlFlow::Continue(())
             },
         )
         .await;
@@ -95,10 +99,41 @@ mod tests {
                 }
                 n * 10
             },
-            |at, done| heard.push((at, done.map_err(|e| e.is_panic()))),
+            |at, done| {
+                heard.push((at, done.map_err(|e| e.is_panic())));
+                ControlFlow::Continue(())
+            },
         )
         .await;
         heard.sort_by_key(|(at, _)| *at);
         assert_eq!(heard, [(0, Ok(0)), (1, Err(true)), (2, Ok(20))]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn after_a_break_the_running_tasks_finish_and_no_others_start() {
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let mut heard = Vec::new();
+        let log = started.clone();
+        for_each_bounded(
+            2,
+            (0..6).collect(),
+            move |n| {
+                let log = log.clone();
+                async move {
+                    log.lock().unwrap().push(n);
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            },
+            |at, _| {
+                heard.push(at);
+                ControlFlow::Break(())
+            },
+        )
+        .await;
+
+        // Items 0 and 1 were running at the first `Break`; 1 still reaches `done`.
+        assert_eq!(*started.lock().unwrap(), [0, 1]);
+        heard.sort();
+        assert_eq!(heard, [0, 1]);
     }
 }

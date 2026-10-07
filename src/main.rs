@@ -267,6 +267,7 @@ where
     let mut results = Vec::new();
     bounded::for_each_bounded(MAX_BULK_CONCURRENCY, items, task, |_, joined| {
         results.push(joined.unwrap_or_else(|err| ("unknown".to_string(), Err(err.to_string()))));
+        std::ops::ControlFlow::Continue(())
     })
     .await;
     results
