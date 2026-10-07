@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::App;
 use crate::views::common::{
     color_marks, fold_indicator, group_marker, highlight_row, muted, panel, status_color,
-    ticket_cells, ticket_marker, Shared, KEY_WIDTH, UPDATED_WIDTH,
+    ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
@@ -16,7 +16,7 @@ fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
     let mut epic_w = 20usize;
     let mut labels_w = 18usize;
     let inner = panel().inner(area).width as usize;
-    let prefix_and_separators = 2 + key_w + 3 + status_w + 3 + 3 + 3 + UPDATED_WIDTH + 3;
+    let prefix_and_separators = 2 + key_w + status_w + 5 * SEPARATOR_WIDTH + UPDATED_WIDTH;
     let mut overflow = prefix_and_separators + summary_w + epic_w + labels_w;
 
     if overflow > inner {
@@ -48,7 +48,7 @@ fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let members = app.team_visible_tickets_by_member();
     let now = crate::local_cache::now_unix_secs() as i64;
-    let shared = Shared::of(&members);
+    let shared = Shared::of(&members, Columns::EpicAndLabels);
     let (key_w, status_w, summary_w, epic_w, labels_w) = team_column_widths(area);
     let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
     let heading_style = Style::default()

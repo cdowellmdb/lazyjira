@@ -185,21 +185,36 @@ pub fn ticket_cells(
     )
 }
 
+/// Width of the ` │ ` between two columns.
+pub const SEPARATOR_WIDTH: usize = 3;
+
+/// The columns a tab has that `Shared` may hide, which decides what its shared line names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Columns {
+    /// Epic and Labels columns, each hidden while every row shares its value (My Work, Team).
+    EpicAndLabels,
+    /// Neither: the shared line names a shared epic and labels (Filters).
+    Neither,
+    /// Neither, and the groups are epics, whose headers name them, so the shared line names only
+    /// labels (Unassigned).
+    GroupedByEpic,
+}
+
 /// What every row a tab draws has in common, so it is shown once instead of on every row.
 /// Rows with no epic don't count when deciding whether an epic is shared.
 pub struct Shared {
-    pub epic: Option<String>,
-    pub labels: Vec<String>,
+    epic: Option<String>,
+    labels: Vec<String>,
     /// Some rows' epics differ, so rows need their Epic column.
-    pub epic_column: bool,
+    epic_column: bool,
     /// Some row has a label not every row has, so rows need their Labels column.
-    pub labels_column: bool,
+    labels_column: bool,
 }
 
 impl Shared {
-    /// The shared values of the rows `groups` draw, counting the sub-tasks of folded parents
-    /// (as group totals do) but nothing in a folded group.
-    pub fn of<H>(groups: &[VisibleGroup<'_, H>]) -> Self {
+    /// The shared values of the rows `groups` draw, in a tab with `columns`, counting the
+    /// sub-tasks of folded parents (as group totals do) but nothing in a folded group.
+    pub fn of<H>(groups: &[VisibleGroup<'_, H>], columns: Columns) -> Self {
         let rows: Vec<&Ticket> = groups
             .iter()
             .flat_map(|group| {
@@ -218,23 +233,26 @@ impl Shared {
                 .cloned()
                 .collect()
         });
+        let has_columns = columns == Columns::EpicAndLabels;
         Shared {
-            epic: (epics.len() == 1).then(|| epics[0].to_string()),
-            epic_column: epics.len() > 1,
-            labels_column: rows
-                .iter()
-                .any(|t| t.labels.iter().any(|label| !labels.contains(label))),
+            epic: (epics.len() == 1 && columns != Columns::GroupedByEpic)
+                .then(|| epics[0].to_string()),
+            epic_column: has_columns && epics.len() > 1,
+            labels_column: has_columns
+                && rows
+                    .iter()
+                    .any(|t| t.labels.iter().any(|label| !labels.contains(label))),
             labels,
         }
     }
 
     /// The summary's width once the hidden Epic and Labels columns, and their separators, give
-    /// it theirs.
+    /// it theirs. For `Columns::EpicAndLabels` tabs, whose widths count both columns.
     pub fn summary_width(&self, summary_w: usize, epic_w: usize, labels_w: usize) -> usize {
         [(self.epic_column, epic_w), (self.labels_column, labels_w)]
             .into_iter()
             .filter(|(shown, _)| !shown)
-            .fold(summary_w, |w, (_, hidden)| w + hidden + 3)
+            .fold(summary_w, |w, (_, hidden)| w + hidden + SEPARATOR_WIDTH)
     }
 
     /// Pushes the headings, in `style`, of the cells `push_trailing_cells` draws.

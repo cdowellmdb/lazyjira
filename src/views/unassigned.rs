@@ -5,8 +5,8 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    color_marks, fold_indicator, group_marker, highlight_row, muted, panel, status_color,
-    ticket_cells, ticket_marker, updated_cell, Shared, KEY_WIDTH, UPDATED_WIDTH,
+    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
+    ticket_marker, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
@@ -16,7 +16,7 @@ fn ticket_column_widths(area: Rect) -> (usize, usize, usize) {
     let mut status_w = 12usize;
     let mut summary_w = 48usize;
     let inner = panel().inner(area).width as usize;
-    let prefix_and_separators = 4 + key_w + 3 + status_w + 3 + 3 + UPDATED_WIDTH;
+    let prefix_and_separators = 4 + key_w + status_w + 3 * SEPARATOR_WIDTH + UPDATED_WIDTH;
     let mut overflow = prefix_and_separators + summary_w;
 
     if overflow > inner {
@@ -47,6 +47,7 @@ fn ticket_column_widths(area: Rect) -> (usize, usize, usize) {
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.unassigned_visible_by_epic();
+    let shared = Shared::of(&grouped, Columns::GroupedByEpic);
     let now = crate::local_cache::now_unix_secs() as i64;
     let (key_w, status_w, summary_w) = ticket_column_widths(area);
     let heading_style = Style::default()
@@ -58,18 +59,14 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let mut mouse_rows = Vec::new();
 
     if !grouped.is_empty() {
-        // Rows are grouped by epic, so the group headers already name it.
-        let mut shared = Shared::of(&grouped);
-        shared.epic = None;
-        let header = Line::from(vec![
+        let mut header = Line::from(vec![
             Span::styled(format!("    {:<key_w$}", "SEL KEY"), heading_style),
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-            Span::styled("UPDATED", heading_style),
         ]);
+        shared.push_trailing_headings(&mut header, heading_style, 0, 0);
         let header_w = header.width();
         lines.push(header);
         lines.extend(shared.line(header_w));
@@ -144,7 +141,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 base,
             );
 
-            let mut row = vec![
+            let mut row = Line::from(vec![
                 Span::styled(format!("    {:<key_w$}", key_cell), base),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
                 Span::styled(
@@ -152,11 +149,10 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     status_style,
                 ),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
-            ];
-            row.extend(summary);
-            row.push(Span::styled(" │ ", base.fg(Color::DarkGray)));
-            row.push(Span::styled(updated_cell(now, ticket), muted(base)));
-            lines.push(Line::from(row));
+            ]);
+            row.spans.extend(summary);
+            shared.push_trailing_cells(now, &mut row, ticket, base, 0, 0);
+            lines.push(row);
         }
 
         lines.push(Line::from(""));

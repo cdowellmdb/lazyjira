@@ -330,6 +330,21 @@ mod tests {
         assert!(line_with(&rows, "SEL KEY").unwrap().0.contains("EPIC"));
         assert!(line_with(&rows, "all rows · DSCI").is_some());
         assert!(line_with(&rows, "DEMO-2").unwrap().0.contains("Runner"));
+
+        // Filters and Unassigned have no Epic or Labels column to bring back.
+        app.cache.team_tickets[3].epic_name = Some("Runner".into());
+        app.cache.team_tickets[3].labels.push("tech-debt".into());
+        app.filter_results = app.cache.team_tickets.clone();
+        for tab in [Tab::Unassigned, Tab::Filters] {
+            app.active_tab = tab;
+            app.mark_cache_changed();
+            let rows = draw(&app, tab, 160);
+            let header = &line_with(&rows, "SEL KEY").unwrap().0;
+            assert!(
+                !header.contains("EPIC") && !header.contains("LABELS"),
+                "{tab:?}: {header}"
+            );
+        }
     }
 
     #[test]
