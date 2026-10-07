@@ -9,7 +9,9 @@ mod jira_client;
 mod jira_issue;
 mod jira_reads;
 mod jira_rest;
+mod jira_search;
 mod jql;
+mod lists;
 mod local_cache;
 mod mouse;
 mod move_picker;
@@ -164,7 +166,7 @@ fn spawn_ticket_detail_fetch(
 ) {
     let tx = tx.clone();
     tokio::spawn(async move {
-        let result = jira_reads::fetch_ticket_detail(&key)
+        let result = jira_search::fetch_ticket_detail(&key)
             .await
             .map_err(|e| describe(&e));
         let _ = tx.send(BackgroundMessage::TicketDetailFetched {
@@ -186,7 +188,7 @@ fn spawn_ticket_detail_prefetch(
 
     let tx = tx.clone();
     tokio::spawn(async move {
-        jira_reads::fetch_ticket_details(&keys, |key, result| {
+        jira_search::fetch_ticket_details(&keys, |key, result| {
             let _ = tx.send(BackgroundMessage::TicketDetailFetched {
                 key,
                 requested_at,
@@ -778,7 +780,7 @@ async fn main() -> Result<()> {
     }
 
     // Details recorded in the last moments are saved before the process ends.
-    app.details.close();
+    app.details.close(&app.listed_keys());
     restore_terminal(&mut terminal)
 }
 

@@ -2,7 +2,7 @@
 //! snapshot, the epics, ticket details and the current user's email. `DetailCache` is the
 //! in-memory copy of the details that refreshes hydrate from.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -171,8 +171,8 @@ pub fn remember_my_email(project: &str, email: &str) {
 
 /// Fills in what only a ticket's detail has: description, reporter and activity, and whether
 /// the detail was loaded, as it was stored. Everything the list search returns (labels,
-/// assignee, epic, parent) stays as that search read it, since the cache is never invalidated
-/// and would bring back what has since changed in Jira.
+/// assignee, epic, parent) stays as that search read it, since a cached detail is never refreshed
+/// on its own and would bring back what has since changed in Jira.
 fn hydrate_ticket_from_details_cache(
     ticket: &mut Ticket,
     details_by_key: &HashMap<String, Ticket>,
@@ -248,7 +248,14 @@ impl DetailCache {
     /// writer, so a refresh still holding the writer's channel open, or a stalled writer, can't
     /// hold up quitting. If the writer is saving at that moment too, each write replaces the
     /// file whole (`write_cache_text`), and the later one stands.
-    pub fn close(&self) {
+    ///
+    /// Only the details of `listed` tickets (the keys in any loaded list) are kept, so the file
+    /// doesn't grow with every ticket ever seen; a ticket that left the lists is refetched when
+    /// it's opened. With nothing listed the lists never loaded and nothing is dropped.
+    pub fn close(&self, listed: &HashSet<&str>) {
+        if !listed.is_empty() {
+            lock_details(&self.by_key).retain(|key, _| listed.contains(key.as_str()));
+        }
         if let Some(path) = &self.path {
             save_details(path, &self.by_key);
         }
@@ -642,9 +649,43 @@ mod tests {
         let (details, _changed) = DetailCache::new(HashMap::new(), Some(path.clone()));
 
         details.record(test_ticket("DEMO-1", "To Do"));
-        details.close();
+        details.close(&HashSet::new());
 
         assert_eq!(saved_keys(&path), ["DEMO-1"]);
+    }
+
+    #[test]
+    fn closing_drops_the_details_of_tickets_no_list_holds_any_more() {
+        let path = cache_path(DETAILS_CACHE_PREFIX, &project("PRUNE"));
+        let _remove = Remove(vec![path.clone()]);
+        // Two details from an earlier run, one of them still listed, and two fetched this run.
+        let earlier = ["DEMO-1", "DEMO-2"]
+            .map(|key| (key.to_string(), test_ticket(key, "To Do")))
+            .into();
+        let (details, _changed) = DetailCache::new(earlier, Some(path.clone()));
+        details.record(test_ticket("DEMO-3", "To Do"));
+        details.record(test_ticket("DEMO-4", "To Do"));
+
+        details.close(&HashSet::from(["DEMO-1", "DEMO-3"]));
+
+        assert_eq!(saved_keys(&path), ["DEMO-1", "DEMO-3"]);
+        // The ones it dropped are gone from memory too, so a later save can't bring them back.
+        details.close(&HashSet::new());
+        assert_eq!(saved_keys(&path), ["DEMO-1", "DEMO-3"]);
+    }
+
+    #[test]
+    fn closing_before_any_list_loaded_keeps_every_detail() {
+        let path = cache_path(DETAILS_CACHE_PREFIX, &project("NOLISTS"));
+        let _remove = Remove(vec![path.clone()]);
+        let earlier = [("DEMO-1".to_string(), test_ticket("DEMO-1", "To Do"))].into();
+        let (details, _changed) = DetailCache::new(earlier, Some(path.clone()));
+        details.record(test_ticket("DEMO-2", "To Do"));
+
+        // Nothing is listed: the lists never loaded, so there's nothing to say what is gone.
+        details.close(&HashSet::new());
+
+        assert_eq!(saved_keys(&path), ["DEMO-1", "DEMO-2"]);
     }
 
     #[test]
@@ -716,7 +757,7 @@ mod tests {
         drop(changed);
 
         details.record(test_ticket("DEMO-1", "To Do"));
-        details.close();
+        details.close(&HashSet::new());
 
         assert_eq!(saved_keys(&path), ["DEMO-1"]);
     }
