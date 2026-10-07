@@ -503,7 +503,7 @@ async fn fetch_with_scope(
     scope: TicketFetchScope,
     details: &DetailCache,
 ) -> Result<Cache> {
-    crate::jira_rest::ready()?;
+    crate::jira_rest::ensure_ready()?;
     let mut team_members = config.team_members();
 
     let project = &config.jira.project;
