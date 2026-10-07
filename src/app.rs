@@ -199,7 +199,7 @@ pub enum DetailMode {
         picker: crate::move_picker::MovePicker,
         selected: usize,
     },
-    /// Showing the activity/history timeline with scroll offset.
+    /// Showing the ticket's activity (its comments, newest first) with scroll offset.
     History { scroll: u16 },
 }
 

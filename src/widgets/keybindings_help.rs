@@ -51,7 +51,7 @@ const DETAIL: &[(&str, &str)] = &[
     ("C", "Add comment"),
     ("a", "Assign ticket"),
     ("e", "Edit summary, labels & description"),
-    ("h", "Activity history"),
+    ("h", "Activity: comments, newest first"),
     ("Ctrl+E / F4", "External editor (text fields)"),
     ("Shift+Enter", "Newline (comments & descriptions)"),
     ("", "Move picker"),
