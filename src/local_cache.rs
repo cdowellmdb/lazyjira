@@ -46,8 +46,11 @@ fn cache_dir_in(home: Option<std::ffi::OsString>) -> PathBuf {
 fn cache_dir() -> PathBuf {
     if cfg!(test) {
         // Tests keep off the real ~/.cache. Test runs share this directory and leave it behind,
-        // empty: the files in it carry the process id (`project`), so runs don't meet.
-        return std::env::temp_dir().join("lazyjira-test");
+        // empty: the files in it carry the process id (`project`), so runs don't meet. It is per
+        // user, since a directory this code makes is 0700 and on a shared temp dir another
+        // user's runs couldn't write to the first one's.
+        let user = std::env::var("USER").unwrap_or_default();
+        return std::env::temp_dir().join(format!("lazyjira-test-{user}"));
     }
     cache_dir_in(std::env::var_os("HOME"))
 }
@@ -305,13 +308,14 @@ mod tests {
         Ticket::for_test(key, status)
     }
 
-    /// Removes the cache files a test wrote, even when it fails.
+    /// Removes the cache files and directories a test wrote, even when it fails. A directory
+    /// goes once it is empty, so list the files in it first.
     struct Remove(Vec<PathBuf>);
 
     impl Drop for Remove {
         fn drop(&mut self) {
             for path in &self.0 {
-                let _ = std::fs::remove_file(path);
+                let _ = std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path));
             }
         }
     }
@@ -735,19 +739,18 @@ mod tests {
         // made readable by everyone.
         for (name, before) in [("new", None), ("old", Some(0o755))] {
             let dir = cache_dir().join(format!("{name}-{}", std::process::id()));
+            let made = dir.join("x.json");
+            let _remove = Remove(vec![made.clone(), dir.clone()]);
             if let Some(before) = before {
                 std::fs::create_dir_all(&dir).unwrap();
                 std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(before)).unwrap();
             }
-            let made = dir.join("x.json");
             write_cache_text(&made, "{}").unwrap();
             assert_eq!(
                 (mode(&dir), mode(&made)),
                 (0o700, 0o600),
                 "{name} directory"
             );
-            std::fs::remove_file(&made).unwrap();
-            std::fs::remove_dir(&dir).unwrap();
         }
     }
 }
