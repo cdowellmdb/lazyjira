@@ -2625,7 +2625,9 @@ mod tests {
         app.loading = false;
         app.search = Some("ui ".to_string());
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        handle_search_keys(&mut app, KeyCode::Char('U'), KeyModifiers::SHIFT, &tx).await;
+        let mut config = sample_config();
+        let key = KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT);
+        handle_key(&mut app, key, &tx, &mut config).await;
 
         assert_eq!(app.search.as_deref(), Some("ui U"));
         assert!(app.bulk_upload_state.is_none());
