@@ -18,7 +18,7 @@ Use `lazyjira --dev-release` for an optimized rebuild. Dev mode prefers the lazy
 
 `.githooks/pre-commit` runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` when Rust files are staged. Enable it per clone with `git config core.hooksPath .githooks`. Don't bypass it with `--no-verify` unless asked; fix what it reports.
 
-Tests never reach Jira: `jira_client::run_cmd` and `jira_rest` refuse to run under `cfg(test)`. Tests and docs use made-up ticket keys like `DEMO-1`.
+Tests never reach Jira: `jira_client::run_cmd` and `jira_rest` refuse to run under `cfg(test)`. Tests and docs use made-up data throughout: ticket keys like `DEMO-1`, people, emails, epics and labels.
 
 ## Architecture
 
@@ -55,16 +55,16 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 
 Read the named section of [docs/architecture.md](docs/architecture.md) before changing:
 
-- **Epic reads or epic progress**: "Epics come from batched searches"
-- **My Work, Team or Unassigned reads, list JQL, or email matching**: "Lists come from one Jira search"
+- **Epic reads, epic progress or how many searches run at once**: "Epics come from batched searches"
+- **My Work, Team or Unassigned reads, saved filters (`scoped_jql`), list JQL, or email matching**: "Lists come from one Jira search"
 - **Ticket details, their cache or prefetch**: "Detail data uses JSON + local cache"
 - **Cache files, their location or format**: "Local caches"
 - **Status order, done-ness or `[statuses]`**: "Statuses"
-- **Moves or the move picker**: "Moves use Jira's transitions" and "Moves wait for Jira"
-- **Grouped rows, selection, tab switching or mouse targets**: "Visible rows"
+- **Moves, the move picker, adding a Jira read, or writing a ticket's status**: "Moves use Jira's transitions" and "Moves wait for Jira"
+- **Grouped rows, selection, tab switching, cache mutation helpers, mouse targets or form fields**: "Visible rows"
 - **Sub-tasks, parents or folding**: "Sub-tasks nest under their parent"
 - **Colors or themes**: "Themes recolor the finished frame"
-- **Columns, marks, done-group folding or the detail overlay's scrolling**: "Current UX behavior"
+- **Columns, marks, Team including the current user, done-group folding, done ordering (`order_done`) or the detail overlay's scrolling**: "Current UX behavior"
 
 ## Configuration
 
@@ -88,7 +88,8 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 
 ## Demo recording
 
-`docs/demo/record.sh` re-records `docs/images/demo.gif` with VHS (`docs/demo/record.sh docs/demo/themes.tape` re-records `docs/images/themes.gif`). It runs the app with a throwaway `HOME`/`TMPDIR` and puts `docs/demo/bin/jira` (a fake `jira` CLI with made-up data) first on `PATH`. It also starts `docs/demo/bin/fake_jira_rest.py`, which serves `POST /rest/api/2/search` and `GET /rest/api/2/issue/KEY` from the fake CLI's data (it imports `bin/jira`), and writes a jira-cli config in the throwaway `HOME` whose `server` points at it, with `epic.link` and `JIRA_API_TOKEN=demo`. Never record against a real Jira instance. The fake CLI answers only `jira me` and no-op writes; if you change which `jira` subcommands or flags the app uses, update it to match. If you change the JQL or fields a search sends, update the fake's evaluator (`evaluate`/`matches` in `bin/jira`) and `base_fields`; its Assigned Teams clause compares the value with `TEAM_NAME`, which must match the demo config's `jira.team_name`. Moves aren't served, so the demo doesn't show them. Re-record the GIFs once per PR, after its last merge, rather than per ticket.
+`docs/demo/record.sh` re-records `docs/images/demo.gif` with VHS (`docs/demo/record.sh docs/demo/themes.tape` re-records `docs/images/themes.gif`). It runs the app with a throwaway `HOME`/`TMPDIR` and puts `docs/demo/bin/jira` (a fake `jira` CLI with made-up data) first on `PATH`. It also starts `docs/demo/bin/fake_jira_rest.py`, which serves `POST /rest/api/2/search` and `GET /rest/api/2/issue/KEY` from the fake CLI's data (it imports `bin/jira`), and writes a jira-cli config in the throwaway `HOME` whose `server` points at it, with `epic.link` and `JIRA_API_TOKEN=demo`. Never record against a real Jira instance. The fake CLI answers only `jira me` and no-op writes; if you change which `jira` subcommands or flags the app uses, update it to match. If you change the JQL or fields a search sends, update the fake's evaluator (`evaluate`/`matches` in `bin/jira`) and `base_fields`; its Assigned Teams clause compares the value with `TEAM_NAME`, which must match the demo config's `jira.team_name`. Moves aren't served, so the demo doesn't show them. Re-record the GIFs once per PR, after the PR's final code change, rather than per ticket.
+
 ## Notes
 
 `README.md` is the onboarding doc: run instructions, keybindings and user-visible behaviour.
