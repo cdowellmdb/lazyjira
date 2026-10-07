@@ -120,7 +120,14 @@ pub fn save_full_cache_snapshot(project: &str, cache: &Cache) -> Result<()> {
     write_cache_file(&cache_path(FULL_CACHE_PREFIX, project), &snapshot)
 }
 
+/// Deletes the `prefix` cache an earlier build left straight in the system temp dir. It is
+/// ignored from here on, and on a shared temp dir it is readable by everyone.
+fn remove_temp_dir_cache(prefix: &str, project: &str) {
+    let _ = std::fs::remove_file(cache_file(&std::env::temp_dir(), prefix, project));
+}
+
 pub fn load_epics_cache(project: &str) -> Vec<Epic> {
+    remove_temp_dir_cache(EPICS_CACHE_PREFIX, project);
     read_cache_file(&cache_path(EPICS_CACHE_PREFIX, project)).unwrap_or_default()
 }
 
@@ -129,6 +136,7 @@ pub fn save_epics_cache(project: &str, epics: &[Epic]) -> Result<()> {
 }
 
 fn load_details_cache(project: &str) -> HashMap<String, Ticket> {
+    remove_temp_dir_cache(DETAILS_CACHE_PREFIX, project);
     read_cache_file(&cache_path(DETAILS_CACHE_PREFIX, project)).unwrap_or_default()
 }
 
@@ -447,19 +455,29 @@ mod tests {
     }
 
     #[test]
-    fn an_old_temp_dir_epics_cache_is_ignored() {
+    fn old_temp_dir_caches_are_ignored_and_removed() {
         let project = project("OLDTMP");
         let epics = vec![Epic {
             key: "OLDTMP-1".into(),
             summary: "Old".into(),
             children: vec![],
         }];
-        // Where the epics cache lived before it moved: straight in the system temp dir.
-        let old = std::env::temp_dir().join(format!("lazyjira_epics_cache_{project}.json"));
-        let _remove = Remove(vec![old.clone(), cache_path(EPICS_CACHE_PREFIX, &project)]);
-        std::fs::write(&old, serde_json::to_string(&epics).unwrap()).unwrap();
+        // Where the epics and details caches lived before they moved: straight in the system
+        // temp dir, readable by everyone on a shared one.
+        let old = |prefix| std::env::temp_dir().join(format!("{prefix}_{project}.json"));
+        let (old_epics, old_details) = (old(EPICS_CACHE_PREFIX), old(DETAILS_CACHE_PREFIX));
+        let details = HashMap::from([("OLDTMP-1".to_string(), test_ticket("OLDTMP-1", "To Do"))]);
+        let _remove = Remove(vec![
+            old_epics.clone(),
+            old_details.clone(),
+            cache_path(EPICS_CACHE_PREFIX, &project),
+        ]);
+        std::fs::write(&old_epics, serde_json::to_string(&epics).unwrap()).unwrap();
+        std::fs::write(&old_details, serde_json::to_string(&details).unwrap()).unwrap();
 
         assert!(load_epics_cache(&project).is_empty());
+        assert!(load_details_cache(&project).is_empty());
+        assert!(!old_epics.exists() && !old_details.exists());
 
         save_epics_cache(&project, &epics).unwrap();
         assert_eq!(load_epics_cache(&project)[0].key, "OLDTMP-1");
