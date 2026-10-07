@@ -1468,13 +1468,6 @@ async fn handle_search_keys(
                 }
             }
         }
-        KeyCode::Char('U') => {
-            app.search = None;
-            app.bulk_upload_state = Some(BulkUploadState::PathInput {
-                path: widgets::form::editor("").into(),
-                loading: false,
-            });
-        }
         KeyCode::Backspace => {
             if let Some(ref mut s) = app.search {
                 s.pop();
@@ -2624,6 +2617,20 @@ mod tests {
 
         assert_eq!(app.detail_epic_key.as_deref(), Some("DEMO-501"));
         assert!(app.detail_ticket_key.is_none());
+    }
+
+    #[tokio::test]
+    async fn uppercase_u_types_into_search() {
+        let mut app = App::new();
+        app.loading = false;
+        app.search = Some("ui ".to_string());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut config = sample_config();
+        let key = KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT);
+        handle_key(&mut app, key, &tx, &mut config).await;
+
+        assert_eq!(app.search.as_deref(), Some("ui U"));
+        assert!(app.bulk_upload_state.is_none());
     }
 
     #[test]
