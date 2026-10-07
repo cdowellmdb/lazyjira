@@ -132,14 +132,16 @@ pub fn save_full_cache_snapshot(project: &str, cache: &Cache) -> Result<()> {
     write_cache_file(&cache_path(FULL_CACHE_PREFIX, project), &snapshot)
 }
 
-/// Deletes the `prefix` cache an earlier build left straight in the system temp dir. It is
-/// ignored from here on, and on a shared temp dir it is readable by everyone.
-fn remove_temp_dir_cache(prefix: &str, project: &str) {
-    let _ = std::fs::remove_file(cache_file(&std::env::temp_dir(), prefix, project));
+/// Deletes the epics and details caches 0.9.0 left for `project` straight in the system temp
+/// dir, and nothing else there. They are ignored from here on, and on a shared temp dir they are
+/// readable by everyone. Called once at startup.
+pub fn remove_old_temp_dir_caches(project: &str) {
+    for prefix in [EPICS_CACHE_PREFIX, DETAILS_CACHE_PREFIX] {
+        let _ = std::fs::remove_file(cache_file(&std::env::temp_dir(), prefix, project));
+    }
 }
 
 pub fn load_epics_cache(project: &str) -> Vec<Epic> {
-    remove_temp_dir_cache(EPICS_CACHE_PREFIX, project);
     read_cache_file(&cache_path(EPICS_CACHE_PREFIX, project)).unwrap_or_default()
 }
 
@@ -148,7 +150,6 @@ pub fn save_epics_cache(project: &str, epics: &[Epic]) -> Result<()> {
 }
 
 fn load_details_cache(project: &str) -> HashMap<String, Ticket> {
-    remove_temp_dir_cache(DETAILS_CACHE_PREFIX, project);
     read_cache_file(&cache_path(DETAILS_CACHE_PREFIX, project)).unwrap_or_default()
 }
 
@@ -466,19 +467,23 @@ mod tests {
         );
     }
 
+    /// Where the epics and details caches lived in 0.9.0: straight in the system temp dir,
+    /// readable by everyone on a shared one.
+    fn old_temp_dir_cache(prefix: &str, project: &str) -> PathBuf {
+        cache_file(&std::env::temp_dir(), prefix, project)
+    }
+
     #[test]
-    fn old_temp_dir_caches_are_ignored_and_removed() {
+    fn caches_in_the_system_temp_dir_are_not_read_and_reading_leaves_them() {
         let project = project("OLDTMP");
         let epics = vec![Epic {
             key: "OLDTMP-1".into(),
             summary: "Old".into(),
             children: vec![],
         }];
-        // Where the epics and details caches lived before they moved: straight in the system
-        // temp dir, readable by everyone on a shared one.
-        let old = |prefix| std::env::temp_dir().join(format!("{prefix}_{project}.json"));
-        let (old_epics, old_details) = (old(EPICS_CACHE_PREFIX), old(DETAILS_CACHE_PREFIX));
         let details = HashMap::from([("OLDTMP-1".to_string(), test_ticket("OLDTMP-1", "To Do"))]);
+        let old_epics = old_temp_dir_cache(EPICS_CACHE_PREFIX, &project);
+        let old_details = old_temp_dir_cache(DETAILS_CACHE_PREFIX, &project);
         let _remove = Remove(vec![
             old_epics.clone(),
             old_details.clone(),
@@ -489,10 +494,46 @@ mod tests {
 
         assert!(load_epics_cache(&project).is_empty());
         assert!(load_details_cache(&project).is_empty());
-        assert!(!old_epics.exists() && !old_details.exists());
+        // A load reads; deleting is `remove_old_temp_dir_caches`'s job, once at startup.
+        assert!(old_epics.exists() && old_details.exists());
 
         save_epics_cache(&project, &epics).unwrap();
         assert_eq!(load_epics_cache(&project)[0].key, "OLDTMP-1");
+    }
+
+    #[test]
+    fn startup_removes_the_two_caches_0_9_0_left_for_the_project_and_nothing_else() {
+        let (project, other) = (project("OLDGONE"), project("OLDKEPT"));
+        let temp = std::env::temp_dir();
+        let old = [
+            old_temp_dir_cache(EPICS_CACHE_PREFIX, &project),
+            old_temp_dir_cache(DETAILS_CACHE_PREFIX, &project),
+        ];
+        // What stays: another project's old caches, other lazyjira files in the temp dir (one
+        // named after this project's, one a different cache), and the caches where they live now.
+        let kept = [
+            old_temp_dir_cache(EPICS_CACHE_PREFIX, &other),
+            old_temp_dir_cache(DETAILS_CACHE_PREFIX, &other),
+            temp.join(format!("lazyjira_bulk_upload_{project}.csv")),
+            old_temp_dir_cache(FULL_CACHE_PREFIX, &project),
+            temp.join(format!("{EPICS_CACHE_PREFIX}_{project}.json.bak")),
+            cache_path(EPICS_CACHE_PREFIX, &project),
+            cache_path(DETAILS_CACHE_PREFIX, &project),
+        ];
+        let _remove = Remove(old.iter().chain(&kept).cloned().collect());
+        for path in old.iter().chain(&kept) {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "{}").unwrap();
+        }
+
+        remove_old_temp_dir_caches(&project);
+
+        assert!(old.iter().all(|path| !path.exists()));
+        for path in &kept {
+            assert!(path.exists(), "removed {}", path.display());
+        }
+        // Nothing left to remove is not an error.
+        remove_old_temp_dir_caches(&project);
     }
 
     #[test]
