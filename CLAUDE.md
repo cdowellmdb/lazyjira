@@ -93,6 +93,8 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 
 `README.md` is the onboarding doc: run instructions, keybindings and user-visible behaviour.
 
+Before reading, working on or closing an issue, read [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
+
 ## Commit Messages
 Follow @COMMIT_STYLING.md
 
