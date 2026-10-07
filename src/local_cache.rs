@@ -111,7 +111,7 @@ fn write_cache_text(path: &Path, json: &str) -> Result<()> {
     })
 }
 
-fn now_unix_secs() -> u64 {
+pub fn now_unix_secs() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => duration.as_secs(),
         Err(_) => 0,

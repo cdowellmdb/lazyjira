@@ -239,12 +239,12 @@ mod tests {
         let mut app = App::new();
         app.loading = false;
         app.cache.my_tickets = vec![first.clone(), labelled("DEMO-2", Some("Grading"), &[])];
-        let rows = draw(&app, Tab::MyWork, 100);
+        let rows = draw(&app, Tab::MyWork, 110);
         assert!(line_with(&rows, "DEMO-1").unwrap().0.contains(&summary));
 
         app.cache.my_tickets = vec![first, labelled("DEMO-2", Some("Runner"), &[])];
         app.mark_cache_changed();
-        let rows = draw(&app, Tab::MyWork, 100);
+        let rows = draw(&app, Tab::MyWork, 110);
         assert!(!line_with(&rows, "DEMO-1").unwrap().0.contains("END"));
     }
 
@@ -475,6 +475,75 @@ mod tests {
         let rows = rows_of(&app, Tab::MyWork);
         assert_eq!(column(&rows, "DEMO-3"), column(&rows, "DEMO-1"));
         assert!(rows[row(&rows, "DEMO-3")].contains("DEMO-1 › DEMO-3"));
+    }
+
+    #[test]
+    fn updated_column_shows_ages_and_done_groups_list_the_newest_first() {
+        const NOW: i64 = 1_790_763_800; // 2026-09-30T10:23:20Z
+        let ticket = |key: &str, status: &str, updated: &str, labels: &[&str]| {
+            let mut ticket = labelled(key, None, labels);
+            ticket.status = status.into();
+            ticket.updated = Some(format!("{updated}.000+0000"));
+            ticket.assignee_email = Some("alex@example.com".into());
+            ticket
+        };
+        let mut subtask = ticket("DEMO-6", "Closed", "2026-09-30T10:23:20", &[]);
+        subtask.parent_key = Some("DEMO-3".into());
+        let tickets = vec![
+            ticket("DEMO-1", "In Progress", "2026-09-30T10:00:00", &["a"]), // 23m
+            ticket("DEMO-2", "In Progress", "2026-09-27T09:00:00", &[]),    // 3d
+            ticket("DEMO-3", "Closed", "2026-09-01T00:00:00", &[]),         // 4w
+            ticket("DEMO-4", "Closed", "2026-09-30T05:00:00", &[]),         // 5h
+            ticket("DEMO-5", "Closed", "2026-09-20T00:00:00", &[]),         // 1w
+            subtask, // newest, but follows its parent
+        ];
+        let mut app = App::new();
+        app.loading = false;
+        app.show_done = true;
+        app.clock = || NOW;
+        app.cache.team_members = vec![TeamMember {
+            name: "Alex".into(),
+            email: "alex@example.com".into(),
+        }];
+        app.cache.my_tickets = tickets.clone();
+        app.cache.team_tickets = tickets.clone();
+        app.filter_focus = FilterFocus::Results;
+        app.filter_results = tickets.clone();
+
+        for tab in [Tab::MyWork, Tab::Team, Tab::Filters] {
+            app.active_tab = tab;
+            app.mark_cache_changed();
+            let rows = draw(&app, tab, 160);
+            let header = &line_with(&rows, "SEL KEY").unwrap().0;
+            let column = |title: &str| header.split('│').position(|cell| cell.contains(title));
+            let updated = column("UPDATED").expect(header);
+            if let Some(labels) = column("LABELS") {
+                assert_eq!(updated + 1, labels, "{tab:?}: {header}");
+            }
+            let age_of = |key: &str| {
+                let row = &line_with(&rows, key).unwrap().0;
+                row.split('│').nth(updated).unwrap().trim().to_string()
+            };
+            for (key, age) in [("DEMO-1", "23m"), ("DEMO-2", "3d"), ("DEMO-4", "5h")] {
+                assert_eq!(age_of(key), age, "{tab:?}: {key}");
+            }
+            // Done rows newest first, the sub-task right under its parent; active rows keep
+            // their order.
+            let order = vec!["DEMO-1", "DEMO-2", "DEMO-4", "DEMO-5", "DEMO-3", "DEMO-6"];
+            let mut drawn = order.clone();
+            drawn.sort_by_key(|key| rows.iter().position(|(r, _)| r.contains(key)).unwrap());
+            assert_eq!(drawn, order, "{tab:?}");
+        }
+
+        // Unassigned has no Labels column; Updated comes last.
+        let mut unassigned = ticket("DEMO-7", "To Do", "2026-09-30T09:23:20", &[]);
+        unassigned.assignee_email = Some("__unassigned__".into());
+        app.cache.team_tickets = vec![unassigned];
+        app.active_tab = Tab::Unassigned;
+        app.mark_cache_changed();
+        let rows = draw(&app, Tab::Unassigned, 160);
+        assert!(line_with(&rows, "SEL KEY").unwrap().0.contains("UPDATED"));
+        assert!(line_with(&rows, "DEMO-7").unwrap().0.contains(" 1h"));
     }
 
     #[test]
