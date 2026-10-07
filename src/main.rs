@@ -1,11 +1,18 @@
 mod app;
+mod bounded;
 mod bulk_actions;
 mod bulk_plan;
 mod bulk_upload;
 mod cache;
 mod config;
 mod jira_client;
+mod jira_issue;
+mod jira_reads;
 mod jira_rest;
+mod jira_search;
+mod jql;
+mod lists;
+mod local_cache;
 mod mouse;
 mod move_picker;
 mod moves;
@@ -36,6 +43,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::bulk_actions::{BulkAction, BulkCall, BulkSummary, BulkTarget};
 use crate::bulk_plan::{BulkJob, BulkPlan, FetchedTransitions};
 use crate::config::AppConfig;
+use crate::jira_rest::describe;
 use crate::move_picker::JiraCall;
 use app::{
     App, BulkUploadPreview, BulkUploadState, BulkUploadSummary, DetailMode, FilterFocus, Tab,
@@ -112,9 +120,9 @@ fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, c
     let tx = tx.clone();
     let config = config.clone();
     tokio::spawn(async move {
-        let result = jira_client::refresh_epics_cache(&config)
+        let result = jira_reads::refresh_epics_cache(&config)
             .await
-            .map_err(|e| e.to_string());
+            .map_err(|e| describe(&e));
         let _ = tx.send(BackgroundMessage::EpicsRefreshed {
             request,
             requested_at,
@@ -134,13 +142,14 @@ fn spawn_cache_refresh(
     app.cache_refresh_request = request;
     let tx = tx.clone();
     let config = config.clone();
+    let details = app.details.clone();
     tokio::spawn(async move {
         let result = match phase {
-            CacheRefreshPhase::ActiveOnly => jira_client::fetch_active_only(&config).await,
-            CacheRefreshPhase::Full => jira_client::fetch_all(&config).await,
-            CacheRefreshPhase::Manual => jira_client::fetch_all(&config).await,
+            CacheRefreshPhase::ActiveOnly => jira_reads::fetch_active_only(&config, &details).await,
+            CacheRefreshPhase::Full => jira_reads::fetch_all(&config, &details).await,
+            CacheRefreshPhase::Manual => jira_reads::fetch_all(&config, &details).await,
         }
-        .map_err(|e| e.to_string());
+        .map_err(|e| describe(&e));
         let _ = tx.send(BackgroundMessage::CacheRefreshed {
             request,
             phase,
@@ -157,9 +166,9 @@ fn spawn_ticket_detail_fetch(
 ) {
     let tx = tx.clone();
     tokio::spawn(async move {
-        let result = jira_client::fetch_ticket_detail(&key)
+        let result = jira_search::fetch_ticket_detail(&key)
             .await
-            .map_err(|e| e.to_string());
+            .map_err(|e| describe(&e));
         let _ = tx.send(BackgroundMessage::TicketDetailFetched {
             key,
             requested_at,
@@ -173,45 +182,20 @@ fn spawn_ticket_detail_prefetch(
     keys: Vec<String>,
     requested_at: u64,
 ) {
-    const MAX_CONCURRENCY: usize = 6;
     if keys.is_empty() {
         return;
     }
 
     let tx = tx.clone();
     tokio::spawn(async move {
-        let mut iter = keys.into_iter();
-        let mut tasks = tokio::task::JoinSet::new();
-
-        for _ in 0..MAX_CONCURRENCY {
-            if let Some(key) = iter.next() {
-                tasks.spawn(async move {
-                    let result = jira_client::fetch_ticket_detail(&key)
-                        .await
-                        .map_err(|e| e.to_string());
-                    (key, result)
-                });
-            }
-        }
-
-        while let Some(joined) = tasks.join_next().await {
-            if let Ok((key, result)) = joined {
-                let _ = tx.send(BackgroundMessage::TicketDetailFetched {
-                    key,
-                    requested_at,
-                    result,
-                });
-            }
-
-            if let Some(next_key) = iter.next() {
-                tasks.spawn(async move {
-                    let result = jira_client::fetch_ticket_detail(&next_key)
-                        .await
-                        .map_err(|e| e.to_string());
-                    (next_key, result)
-                });
-            }
-        }
+        jira_search::fetch_ticket_details(&keys, |key, result| {
+            let _ = tx.send(BackgroundMessage::TicketDetailFetched {
+                key,
+                requested_at,
+                result,
+            });
+        })
+        .await;
     });
 }
 
@@ -229,7 +213,7 @@ fn spawn_transitions_fetch(tx: &UnboundedSender<BackgroundMessage>, key: String,
     tokio::spawn(async move {
         let result = jira_rest::get_transitions(&key)
             .await
-            .map_err(|e| format!("{:#}", e));
+            .map_err(|e| describe(&e));
         let _ = tx.send(BackgroundMessage::TransitionsFetched {
             key,
             request,
@@ -246,10 +230,9 @@ fn spawn_ticket_move(
 ) {
     let tx = tx.clone();
     tokio::spawn(async move {
-        // `{:#}` keeps the whole error chain, e.g. why Jira could not be reached.
         let result = jira_rest::transition(&key, &transition_id, resolution_id.as_deref())
             .await
-            .map_err(|e| format!("{:#}", e));
+            .map_err(|e| describe(&e));
         let _ = tx.send(BackgroundMessage::TicketMoved { key, result });
     });
 }
@@ -283,18 +266,12 @@ where
     Fut: std::future::Future<Output = (String, std::result::Result<T, String>)> + Send + 'static,
     T: Send + 'static,
 {
-    let mut items = items.into_iter();
-    let mut tasks = tokio::task::JoinSet::new();
-    for item in items.by_ref().take(MAX_BULK_CONCURRENCY) {
-        tasks.spawn(task(item));
-    }
     let mut results = Vec::new();
-    while let Some(joined) = tasks.join_next().await {
+    bounded::for_each_bounded(MAX_BULK_CONCURRENCY, items, task, |_, joined| {
         results.push(joined.unwrap_or_else(|err| ("unknown".to_string(), Err(err.to_string()))));
-        if let Some(item) = items.next() {
-            tasks.spawn(task(item));
-        }
-    }
+        std::ops::ControlFlow::Continue(())
+    })
+    .await;
     results
 }
 
@@ -308,7 +285,7 @@ fn spawn_bulk_transitions_fetch(
         let mut fetched = run_bounded(targets.clone(), |key| async move {
             let result = jira_rest::get_transitions(&key)
                 .await
-                .map_err(|e| format!("{:#}", e));
+                .map_err(|e| describe(&e));
             (key, result)
         })
         .await;
@@ -338,7 +315,7 @@ fn spawn_bulk_execution(
                 } => jira_rest::transition(&key, &transition.id, resolution_id.as_deref()).await,
                 BulkJob::Assign { email } => jira_client::assign_ticket(&key, &email).await,
             };
-            (key, result.map_err(|e| format!("{:#}", e)))
+            (key, result.map_err(|e| describe(&e)))
         })
         .await;
         let summary = bulk_actions::summarize(action, target, results, plan.skipped);
@@ -472,10 +449,12 @@ async fn main() -> Result<()> {
         .find(|tab| tab.title() == config.preferences.start_tab)
         .unwrap_or(Tab::MyWork);
     let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel();
-    let detail_cache_tx = jira_client::spawn_detail_cache_writer(&config.jira.project);
+    local_cache::remove_old_temp_dir_caches(&config.jira.project);
+    app.details = local_cache::DetailCache::spawn(&config.jira.project);
+    jira_reads::keep_my_email_current(&config.jira.project);
 
     // Fast startup: load persisted snapshot immediately, then revalidate in stages.
-    if let Some(snapshot) = jira_client::load_startup_cache_snapshot(&config.jira.project) {
+    if let Some(snapshot) = local_cache::load_startup_cache_snapshot(&config.jira.project) {
         app.replace_cache(snapshot.cache, app.moves.now());
         app.loading = false;
         app.cache_stale_age_secs = Some(snapshot.age_secs);
@@ -483,7 +462,15 @@ async fn main() -> Result<()> {
         app.flash = Some("Loaded cached data. Refreshing active tickets...".to_string());
         spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::ActiveOnly, &config);
     } else {
-        let cache = jira_client::fetch_active_only(&config).await?;
+        let cache = match jira_reads::fetch_active_only(&config, &app.details).await {
+            Ok(cache) => cache,
+            Err(e) => {
+                // No snapshot to fall back on. Leave the screen first, or the error is lost
+                // in it (a missing JIRA_API_TOKEN lands here on a first run).
+                restore_terminal(&mut terminal)?;
+                return Err(e);
+            }
+        };
         app.replace_cache(cache, app.moves.now());
         app.loading = false;
         app.ticket_sync_stage = Some(TicketSyncStage::Full);
@@ -563,7 +550,7 @@ async fn main() -> Result<()> {
                             app.ticket_sync_stage = None;
                             app.clamp_selection();
                             queue_detail_prefetch(&mut app, &bg_tx);
-                            if let Err(e) = jira_client::save_full_cache_snapshot(
+                            if let Err(e) = local_cache::save_full_cache_snapshot(
                                 &config.jira.project,
                                 &app.cache,
                             ) {
@@ -585,7 +572,7 @@ async fn main() -> Result<()> {
                             app.ticket_sync_stage = None;
                             app.clamp_selection();
                             queue_detail_prefetch(&mut app, &bg_tx);
-                            if let Err(e) = jira_client::save_full_cache_snapshot(
+                            if let Err(e) = local_cache::save_full_cache_snapshot(
                                 &config.jira.project,
                                 &app.cache,
                             ) {
@@ -614,12 +601,8 @@ async fn main() -> Result<()> {
                     app.end_detail_fetch(&key);
                     match result {
                         Ok(detail) => {
-                            if app.enrich_ticket(&key, requested_at, &detail)
-                                && detail_cache_tx.send(detail).is_err()
-                            {
-                                app.flash = Some(
-                                    "Detail cache writer unavailable; skipping write".to_string(),
-                                );
+                            if app.enrich_ticket(&key, requested_at, &detail) {
+                                app.details.record(detail);
                             }
                         }
                         Err(e) => app.fail_detail_fetch(&key, e),
@@ -796,7 +779,13 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Restore terminal
+    // Details recorded in the last moments are saved before the process ends.
+    app.details.close(&app.listed_keys());
+    restore_terminal(&mut terminal)
+}
+
+/// Leaves raw mode and the alternate screen, so what prints next stays readable.
+fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -805,7 +794,6 @@ async fn main() -> Result<()> {
         DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
-
     Ok(())
 }
 
@@ -1213,8 +1201,9 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
 
     // Status bar
     let status_line = if let Some(ref flash) = app.flash {
+        // One line: the terminal drops a line break, which would run Jira's messages together.
         Line::from(Span::styled(
-            flash.as_str(),
+            flash.lines().collect::<Vec<_>>().join("; "),
             Style::default().fg(Color::Red),
         ))
     } else if let Some(ref search) = app.search {
@@ -1414,7 +1403,7 @@ fn handle_move_failure_keys(app: &mut App, key: KeyCode) {
 }
 
 fn open_ticket_in_browser(app: &mut App, key: &str) {
-    let result = jira_client::browse_url(key)
+    let result = jira_rest::browse_url(key)
         .and_then(|url| Command::new("open").arg(url).spawn().map_err(Into::into));
     if let Err(error) = result {
         app.flash = Some(format!("Couldn't open browser: {error:#}"));
@@ -2102,9 +2091,9 @@ fn handle_filter_keys(
                     let jql = filter.jql.clone();
                     let requested_at = app.moves.now();
                     tokio::spawn(async move {
-                        let result = jira_client::fetch_jql_query(&cfg, &jql)
+                        let result = jira_reads::fetch_jql_query(&cfg, &jql)
                             .await
-                            .map_err(|e| e.to_string());
+                            .map_err(|e| describe(&e));
                         let _ = tx.send(BackgroundMessage::FilterResults {
                             requested_at,
                             result,
@@ -2330,6 +2319,56 @@ mod tests {
         }
     }
 
+    /// The most calls `run_bounded` has going at once over `count` items that each take a moment.
+    async fn most_at_once(count: usize) -> usize {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        use std::sync::Arc;
+
+        let running = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+        let (r, m) = (running.clone(), most.clone());
+        let results = run_bounded((0..count).collect(), move |n| {
+            let (running, most) = (r.clone(), m.clone());
+            async move {
+                most.fetch_max(running.fetch_add(1, SeqCst) + 1, SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                running.fetch_sub(1, SeqCst);
+                (format!("AMP-{n}"), Ok::<(), String>(()))
+            }
+        })
+        .await;
+        assert_eq!(results.len(), count);
+        most.load(SeqCst)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_bulk_action_makes_six_jira_calls_at_a_time() {
+        assert_eq!(most_at_once(5).await, 5);
+        assert_eq!(most_at_once(6).await, 6);
+        // The seventh waits for one of the six to finish.
+        assert_eq!(most_at_once(7).await, 6);
+    }
+
+    #[test]
+    fn a_multi_line_error_reads_as_one_line_in_the_status_bar() {
+        use ratatui::backend::TestBackend;
+
+        let mut app = App::new();
+        app.flash = Some(
+            "Refresh failed: Jira answered 400 Bad Request.\nError in the JQL Query".to_string(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+
+        terminal.draw(|f| ui(f, &app, &sample_config())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let text: String = (0..100).map(|x| buffer[(x, 11)].symbol()).collect();
+        assert!(
+            text.contains("400 Bad Request.; Error in the JQL Query"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn main_footer_highlights_shortcuts_and_keeps_status_indicators_muted() {
         use ratatui::backend::TestBackend;
@@ -2378,19 +2417,8 @@ mod tests {
 
     fn ticket(key: &str, summary: &str, status: &str) -> crate::cache::Ticket {
         crate::cache::Ticket {
-            key: key.to_string(),
             summary: summary.to_string(),
-            status: status.to_string(),
-            assignee: None,
-            assignee_email: None,
-            reporter: None,
-            description: None,
-            labels: Vec::new(),
-            epic_key: None,
-            epic_name: None,
-            parent_key: None,
-            detail_loaded: false,
-            activity: Vec::new(),
+            ..crate::cache::Ticket::for_test(key, status)
         }
     }
 

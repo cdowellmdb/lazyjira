@@ -217,7 +217,7 @@ fn name_key(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
-/// A single entry in a ticket's activity history (changelog or comment).
+/// A single entry in a ticket's activity: a comment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityEntry {
     pub timestamp: String,
@@ -226,29 +226,42 @@ pub struct ActivityEntry {
     pub kind: ActivityKind,
 }
 
-/// The type of activity: status change, comment, assignee change, or generic field change.
+/// What an activity entry is. Comments are all Jira's search and issue reads give (neither asks
+/// for the changelog). It stays an enum so caches written so far still load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActivityKind {
-    StatusChange {
-        from: String,
-        to: String,
-    },
-    Comment {
-        body: String,
-    },
-    AssigneeChange {
-        from: Option<String>,
-        to: Option<String>,
-    },
-    FieldChange {
-        field: String,
-        from: String,
-        to: String,
-    },
+    Comment { body: String },
 }
 
+/// The roster member `ticket` is assigned to: the one with the assignee's email, else the one
+/// with their display name, for when Jira hides the email (or the roster has another address).
+/// The list search only finds tickets assigned to a roster email, so an email the roster lacks
+/// is another address of someone on it, and the name is how to tell who. A detail read can show
+/// anyone, so a stranger who shares a display name with a roster member is taken for them until
+/// the next list read; that is accepted over a duplicate row for the same person.
+pub fn roster_member<'a>(members: &'a [TeamMember], ticket: &Ticket) -> Option<&'a TeamMember> {
+    let by_email = ticket
+        .assignee_email
+        .as_deref()
+        .and_then(|email| members.iter().find(|member| member.email == email));
+    by_email.or_else(|| {
+        let name = ticket.assignee.as_deref()?.to_lowercase();
+        members
+            .iter()
+            .find(|member| member.name.to_lowercase() == name)
+    })
+}
+
+/// The Team row that holds tickets nobody has taken, and the email that stands for it.
+pub const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
+pub const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";
+
+/// What a ticket's status reads as when Jira's answer has none. It isn't a real status, so it
+/// shows plainly instead of passing as To Do, and a detail read never copies it over a real one.
+pub const UNKNOWN_STATUS: &str = "Unknown";
+
 /// A single Jira ticket.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Ticket {
     pub key: String,
     pub summary: String,
@@ -269,6 +282,11 @@ pub struct Ticket {
     /// from the detail cache, so a re-parented sub-task doesn't keep its old parent.
     #[serde(default)]
     pub parent_key: Option<String>,
+    /// Jira's `updated` timestamp as Jira sends it (`2026-09-30T10:23:20.000+0000`). Filled by
+    /// the list search; caches from before it load without one. Nothing shows it yet: it is kept
+    /// for an Updated column in the lists.
+    #[serde(default)]
+    pub updated: Option<String>,
     #[serde(default)]
     pub detail_loaded: bool,
     #[serde(default)]
@@ -283,16 +301,7 @@ impl Ticket {
             key: key.to_string(),
             summary: key.to_string(),
             status: status.to_string(),
-            assignee: None,
-            assignee_email: None,
-            reporter: None,
-            description: None,
-            labels: Vec::new(),
-            epic_key: None,
-            epic_name: None,
-            parent_key: None,
-            detail_loaded: false,
-            activity: Vec::new(),
+            ..Ticket::default()
         }
     }
 }
@@ -332,6 +341,35 @@ impl Epic {
     }
 }
 
+/// The form every email takes inside the app. Jira, `jira me` and the roster can spell one
+/// address in different cases, and Team groups by exact email, so each email is normalized as it
+/// comes in (from Jira's issues, the roster and `jira me`) and everything after compares exactly.
+pub fn normalize_email(email: &str) -> String {
+    email.trim().to_lowercase()
+}
+
+/// A display name made from an email's local part: `alex.rivera@…` is `Alex Rivera`.
+pub fn name_from_email(email: &str) -> String {
+    let local = email.split('@').next().unwrap_or(email);
+    local
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut out = String::new();
+                    out.push(first.to_ascii_uppercase());
+                    out.push_str(chars.as_str());
+                    out
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Team member info loaded from team.yml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamMember {
@@ -361,7 +399,25 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::{StatusRules, Ticket};
+    use super::{normalize_email, StatusRules, Ticket};
+
+    #[test]
+    fn a_name_is_made_from_the_local_part_of_an_email() {
+        assert_eq!(
+            super::name_from_email("alex.rivera@example.com"),
+            "Alex Rivera"
+        );
+        assert_eq!(super::name_from_email("sam@example.com"), "Sam");
+        assert_eq!(super::name_from_email("j..doe@example.com"), "J Doe");
+    }
+
+    #[test]
+    fn emails_are_compared_without_case_or_padding() {
+        assert_eq!(
+            normalize_email(" Sam.Chen@Example.COM "),
+            "sam.chen@example.com"
+        );
+    }
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()

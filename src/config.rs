@@ -135,10 +135,11 @@ impl AppConfig {
         let mut seen = std::collections::HashSet::new();
         let mut members = Vec::new();
         for (name, email) in &self.team {
+            let email = crate::cache::normalize_email(email);
             if !email.is_empty() && seen.insert(email.clone()) {
                 members.push(crate::cache::TeamMember {
                     name: name.clone(),
-                    email: email.clone(),
+                    email,
                 });
             }
         }
@@ -150,7 +151,7 @@ impl AppConfig {
             .statuses
             .active
             .iter()
-            .map(|s| format!("\"{}\"", s))
+            .map(|s| crate::jql::quote(s))
             .collect();
         format!("({})", quoted.join(", "))
     }
@@ -160,7 +161,7 @@ impl AppConfig {
             .statuses
             .done
             .iter()
-            .map(|s| format!("\"{}\"", s))
+            .map(|s| crate::jql::quote(s))
             .collect();
         format!("({})", quoted.join(", "))
     }
@@ -234,6 +235,24 @@ mod tests {
             preferences: Default::default(),
             themes: Default::default(),
         }
+    }
+
+    #[test]
+    fn the_roster_has_one_member_per_email_in_lower_case() {
+        let mut config = sample_config();
+        config.team.clear();
+        config
+            .team
+            .insert("Sam Chen".to_string(), "Sam.Chen@Example.com".to_string());
+        config
+            .team
+            .insert("Sam C.".to_string(), "sam.chen@example.com".to_string());
+        config.team.insert("Nobody".to_string(), String::new());
+
+        let members = config.team_members();
+
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].email, "sam.chen@example.com");
     }
 
     #[test]

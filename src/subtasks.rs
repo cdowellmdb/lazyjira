@@ -4,7 +4,6 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::cache::{Epic, Ticket};
-use crate::jira_rest::Subtask;
 
 /// A row's place in a parent's family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,49 +48,27 @@ pub fn nest(tickets: Vec<&Ticket>) -> Vec<(&Ticket, Option<Family>)> {
     rows
 }
 
-/// Sets `parent_key` on each of `tickets` that is one of `subtasks`.
-pub fn set_parents<'a>(tickets: impl IntoIterator<Item = &'a mut Ticket>, subtasks: &[Subtask]) {
-    let parents: HashMap<&str, &str> = subtasks
-        .iter()
-        .map(|subtask| (subtask.key.as_str(), subtask.parent_key.as_str()))
-        .collect();
-    for ticket in tickets {
-        if let Some(parent) = parents.get(ticket.key.as_str()) {
-            ticket.parent_key = Some(parent.to_string());
-        }
-    }
-}
-
-/// Sets `parent_key` on the epics' children that are sub-tasks, and adds the sub-tasks under an
-/// epic's children to that epic. Jira doesn't link a sub-task to the epic itself, so without
-/// this a ticket vanishes from its epic once it becomes a sub-task.
-pub fn add_to_epics(epics: &mut [Epic], subtasks: &[Subtask]) {
-    set_parents(
-        epics.iter_mut().flat_map(|epic| epic.children.iter_mut()),
-        subtasks,
-    );
+/// Adds the sub-tasks under an epic's children to that epic. Jira doesn't link a sub-task to the
+/// epic itself, so without this a ticket vanishes from its epic once it becomes a sub-task.
+/// `subtasks` are the search's tickets, each with its `parent_key`; one already among the epic's
+/// children, or repeated, is added once.
+pub fn add_to_epics(epics: &mut [Epic], subtasks: &[Ticket]) {
     for epic in epics {
-        let have: HashSet<String> = epic
+        let mut have: HashSet<String> = epic
             .children
             .iter()
             .map(|ticket| ticket.key.clone())
             .collect();
         for subtask in subtasks {
-            if have.contains(&subtask.parent_key) && !have.contains(&subtask.key) {
+            let under_a_child = subtask
+                .parent_key
+                .as_deref()
+                .is_some_and(|parent| have.contains(parent));
+            if under_a_child && have.insert(subtask.key.clone()) {
                 epic.children.push(Ticket {
-                    key: subtask.key.clone(),
-                    summary: subtask.summary.clone(),
-                    status: subtask.status.clone(),
-                    assignee: subtask.assignee.clone(),
-                    assignee_email: subtask.assignee_email.clone(),
-                    reporter: None,
-                    description: None,
-                    labels: subtask.labels.clone(),
                     epic_key: Some(epic.key.clone()),
                     epic_name: Some(epic.summary.clone()),
-                    parent_key: Some(subtask.parent_key.clone()),
-                    detail_loaded: false,
-                    activity: Vec::new(),
+                    ..subtask.clone()
                 });
             }
         }
@@ -108,15 +85,12 @@ mod tests {
         ticket
     }
 
-    fn subtask(key: &str, parent: &str) -> Subtask {
-        Subtask {
-            key: key.into(),
-            parent_key: parent.into(),
+    fn subtask(key: &str, parent: &str) -> Ticket {
+        Ticket {
             summary: format!("{key} summary"),
             status: "On Deck".into(),
             assignee: Some("Alex".into()),
-            assignee_email: None,
-            labels: vec![],
+            ..ticket(key, Some(parent))
         }
     }
 
@@ -163,20 +137,13 @@ mod tests {
     }
 
     #[test]
-    fn parents_are_set_on_the_tickets_that_are_sub_tasks() {
-        let mut tickets = [ticket("A-1", None), ticket("A-2", None)];
-        set_parents(tickets.iter_mut(), &[subtask("A-2", "A-1")]);
-        assert_eq!(tickets[0].parent_key, None);
-        assert_eq!(tickets[1].parent_key.as_deref(), Some("A-1"));
-    }
-
-    #[test]
     fn epics_gain_the_sub_tasks_of_their_children_once() {
         let mut epics = vec![
             Epic {
                 key: "E-1".into(),
                 summary: "Epic one".into(),
-                children: vec![ticket("A-1", None), ticket("A-2", None)],
+                // A-2 is already a child, as it was before it became a sub-task of A-1.
+                children: vec![ticket("A-1", None), ticket("A-2", Some("A-1"))],
             },
             Epic {
                 key: "E-2".into(),
@@ -184,8 +151,12 @@ mod tests {
                 children: vec![ticket("B-1", None)],
             },
         ];
-        // A-2 is already a child, as it was before it became a sub-task of A-1.
-        let subtasks = [subtask("A-5", "A-1"), subtask("A-2", "A-1")];
+        // A-5 is found by two searches, as a child among one chunk's keys and under another's.
+        let subtasks = [
+            subtask("A-5", "A-1"),
+            subtask("A-2", "A-1"),
+            subtask("A-5", "A-1"),
+        ];
         add_to_epics(&mut epics, &subtasks);
         add_to_epics(&mut epics, &subtasks);
 
@@ -197,6 +168,7 @@ mod tests {
         assert_eq!(new.epic_key.as_deref(), Some("E-1"));
         assert_eq!(new.epic_name.as_deref(), Some("Epic one"));
         assert_eq!(new.assignee.as_deref(), Some("Alex"));
+        assert_eq!(new.status, "On Deck");
         assert_eq!(epics[1].children.len(), 1);
     }
 }

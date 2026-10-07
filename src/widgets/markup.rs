@@ -1,6 +1,6 @@
-//! Renders Jira wiki markup (the format `jira issue view --raw` returns for
-//! descriptions) as styled lines, word-wrapped to a width so list items,
-//! quotes and code blocks keep their indent and gutter on wrapped lines.
+//! Renders Jira wiki markup (the format Jira keeps descriptions and comments in) as styled
+//! lines, word-wrapped to a width so list items, quotes and code blocks keep their indent and
+//! gutter on wrapped lines.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

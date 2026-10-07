@@ -23,7 +23,7 @@ const VIEW_HINTS: &[(&str, &str)] = &[
     ("C", "comment"),
     ("a", "assign"),
     ("e", "edit"),
-    ("h", "history"),
+    ("h", "activity"),
     ("o", "browser"),
     ("z", "zoom"),
     ("Esc", "close"),
@@ -465,9 +465,9 @@ fn comment_lines(ticket: &Ticket, width: usize) -> Vec<Line<'static>> {
         .activity
         .iter()
         .rev()
-        .filter_map(|entry| match &entry.kind {
-            ActivityKind::Comment { body } => Some((entry, body)),
-            _ => None,
+        .map(|entry| {
+            let ActivityKind::Comment { body } = &entry.kind;
+            (entry, body)
         })
         .collect();
 
@@ -788,21 +788,18 @@ mod tests {
             summary: "MAGE: MongoDB Agent Grading & Evaluation benchmark".to_string(),
             status: "In Progress".to_string(),
             assignee: Some("Christian Dowell".to_string()),
-            assignee_email: None,
             reporter: Some("Christian Dowell".to_string()),
             description: Some(
                 "*Stakeholders:* Christian Dowell (owner)\n\nh2. Goals\n# Replay the changes\n# Grade the result"
                     .to_string(),
             ),
             labels: vec!["DSCI".to_string(), "data-science".to_string()],
-            epic_key: None,
-            epic_name: None,
-            parent_key: None,
             detail_loaded: true,
             activity: vec![
                 comment("2026-09-02T10:00:00.000+0000", "Eliza Spang", "Second *reply*"),
                 comment("2026-09-01T09:30:00.000+0000", "Christian Dowell", "First"),
             ],
+            ..Ticket::default()
         }
     }
 

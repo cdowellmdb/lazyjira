@@ -14,7 +14,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 - Step through tickets in the detail view with `←`/`→`, and press `z` for full screen
 - Fold status groups and a parent's sub-tasks; `f` focuses one status, `d` hides Done
 - Opens instantly from a local cache, then refreshes from Jira without losing your place
-- Ticket detail renders Jira markup and shows comments and activity history
+- Ticket detail renders Jira markup and shows comments; `h` lists them newest first
 - Epic progress bars, with an optional list of the epics you care about
 
 **Change tickets safely**
@@ -36,7 +36,8 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 ## Requirements
 
 - The [`jira` CLI](https://github.com/ankitpokhrel/jira-cli) on your `PATH` and logged in (`jira init`). Running `jira me` should print your email.
-- `JIRA_API_TOKEN` set in your environment, as jira-cli normally uses it. Moves and sub-task nesting go through Jira's REST API with jira-cli's `server` and `auth_type` settings and this token.
+- `JIRA_API_TOKEN` set in your environment, as jira-cli normally uses it. Ticket lists (My Work, Team, Unassigned, Epics and filters), ticket details and moves go through Jira's REST API with jira-cli's `server`, `auth_type` and `epic.link` settings and this token. Earlier versions needed the token only for moves and sub-task nesting, so set it before upgrading if you never did.
+- A Jira Server or Data Center instance. Lists are read with the `/rest/api/2/search` endpoint, so Jira Cloud isn't supported.
 - macOS (Apple Silicon or Intel) or Linux x86_64. Windows is not supported.
 - A stable Rust toolchain, only if you build from source.
 
@@ -128,7 +129,7 @@ accent = "#4fd1c5"
 | `jira.team_name` | required | Your team's `Assigned Teams` value. Used by the Unassigned tab. |
 | `jira.done_window_days` | `14` | How many days of recently finished tickets to load. |
 | `jira.epics_i_care_about` | empty (all epics) | Limits the Epics tab to these epics, in this order. Must be in the `[jira]` section. |
-| `team` | you | Display name mapped to Jira email for everyone shown in the Team tab. |
+| `team` | you | Display name mapped to Jira email for everyone shown in the Team tab. If your Jira hides assignee emails, tickets are matched to people by display name (your own entry is named from your email, like `Sam Chen` for `sam.chen@…`), so give `team` the names Jira shows. |
 | `statuses.active`, `statuses.done` | shown above | Which statuses are loaded, and which count as done: `d` hides done tickets, epic progress counts them, and Team lists them after active work. So adding e.g. `"Cancelled"` or `"Won't Do"` to `done` treats them as finished. The order is also the order status groups are shown in My Work, Filters and Epics: active statuses first, then statuses not listed, then done. Tickets show Jira's own status name (Resolved stays Resolved). A status not listed follows a listed one it's a synonym of (Resolved follows Done, Open follows To Do); otherwise Done/Closed/Resolved-like names count as done and the rest as active. |
 | `filters` | empty | Saved JQL filters for the Filters tab. |
 | `preferences.show_done` | `true` | Whether Done tickets are visible. Updated when you press `d` or save preferences. |
@@ -191,7 +192,7 @@ Each tab remembers its selection, search, status focus, and folded groups during
 
 Click a tab or row to select it; click the selected row again to open it. Menus (bulk actions, and the move and resolution pickers in ticket detail) work the same way: click an option to choose it, and click it again to take it. Click checkboxes to mark tickets or groups and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
 
-Click the red **[×]** in the top-left of ticket or epic detail to close the popup, including from its history and move menus.
+Click the red **[×]** in the top-left of ticket or epic detail to close the popup, including from its activity and move menus.
 
 Forms support clicking fields, positioning the text cursor, choosing picker options, and clicking their action buttons. Type to filter assignee and epic pickers; use arrow keys or the wheel to choose. Bulk actions still require the separate confirmation step.
 
@@ -222,7 +223,7 @@ Descriptions and comments render Jira's wiki markup: headings, bold/italic/strik
 | `C` | Comment |
 | `a` | Assign/reassign |
 | `e` | Edit summary, labels, and description |
-| `h` | Activity history |
+| `h` | Activity: comments, newest first |
 
 The move picker lists the transitions Jira offers for the ticket, as "transition → status" (for example `Resume Progress → In Progress`), so it only offers moves the ticket's workflow allows. Choose one with `j/k` and `Enter`, then press `Enter` or `y` to confirm.
 
@@ -271,7 +272,7 @@ The preview also warns about summaries that match an existing ticket or repeat w
 
 - On startup, lazyjira shows the last saved snapshot, then refreshes active tickets, then recently finished ones.
 - Epic relationships and ticket details are cached and refreshed in the background.
-- Cache files are per project: a snapshot in `~/.cache/lazyjira/`, plus epic and ticket-detail caches named `lazyjira_*` in the system temp directory (`$TMPDIR`, or `/tmp`).
+- Cache files are per project, named `lazyjira_*` in `~/.cache/lazyjira/` and readable only by you: a snapshot, epic and ticket-detail caches, and your email from `jira me`.
 
 ## Limitations
 
@@ -279,7 +280,8 @@ The preview also warns about summaries that match an existing ticket or repeat w
 - jira-cli omits empty descriptions when editing. Use the browser action to clear an existing description.
 - The Unassigned tab queries the `Assigned Teams` custom field. It doesn't work on Jira instances that don't have that field.
 - A move sends one transition. Reaching a status that is several transitions away takes several moves, and transitions that require fields other than a resolution fail with Jira's error; press `o` to finish those in the browser.
-- Moves and sub-task nesting need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read. Without it, sub-tasks show as ordinary rows.
+- Ticket lists, details and moves need `JIRA_API_TOKEN`. jira-cli's other ways of storing the token (`.netrc`, the keychain) aren't read. Without it a refresh fails with an error and the last saved data stays on screen; with no saved data lazyjira exits with the error.
+- Epic children linked by the Epic Link field are found through jira-cli's `epic.link` setting. If your jira-cli config has none, only children whose `parent` is the epic appear.
 - A sub-task is indented under its parent only when the parent is in the same group (for example the same epic, or the same status in My Work). Elsewhere its summary starts with the parent's key, like `DSCI-3244 › ...`.
 - New tickets, from the create form or a CSV, can only be `Task`, `Bug`, or `Story`.
 
@@ -294,6 +296,6 @@ A pre-commit hook in `.githooks/` runs `cargo fmt --check` and `cargo clippy --a
 
 `lazyjira --dev` rebuilds and runs the lazyjira checkout in your current directory (or a parent directory). `--dev-release` does the same with an optimized build. The command prints which manifest it builds. Outside a checkout, it falls back to the source directory the binary was built from, if that directory still exists.
 
-To re-record the demo GIF, install [VHS](https://github.com/charmbracelet/vhs) and run `docs/demo/record.sh`. It uses a fake `jira` CLI and a throwaway `HOME`, so no real Jira data ends up in the recording.
+To re-record the demo GIF, install [VHS](https://github.com/charmbracelet/vhs) and run `docs/demo/record.sh`. It uses a fake `jira` CLI, a fake Jira REST search endpoint and a throwaway `HOME`, so no real Jira data ends up in the recording.
 
 Releases are published by pushing a `v*` tag. See [`docs/RELEASING.md`](docs/RELEASING.md).
