@@ -16,7 +16,7 @@ For example, "searches 50 keys at a time" needs a test with exactly 50 keys (one
 
 ## README moves with the change
 
-A change to keys, flags, config or what the lists show updates README.md in the same PR.
+A change a user would notice, in what they see or what they do, updates README.md in the same PR. Keys, flags, config, lists, overlays, pickers, mouse, themes and messages are examples of what counts, not its boundary.
 
 ## PR bodies
 
