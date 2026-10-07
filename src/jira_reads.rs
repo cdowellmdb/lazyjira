@@ -18,17 +18,14 @@ use crate::cache::{
 use crate::config::AppConfig;
 use crate::jira_client::fetch_my_email;
 use crate::jira_rest::describe;
-use crate::jql::{self, is_key, key_chunks};
+use crate::jql::{
+    epic_children_jqls, epics_jql, is_key, key_chunks, lists_jql, scoped_jql, subtasks_jqls,
+    TicketFetchScope,
+};
 use crate::local_cache::{
     load_epics_cache, load_my_email, remember_my_email, save_epics_cache, DetailCache,
 };
 use crate::subtasks;
-
-#[derive(Debug, Clone, Copy)]
-enum TicketFetchScope {
-    ActiveOnly,
-    ActiveAndRecentDone,
-}
 
 /// How many of a read's searches run at once: a project with 400 epics needs about fifty,
 /// which one after another is a minute, and a few at a time is easy on Jira.
@@ -87,21 +84,6 @@ async fn search_all(jqls: Vec<String>, fields: &'static [&'static str]) -> Resul
         crate::jira_rest::search(&jql, fields).await
     })
     .await
-}
-
-/// The searches that find the sub-tasks among `keys` and under them, `KEYS_PER_SEARCH` keys to a
-/// search, each key once. A key that isn't shaped like a ticket key is left out.
-fn subtasks_jqls(keys: &[String]) -> Vec<String> {
-    let mut keys = keys.to_vec();
-    keys.sort();
-    keys.dedup();
-    key_chunks(&keys)
-        .into_iter()
-        .map(|chunk| {
-            let list = chunk.join(",");
-            format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
-        })
-        .collect()
 }
 
 /// The sub-tasks among `tickets` and under them. Jira doesn't link a sub-task to its parent's
@@ -214,35 +196,6 @@ const LIST_FIELDS: &[&str] = &[
     "updated",
 ];
 
-/// The one search behind My Work, Team and Unassigned: the active tickets of everyone in
-/// `assignee_emails`, plus those done inside the window for the full scope, and the active
-/// tickets nobody has taken that are the team's by Assigned Teams. A REST search needs the
-/// project and an order spelled out. The order keeps pages stable while tickets change
-/// underneath them.
-fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchScope) -> String {
-    let assignees = assignee_emails
-        .iter()
-        .map(|email| jql::quote(email))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let active = config.active_status_clause();
-    let statuses = match scope {
-        TicketFetchScope::ActiveOnly => format!("status in {active}"),
-        TicketFetchScope::ActiveAndRecentDone => format!(
-            "(status in {active} OR (status in {} AND updated >= {}))",
-            config.done_status_clause(),
-            config.done_window()
-        ),
-    };
-    format!(
-        "project = {} AND ((assignee in ({assignees}) AND {statuses}) \
-         OR (assignee is EMPTY AND \"Assigned Teams\" = {} AND status in {active})) \
-         ORDER BY key",
-        jql::quote(&config.jira.project),
-        jql::quote(&config.jira.team_name)
-    )
-}
-
 /// Splits one search's tickets into My Work and Team, each ordered by key. Every ticket stays
 /// visible: one assigned to someone `roster_member` can't find adds that person to `members`
 /// (under their email, or their display name when Jira hides it), and tickets with no assignee
@@ -299,55 +252,6 @@ fn key_order(a: &str, b: &str) -> std::cmp::Ordering {
         (project.to_string(), number.parse::<u64>().ok())
     };
     split(a).cmp(&split(b)).then_with(|| a.cmp(b))
-}
-
-/// The searches that find the children of `epic_keys`, `KEYS_PER_SEARCH` epics to a search. A
-/// child names its epic through the Epic Link field (company-managed projects, when jira-cli's
-/// config knows the field) or `parent` (team-managed). A key that isn't shaped like a ticket
-/// key is left out. The order keeps pages stable while tickets change underneath them.
-fn epic_children_jqls(project: &str, epic_keys: &[String], has_epic_link: bool) -> Vec<String> {
-    key_chunks(epic_keys)
-        .into_iter()
-        .map(|chunk| {
-            let list = chunk.join(",");
-            let link = if has_epic_link {
-                format!("\"Epic Link\" in ({list}) OR ")
-            } else {
-                String::new()
-            };
-            format!(
-                "project = {} AND ({link}parent in ({list})) ORDER BY key",
-                jql::quote(project)
-            )
-        })
-        .collect()
-}
-
-/// A saved filter's `jql` limited to `project`, with an order. The filter's own ORDER BY is
-/// kept (after the project, outside the parentheses); without one, newest first.
-fn scoped_jql(project: &str, jql: &str) -> String {
-    // ponytail: the last "order by" is taken as the clause, so one inside a quoted string
-    // fails the query; parse JQL properly if filters ever need it.
-    let split = jql.to_ascii_lowercase().rfind("order by");
-    let (condition, order) = match split {
-        Some(at) => (jql[..at].trim(), jql[at..].trim()),
-        None => (jql.trim(), "ORDER BY created DESC"),
-    };
-    let project = jql::quote(project);
-    if condition.is_empty() {
-        format!("project = {project} {order}")
-    } else {
-        format!("project = {project} AND ({condition}) {order}")
-    }
-}
-
-/// All the project's epics, in an order that keeps pages stable while epics change underneath
-/// them.
-fn epics_jql(project: &str) -> String {
-    format!(
-        "project = {} AND issuetype = Epic ORDER BY key",
-        jql::quote(project)
-    )
 }
 
 /// What an epic row needs from the epic list; the epic's children come from their own search.
@@ -564,14 +468,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_epic_list_is_every_epic_in_the_project() {
-        assert_eq!(
-            epics_jql("AMP"),
-            "project = \"AMP\" AND issuetype = Epic ORDER BY key"
-        );
-    }
-
     fn test_config() -> AppConfig {
         AppConfig {
             jira: JiraConfig {
@@ -589,39 +485,6 @@ mod tests {
             preferences: Default::default(),
             themes: Default::default(),
         }
-    }
-
-    #[test]
-    fn the_list_search_covers_the_roster_and_the_teams_unassigned_work() {
-        let config = test_config();
-        let emails = ["alex@example.com", "sam@example.com"];
-        assert_eq!(
-            lists_jql(&config, &emails, TicketFetchScope::ActiveOnly),
-            "project = \"AMP\" AND (\
-             (assignee in (\"alex@example.com\", \"sam@example.com\") \
-              AND status in (\"In Progress\", \"To Do\")) \
-             OR (assignee is EMPTY AND \"Assigned Teams\" = \"Code Generation\" \
-              AND status in (\"In Progress\", \"To Do\"))) ORDER BY key"
-        );
-    }
-
-    #[test]
-    fn the_full_list_search_adds_recently_done_tickets_inside_the_window() {
-        let mut config = test_config();
-        config.jira.done_window_days = 7;
-        let jql = lists_jql(
-            &config,
-            &["alex@example.com"],
-            TicketFetchScope::ActiveAndRecentDone,
-        );
-        assert_eq!(
-            jql,
-            "project = \"AMP\" AND (\
-             (assignee in (\"alex@example.com\") AND (status in (\"In Progress\", \"To Do\") \
-              OR (status in (\"Done\", \"Closed\") AND updated >= -7d))) \
-             OR (assignee is EMPTY AND \"Assigned Teams\" = \"Code Generation\" \
-              AND status in (\"In Progress\", \"To Do\"))) ORDER BY key"
-        );
     }
 
     fn assigned(key: &str, status: &str, name: &str, email: &str) -> Ticket {
@@ -790,75 +653,6 @@ mod tests {
         );
     }
 
-    fn epic_keys(count: usize) -> Vec<String> {
-        (1..=count).map(|n| format!("AMP-{n}")).collect()
-    }
-
-    #[test]
-    fn epic_children_are_searched_fifty_epics_at_a_time() {
-        // Exactly 50 epics: one search holding all of them.
-        let one = epic_children_jqls("AMP", &epic_keys(50), true);
-        assert_eq!(one.len(), 1);
-        assert_eq!(one[0], {
-            let list = epic_keys(50).join(",");
-            format!(
-                "project = \"AMP\" AND (\"Epic Link\" in ({list}) OR parent in ({list})) \
-                 ORDER BY key"
-            )
-        });
-        // 51 epics: a second search that holds only the 51st.
-        let two = epic_children_jqls("AMP", &epic_keys(51), true);
-        assert_eq!(two.len(), 2);
-        assert_eq!(two[0], one[0]);
-        assert_eq!(
-            two[1],
-            "project = \"AMP\" AND (\"Epic Link\" in (AMP-51) OR parent in (AMP-51)) \
-             ORDER BY key"
-        );
-        assert!(epic_children_jqls("AMP", &[], true).is_empty());
-    }
-
-    #[test]
-    fn without_an_epic_link_field_only_the_parent_link_is_searched() {
-        assert_eq!(
-            epic_children_jqls("AMP", &epic_keys(2), false),
-            ["project = \"AMP\" AND (parent in (AMP-1,AMP-2)) ORDER BY key"]
-        );
-    }
-
-    #[test]
-    fn epic_keys_that_are_not_shaped_like_keys_stay_out_of_the_query() {
-        let keys = vec!["AMP-1".to_string(), "x\") OR 1=1".to_string()];
-        assert_eq!(
-            epic_children_jqls("AMP", &keys, false),
-            ["project = \"AMP\" AND (parent in (AMP-1)) ORDER BY key"]
-        );
-        // A chunk with nothing left to ask about sends no search.
-        assert!(epic_children_jqls("AMP", &["no good".to_string()], false).is_empty());
-    }
-
-    #[test]
-    fn a_malformed_epic_key_takes_no_place_in_a_search() {
-        let search =
-            |list: String| format!("project = \"AMP\" AND (parent in ({list})) ORDER BY key");
-        // 50 usable keys and a malformed one: still one search of exactly the 50 epics.
-        let mut keys = epic_keys(50);
-        keys.insert(10, "no good".to_string());
-        assert_eq!(
-            epic_children_jqls("AMP", &keys, false),
-            [search(epic_keys(50).join(","))]
-        );
-        // The 51st usable key starts the second search, alone.
-        keys.push("AMP-51".to_string());
-        assert_eq!(
-            epic_children_jqls("AMP", &keys, false),
-            [
-                search(epic_keys(50).join(",")),
-                search("AMP-51".to_string())
-            ]
-        );
-    }
-
     /// What the children searches answer, as Jira shapes it (the Epic Link field is a plain
     /// string): three children of AMP-100, one found twice (two searches can both match it), one
     /// of AMP-200 through `parent`, one through Epic Link, and one of an epic outside the list.
@@ -1000,28 +794,6 @@ mod tests {
         reconcile_epic_child_statuses(&mut epics, &[], &[]);
 
         assert_eq!(epics[0].children[0].status, "To Do");
-    }
-
-    #[test]
-    fn a_saved_filter_is_limited_to_the_project_and_keeps_its_own_order() {
-        assert_eq!(
-            scoped_jql("AMP", "type = Bug AND assignee = currentUser()"),
-            "project = \"AMP\" AND (type = Bug AND assignee = currentUser()) \
-             ORDER BY created DESC"
-        );
-        // The filter's own ordering wins, and stays outside the parentheses.
-        assert_eq!(
-            scoped_jql("AMP", "status = Blocked order by updated ASC"),
-            "project = \"AMP\" AND (status = Blocked) order by updated ASC"
-        );
-        assert_eq!(
-            scoped_jql("AMP", "ORDER BY priority DESC"),
-            "project = \"AMP\" ORDER BY priority DESC"
-        );
-        assert_eq!(
-            scoped_jql("AMP", "  "),
-            "project = \"AMP\" ORDER BY created DESC"
-        );
     }
 
     #[test]
@@ -1352,86 +1124,6 @@ mod tests {
         assert_eq!(
             delivered[0].1.as_ref().unwrap_err(),
             "\"no good\" isn't a ticket key"
-        );
-    }
-
-    #[test]
-    fn sub_tasks_are_searched_fifty_keys_at_a_time() {
-        let sub_task_search = |list: String| {
-            format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
-        };
-        // Zero-padded, so the order the searches sort the keys into is the order of the numbers.
-        let padded = |range: std::ops::RangeInclusive<u32>| -> Vec<String> {
-            range.map(|n| format!("AMP-{n:03}")).collect()
-        };
-        // Exactly 50 keys: one search holding all of them.
-        let fifty = subtasks_jqls(&padded(1..=50));
-        assert_eq!(fifty, [sub_task_search(padded(1..=50).join(","))]);
-        // 51 keys: a second search that holds only the 51st, however the keys arrive: each
-        // key is searched once, even when it is given twice and out of order.
-        let mut shuffled = padded(1..=51);
-        shuffled.reverse();
-        shuffled.extend(padded(1..=51));
-        assert_eq!(
-            subtasks_jqls(&shuffled),
-            [
-                sub_task_search(padded(1..=50).join(",")),
-                sub_task_search("AMP-051".to_string())
-            ]
-        );
-        // Anything that isn't shaped like a key stays out; nothing left, no search.
-        let keys = vec!["AMP-1".to_string(), "x\") OR 1=1".to_string()];
-        assert_eq!(subtasks_jqls(&keys), [sub_task_search("AMP-1".to_string())]);
-        assert!(subtasks_jqls(&["no good".to_string()]).is_empty());
-        assert!(subtasks_jqls(&[]).is_empty());
-    }
-
-    #[test]
-    fn a_malformed_key_takes_no_place_in_a_sub_task_search() {
-        let sub_task_search = |list: String| {
-            format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
-        };
-        let padded = |range: std::ops::RangeInclusive<u32>| -> Vec<String> {
-            range.map(|n| format!("AMP-{n:03}")).collect()
-        };
-        // 50 usable keys and a malformed one, which sorts first: still one search of exactly
-        // the 50.
-        let mut keys = padded(1..=50);
-        keys.insert(10, "!no good".to_string());
-        assert_eq!(
-            subtasks_jqls(&keys),
-            [sub_task_search(padded(1..=50).join(","))]
-        );
-        // The 51st usable key starts the second search, alone.
-        keys.push("AMP-051".to_string());
-        assert_eq!(
-            subtasks_jqls(&keys),
-            [
-                sub_task_search(padded(1..=50).join(",")),
-                sub_task_search("AMP-051".to_string())
-            ]
-        );
-    }
-
-    #[test]
-    fn jql_built_from_config_cannot_be_broken_by_a_quote_in_it() {
-        let mut config = test_config();
-        config.jira.team_name = r#"Team "A""#.into();
-        config.statuses.active = vec![r#"On "Hold""#.into()];
-        let jql = lists_jql(&config, &["a@example.com"], TicketFetchScope::ActiveOnly);
-        assert!(jql.contains(r#""Assigned Teams" = "Team \"A\"""#), "{jql}");
-        assert!(jql.contains(r#"status in ("On \"Hold\"")"#), "{jql}");
-        assert_eq!(
-            epics_jql(r#"A"B"#),
-            r#"project = "A\"B" AND issuetype = Epic ORDER BY key"#
-        );
-        assert_eq!(
-            scoped_jql(r#"A"B"#, "type = Bug"),
-            r#"project = "A\"B" AND (type = Bug) ORDER BY created DESC"#
-        );
-        assert_eq!(
-            epic_children_jqls(r#"A"B"#, &epic_keys(1), false),
-            [r#"project = "A\"B" AND (parent in (AMP-1)) ORDER BY key"#]
         );
     }
 }
