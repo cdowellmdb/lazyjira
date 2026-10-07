@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -71,9 +72,12 @@ fn write_cache_file(path: &Path, value: &impl serde::Serialize) -> Result<()> {
 }
 
 /// Writes a cache file that only this user can read: descriptions and comments are in it. The
-/// directory is made private too, and a file or directory an earlier build made readable is
-/// tightened.
+/// directory is made private too, and one an earlier build made readable is tightened. The text
+/// goes to a file of its own beside `path` and is renamed over it, so a reader, a second writer
+/// (the quit-time save and the writer task, or another lazyjira) or a crash never leaves `path`
+/// holding a part of it. That file is new, so it is private whatever `path` was.
 fn write_cache_text(path: &Path, json: &str) -> Result<()> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     if let Some(dir) = path.parent() {
         // The mode on create covers a new directory; it leaves an existing one as it was.
         std::fs::DirBuilder::new()
@@ -83,17 +87,25 @@ fn write_cache_text(path: &Path, json: &str) -> Result<()> {
             .and_then(|()| std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)))
             .with_context(|| format!("Failed to create cache directory: {}", dir.display()))?;
     }
+    // Unique per call, not per process: two saves in this process must not share a file.
+    let temp = path.with_extension(format!(
+        "{}.{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     let write = || -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o600)
-            .open(path)?;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        file.write_all(json.as_bytes())
+            .open(&temp)?;
+        file.write_all(json.as_bytes())?;
+        std::fs::rename(&temp, path)
     };
-    write().with_context(|| format!("Failed to write cache file: {}", path.display()))
+    write().map_err(|error| {
+        let _ = std::fs::remove_file(&temp);
+        anyhow::Error::new(error).context(format!("Failed to write cache file: {}", path.display()))
+    })
 }
 
 fn now_unix_secs() -> u64 {
@@ -229,8 +241,8 @@ impl DetailCache {
     /// Saves the details, for when the app quits: details recorded in the last moments are still
     /// inside the writer's quiet period then. It writes the file itself rather than asking the
     /// writer, so a refresh still holding the writer's channel open, or a stalled writer, can't
-    /// hold up quitting. If the writer happens to be saving at that moment too, the file may
-    /// come out torn; a file that doesn't parse is ignored and refetched, as any cache is.
+    /// hold up quitting. If the writer is saving at that moment too, each write replaces the
+    /// file whole (`write_cache_text`), and the later one stands.
     pub fn close(&self) {
         if let Some(path) = &self.path {
             save_details(path, &self.by_key);
@@ -587,6 +599,67 @@ mod tests {
         details.close();
 
         assert_eq!(saved_keys(&path), ["DEMO-1"]);
+    }
+
+    #[test]
+    fn rewriting_a_cache_file_replaces_it_instead_of_changing_it_in_place() {
+        let path = cache_path(MY_EMAIL_PREFIX, &project("REPLACE"));
+        let kept = path.with_extension("kept");
+        let _remove = Remove(vec![path.clone(), kept.clone()]);
+        write_cache_text(&path, "old").unwrap();
+        // A second name for the old file: whoever has it open still holds it. A write in place
+        // would show through it; a replacement leaves it as it was.
+        std::fs::hard_link(&path, &kept).unwrap();
+
+        write_cache_text(&path, "new").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "old");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+        let leftovers = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(&stem) && name.ends_with(".tmp"))
+            .collect::<Vec<_>>();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+    }
+
+    #[test]
+    fn writes_that_overlap_each_land_whole_and_a_reader_never_sees_a_part() {
+        // The quit-time save and the writer task can write one file at once, and so can two
+        // lazyjira processes on the same project; the payloads differ in length, as a tear
+        // between two such writes needs.
+        let path = cache_path(DETAILS_CACHE_PREFIX, &project("OVERLAP"));
+        let _remove = Remove(vec![path.clone()]);
+        let payloads: Vec<String> = (1..=8).map(|n| "x".repeat(n * 400_000)).collect();
+        write_cache_text(&path, &payloads[0]).unwrap();
+        let start = std::sync::Barrier::new(payloads.len());
+        let writing = std::sync::atomic::AtomicBool::new(true);
+
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                while writing.load(std::sync::atomic::Ordering::SeqCst) {
+                    let seen = std::fs::read_to_string(&path).unwrap();
+                    assert!(payloads.contains(&seen), "read {} bytes", seen.len());
+                }
+            });
+            let writers: Vec<_> = payloads
+                .iter()
+                .map(|payload| {
+                    scope.spawn(|| {
+                        start.wait();
+                        write_cache_text(&path, payload).unwrap();
+                    })
+                })
+                .collect();
+            // The reader stops once every writer is done, however they ended.
+            let written: Vec<_> = writers.into_iter().map(|writer| writer.join()).collect();
+            writing.store(false, std::sync::atomic::Ordering::SeqCst);
+            reader.join().unwrap();
+            assert!(written.iter().all(Result::is_ok), "a write failed");
+        });
+
+        assert!(payloads.contains(&std::fs::read_to_string(&path).unwrap()));
     }
 
     #[test]
