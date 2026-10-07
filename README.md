@@ -223,7 +223,7 @@ Descriptions and comments render Jira's wiki markup: headings, bold/italic/strik
 | `C` | Comment |
 | `a` | Assign/reassign |
 | `e` | Edit summary, labels, and description |
-| `h` | Activity history |
+| `h` | Activity: comments, newest first |
 
 The move picker lists the transitions Jira offers for the ticket, as "transition → status" (for example `Resume Progress → In Progress`), so it only offers moves the ticket's workflow allows. Choose one with `j/k` and `Enter`, then press `Enter` or `y` to confirm.
 

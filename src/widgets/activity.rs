@@ -18,7 +18,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, entries: &[ActivityEntry], scr
     let mut lines = Vec::new();
 
     lines.push(Line::from(Span::styled(
-        "Activity History",
+        "Activity: comments, newest first",
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
@@ -27,7 +27,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, entries: &[ActivityEntry], scr
 
     if entries.is_empty() {
         lines.push(Line::from(Span::styled(
-            "(no activity found -- open the ticket once to load history)",
+            "(no comments found -- open the ticket once to load them)",
             Style::default().fg(Color::DarkGray),
         )));
     }

@@ -26,8 +26,7 @@ pub fn browse_url(key: &str) -> Result<String> {
     Ok(format!("{}/browse/{}", server_url()?, key))
 }
 
-/// An error with its whole chain, as the user sees it: "Couldn't reach Jira: connection refused"
-/// rather than just the outermost "Couldn't reach Jira".
+/// An error with its whole chain, as the user sees it ("Couldn't reach Jira: connection refused").
 pub fn describe(error: &anyhow::Error) -> String {
     format!("{:#}", error)
 }
@@ -56,10 +55,10 @@ pub async fn issue(key: &str, fields: &[&str]) -> Result<Ticket> {
     shared()?.issue(key, fields).await
 }
 
-/// Whether lazyjira can reach Jira at all: jira-cli's config is readable and `JIRA_API_TOKEN` is
-/// set. The error says which is missing, so a read checks it first and reports that instead of
-/// whatever a `jira` process says about the same problem.
-pub fn ready() -> Result<()> {
+/// Fails unless lazyjira can reach Jira at all: jira-cli's config is readable and
+/// `JIRA_API_TOKEN` is set. The error says which is missing, so a read checks it first and
+/// reports that instead of whatever a `jira` process says about the same problem.
+pub fn ensure_ready() -> Result<()> {
     shared().map(|_| ())
 }
 

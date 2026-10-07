@@ -267,6 +267,7 @@ where
     let mut results = Vec::new();
     bounded::for_each_bounded(MAX_BULK_CONCURRENCY, items, task, |_, joined| {
         results.push(joined.unwrap_or_else(|err| ("unknown".to_string(), Err(err.to_string()))));
+        std::ops::ControlFlow::Continue(())
     })
     .await;
     results
@@ -780,7 +781,7 @@ async fn main() -> Result<()> {
     }
 
     // Details recorded in the last moments are saved before the process ends.
-    app.details.close().await;
+    app.details.close();
     restore_terminal(&mut terminal)
 }
 
@@ -2341,7 +2342,7 @@ mod tests {
         most.load(SeqCst)
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_bulk_action_makes_six_jira_calls_at_a_time() {
         assert_eq!(most_at_once(5).await, 5);
         assert_eq!(most_at_once(6).await, 6);

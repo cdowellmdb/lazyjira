@@ -12,15 +12,19 @@ pub fn is_key(key: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// `keys` as the inside of a JQL list (`A-1,B-2`). Keys that don't look like Jira keys are left
-/// out so they can't break the query; `None` when none are left.
-pub fn key_list(keys: &[String]) -> Option<String> {
-    let keys: Vec<&str> = keys
+/// The keys of `keys` that look like Jira keys, `KEYS_PER_SEARCH` to a chunk, each chunk for one
+/// search's list (`.join(",")`). A key that doesn't look like one is left out before the keys
+/// are counted, so it can't break the query or take a place from a real key.
+pub fn key_chunks(keys: &[String]) -> Vec<Vec<&str>> {
+    let usable: Vec<&str> = keys
         .iter()
         .map(String::as_str)
         .filter(|key| is_key(key))
         .collect();
-    (!keys.is_empty()).then(|| keys.join(","))
+    usable
+        .chunks(KEYS_PER_SEARCH)
+        .map(<[&str]>::to_vec)
+        .collect()
 }
 
 /// `text` as a JQL string literal, quotes included: a `"` or `\` in it can't end the string or
@@ -42,15 +46,32 @@ mod tests {
         assert_eq!(quote(r#"\""#), r#""\\\"""#);
     }
 
+    fn keys(count: usize) -> Vec<String> {
+        (1..=count).map(|n| format!("DSCI-{n}")).collect()
+    }
+
     #[test]
     fn only_keys_shaped_like_jira_keys_reach_a_jql_list() {
-        let keys = |keys: &[&str]| keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            key_list(&keys(&["DSCI-1", "x\") OR 1=1", "", "AB_2"])).as_deref(),
-            Some("DSCI-1,AB_2")
-        );
-        assert_eq!(key_list(&keys(&["no good"])), None);
-        assert_eq!(key_list(&[]), None);
+        let keys: Vec<String> = ["DSCI-1", "x\") OR 1=1", "", "AB_2"]
+            .map(String::from)
+            .into();
+        assert_eq!(key_chunks(&keys), [["DSCI-1", "AB_2"]]);
+        assert!(key_chunks(&["no good".to_string()]).is_empty());
+        assert!(key_chunks(&[]).is_empty());
         assert!(is_key("DSCI-3244") && !is_key("DSCI 1") && !is_key(""));
+    }
+
+    #[test]
+    fn keys_are_chunked_by_the_search_limit_with_malformed_ones_taking_no_place() {
+        let sizes =
+            |keys: &[String]| -> Vec<usize> { key_chunks(keys).iter().map(Vec::len).collect() };
+        assert_eq!(sizes(&keys(50)), [50]);
+        let fifty_one = keys(51);
+        assert_eq!(sizes(&fifty_one), [50, 1]);
+        assert_eq!(key_chunks(&fifty_one)[1], ["DSCI-51"]);
+        // A malformed key among 50 real ones doesn't push the 50th into a second search.
+        let mut with_bad = keys(50);
+        with_bad.insert(10, "bad key".to_string());
+        assert_eq!(sizes(&with_bad), [50]);
     }
 }

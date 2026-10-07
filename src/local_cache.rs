@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::cache::{Cache, Epic, Ticket};
@@ -44,9 +44,9 @@ fn cache_dir_in(home: Option<std::ffi::OsString>) -> PathBuf {
 
 fn cache_dir() -> PathBuf {
     if cfg!(test) {
-        // Tests keep off the real ~/.cache, and off the files of another test run sharing this
-        // temp dir.
-        return std::env::temp_dir().join(format!("lazyjira-test-{}", std::process::id()));
+        // Tests keep off the real ~/.cache. Test runs share this directory and leave it behind,
+        // empty: the files in it carry the process id (`project`), so runs don't meet.
+        return std::env::temp_dir().join("lazyjira-test");
     }
     cache_dir_in(std::env::var_os("HOME"))
 }
@@ -71,13 +71,16 @@ fn write_cache_file(path: &Path, value: &impl serde::Serialize) -> Result<()> {
 }
 
 /// Writes a cache file that only this user can read: descriptions and comments are in it. The
-/// directory is made private too, and a file an earlier build made readable is tightened.
+/// directory is made private too, and a file or directory an earlier build made readable is
+/// tightened.
 fn write_cache_text(path: &Path, json: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
+        // The mode on create covers a new directory; it leaves an existing one as it was.
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(dir)
+            .and_then(|()| std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)))
             .with_context(|| format!("Failed to create cache directory: {}", dir.display()))?;
     }
     let write = || -> std::io::Result<()> {
@@ -117,7 +120,14 @@ pub fn save_full_cache_snapshot(project: &str, cache: &Cache) -> Result<()> {
     write_cache_file(&cache_path(FULL_CACHE_PREFIX, project), &snapshot)
 }
 
+/// Deletes the `prefix` cache an earlier build left straight in the system temp dir. It is
+/// ignored from here on, and on a shared temp dir it is readable by everyone.
+fn remove_temp_dir_cache(prefix: &str, project: &str) {
+    let _ = std::fs::remove_file(cache_file(&std::env::temp_dir(), prefix, project));
+}
+
 pub fn load_epics_cache(project: &str) -> Vec<Epic> {
+    remove_temp_dir_cache(EPICS_CACHE_PREFIX, project);
     read_cache_file(&cache_path(EPICS_CACHE_PREFIX, project)).unwrap_or_default()
 }
 
@@ -126,6 +136,7 @@ pub fn save_epics_cache(project: &str, epics: &[Epic]) -> Result<()> {
 }
 
 fn load_details_cache(project: &str) -> HashMap<String, Ticket> {
+    remove_temp_dir_cache(DETAILS_CACHE_PREFIX, project);
     read_cache_file(&cache_path(DETAILS_CACHE_PREFIX, project)).unwrap_or_default()
 }
 
@@ -169,28 +180,21 @@ fn hydrate_ticket_from_details_cache(
 #[derive(Clone)]
 pub struct DetailCache {
     by_key: Arc<Mutex<HashMap<String, Ticket>>>,
-    changed: mpsc::UnboundedSender<Signal>,
-}
-
-/// What the writer is told: a detail was recorded, or the app is closing (the writer answers on
-/// the sender once it has saved).
-enum Signal {
-    Changed,
-    Close(oneshot::Sender<()>),
+    changed: mpsc::UnboundedSender<()>,
+    /// The file the writer saves to, for `close`; none when nothing is saved.
+    path: Option<PathBuf>,
 }
 
 /// How long details must stop changing before the writer saves them.
 const FLUSH_AFTER_IDLE: Duration = Duration::from_millis(750);
 
-/// How long closing waits for the writer to finish saving.
-const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
-
 impl DetailCache {
     /// Read the details cache file once, and start the task that writes it back.
     pub fn spawn(project: &str) -> Self {
-        let (details, changed) = Self::new(load_details_cache(project));
+        let path = cache_path(DETAILS_CACHE_PREFIX, project);
+        let (details, changed) = Self::new(load_details_cache(project), Some(path.clone()));
         tokio::spawn(write_details(
-            cache_path(DETAILS_CACHE_PREFIX, project),
+            path,
             details.by_key.clone(),
             changed,
             FLUSH_AFTER_IDLE,
@@ -200,14 +204,18 @@ impl DetailCache {
 
     /// A cache with nothing in it and no writer, so what's recorded stays in memory only.
     pub fn in_memory() -> Self {
-        Self::new(HashMap::new()).0
+        Self::new(HashMap::new(), None).0
     }
 
-    fn new(by_key: HashMap<String, Ticket>) -> (Self, mpsc::UnboundedReceiver<Signal>) {
+    fn new(
+        by_key: HashMap<String, Ticket>,
+        path: Option<PathBuf>,
+    ) -> (Self, mpsc::UnboundedReceiver<()>) {
         let (changed, rx) = mpsc::unbounded_channel();
         let details = DetailCache {
             by_key: Arc::new(Mutex::new(by_key)),
             changed,
+            path,
         };
         (details, rx)
     }
@@ -215,17 +223,17 @@ impl DetailCache {
     /// Keep a freshly fetched detail. False when the writer has stopped, so it won't reach disk.
     pub fn record(&self, detail: Ticket) -> bool {
         lock_details(&self.by_key).insert(detail.key.clone(), detail);
-        self.changed.send(Signal::Changed).is_ok()
+        self.changed.send(()).is_ok()
     }
 
-    /// Saves any details not yet saved and waits (up to `CLOSE_TIMEOUT`) for the write, for when
-    /// the app closes: details recorded in the last moments are still inside their quiet
-    /// period then. Clones elsewhere (a refresh still running) don't matter, so it doesn't rely
-    /// on the writer's channel closing.
-    pub async fn close(&self) {
-        let (done, saved) = oneshot::channel();
-        if self.changed.send(Signal::Close(done)).is_ok() {
-            let _ = timeout(CLOSE_TIMEOUT, saved).await;
+    /// Saves the details, for when the app quits: details recorded in the last moments are still
+    /// inside the writer's quiet period then. It writes the file itself rather than asking the
+    /// writer, so a refresh still holding the writer's channel open, or a stalled writer, can't
+    /// hold up quitting. If the writer happens to be saving at that moment too, the file may
+    /// come out torn; a file that doesn't parse is ignored and refetched, as any cache is.
+    pub fn close(&self) {
+        if let Some(path) = &self.path {
+            save_details(path, &self.by_key);
         }
     }
 
@@ -261,44 +269,17 @@ fn save_details(path: &Path, by_key: &Mutex<HashMap<String, Ticket>>) {
     let _ = write_cache_text(path, &json);
 }
 
-/// Saves the details once they've stayed unchanged for `idle`, at once when the app closes, and
-/// when the channel closes. Nothing is written while nothing has changed since the last save.
+/// Saves the details once they've stayed unchanged for `idle`, and once more when the channel
+/// closes.
 async fn write_details(
     path: PathBuf,
     by_key: Arc<Mutex<HashMap<String, Ticket>>>,
-    mut signals: mpsc::UnboundedReceiver<Signal>,
+    mut changed: mpsc::UnboundedReceiver<()>,
     idle: Duration,
 ) {
-    let mut unsaved = false;
-    loop {
-        let signal = if unsaved {
-            match timeout(idle, signals.recv()).await {
-                Ok(signal) => signal,
-                Err(_quiet) => {
-                    save_details(&path, &by_key);
-                    unsaved = false;
-                    continue;
-                }
-            }
-        } else {
-            signals.recv().await
-        };
-        match signal {
-            Some(Signal::Changed) => unsaved = true,
-            Some(Signal::Close(done)) => {
-                if unsaved {
-                    save_details(&path, &by_key);
-                }
-                let _ = done.send(());
-                return;
-            }
-            None => {
-                if unsaved {
-                    save_details(&path, &by_key);
-                }
-                return;
-            }
-        }
+    while changed.recv().await.is_some() {
+        while let Ok(Some(())) = timeout(idle, changed.recv()).await {}
+        save_details(&path, &by_key);
     }
 }
 
@@ -310,31 +291,13 @@ mod tests {
         Ticket::for_test(key, status)
     }
 
-    /// How many `Remove`s are alive. The test cache directory goes with the last one, and the
-    /// lock makes a test starting up wait out a removal, so it never loses the directory it is
-    /// about to write into.
-    static LIVE: Mutex<usize> = Mutex::new(0);
-
-    /// Removes the cache files a test wrote, even when it fails, and the test cache directory
-    /// once no test is using it. Made before the test writes anything.
+    /// Removes the cache files a test wrote, even when it fails.
     struct Remove(Vec<PathBuf>);
-
-    impl Remove {
-        fn new(paths: Vec<PathBuf>) -> Self {
-            *LIVE.lock().unwrap_or_else(PoisonError::into_inner) += 1;
-            Remove(paths)
-        }
-    }
 
     impl Drop for Remove {
         fn drop(&mut self) {
             for path in &self.0 {
                 let _ = std::fs::remove_file(path);
-            }
-            let mut live = LIVE.lock().unwrap_or_else(PoisonError::into_inner);
-            *live -= 1;
-            if *live == 0 {
-                let _ = std::fs::remove_dir(cache_dir());
             }
         }
     }
@@ -433,7 +396,7 @@ mod tests {
     #[test]
     fn my_email_is_remembered_per_project() {
         let (a, b) = (project("EMAIL_A"), project("EMAIL_B"));
-        let _remove = Remove::new(vec![cache_path(MY_EMAIL_PREFIX, &a)]);
+        let _remove = Remove(vec![cache_path(MY_EMAIL_PREFIX, &a)]);
         assert_eq!(load_my_email(&a), None);
         remember_my_email(&a, "me@example.com");
 
@@ -446,7 +409,7 @@ mod tests {
         // A file from before emails were normalized, or edited by hand.
         let project = project("EMAIL_CASE");
         let path = cache_path(MY_EMAIL_PREFIX, &project);
-        let _remove = Remove::new(vec![path.clone()]);
+        let _remove = Remove(vec![path.clone()]);
         write_cache_file(&path, &" Me@Example.COM ").unwrap();
 
         assert_eq!(load_my_email(&project).as_deref(), Some("me@example.com"));
@@ -457,7 +420,7 @@ mod tests {
         // A file stands where the cache directory for this project would be made.
         let project = project("BLOCKED");
         let blocker = cache_path(MY_EMAIL_PREFIX, &format!("{project}-dir"));
-        let _remove = Remove::new(vec![blocker.clone()]);
+        let _remove = Remove(vec![blocker.clone()]);
         std::fs::create_dir_all(blocker.parent().unwrap()).unwrap();
         std::fs::write(&blocker, "in the way").unwrap();
         let unwritable = format!("{project}-dir.json/x");
@@ -492,19 +455,29 @@ mod tests {
     }
 
     #[test]
-    fn an_old_temp_dir_epics_cache_is_ignored() {
+    fn old_temp_dir_caches_are_ignored_and_removed() {
         let project = project("OLDTMP");
         let epics = vec![Epic {
             key: "OLDTMP-1".into(),
             summary: "Old".into(),
             children: vec![],
         }];
-        // Where the epics cache lived before it moved: straight in the system temp dir.
-        let old = std::env::temp_dir().join(format!("lazyjira_epics_cache_{project}.json"));
-        let _remove = Remove::new(vec![old.clone(), cache_path(EPICS_CACHE_PREFIX, &project)]);
-        std::fs::write(&old, serde_json::to_string(&epics).unwrap()).unwrap();
+        // Where the epics and details caches lived before they moved: straight in the system
+        // temp dir, readable by everyone on a shared one.
+        let old = |prefix| std::env::temp_dir().join(format!("{prefix}_{project}.json"));
+        let (old_epics, old_details) = (old(EPICS_CACHE_PREFIX), old(DETAILS_CACHE_PREFIX));
+        let details = HashMap::from([("OLDTMP-1".to_string(), test_ticket("OLDTMP-1", "To Do"))]);
+        let _remove = Remove(vec![
+            old_epics.clone(),
+            old_details.clone(),
+            cache_path(EPICS_CACHE_PREFIX, &project),
+        ]);
+        std::fs::write(&old_epics, serde_json::to_string(&epics).unwrap()).unwrap();
+        std::fs::write(&old_details, serde_json::to_string(&details).unwrap()).unwrap();
 
         assert!(load_epics_cache(&project).is_empty());
+        assert!(load_details_cache(&project).is_empty());
+        assert!(!old_epics.exists() && !old_details.exists());
 
         save_epics_cache(&project, &epics).unwrap();
         assert_eq!(load_epics_cache(&project)[0].key, "OLDTMP-1");
@@ -555,8 +528,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn details_are_saved_once_none_has_changed_for_the_quiet_period() {
         let path = cache_path(DETAILS_CACHE_PREFIX, &project("QUIET"));
-        let _remove = Remove::new(vec![path.clone()]);
-        let (details, changed) = DetailCache::new(HashMap::new());
+        let _remove = Remove(vec![path.clone()]);
+        let (details, changed) = DetailCache::new(HashMap::new(), None);
         let writer = tokio::spawn(write_details(
             path.clone(),
             details.by_key.clone(),
@@ -580,11 +553,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn details_are_saved_when_the_app_closes_even_before_they_go_quiet() {
+    async fn details_are_saved_when_the_channel_closes_even_before_they_go_quiet() {
         let path = cache_path(DETAILS_CACHE_PREFIX, &project("CLOSING"));
-        let _remove = Remove::new(vec![path.clone()]);
-        let (details, changed) = DetailCache::new(HashMap::new());
-        // A quiet period far longer than the test: only closing can trigger this save.
+        let _remove = Remove(vec![path.clone()]);
+        let (details, changed) = DetailCache::new(HashMap::new(), None);
+        // A quiet period far longer than the test: only the channel closing can trigger this save.
         let writer = tokio::spawn(write_details(
             path.clone(),
             details.by_key.clone(),
@@ -602,45 +575,18 @@ mod tests {
         assert_eq!(saved_keys(&path), ["DEMO-1"]);
     }
 
-    #[tokio::test]
-    async fn closing_saves_at_once_even_while_a_refresh_still_holds_the_cache() {
+    #[test]
+    fn closing_saves_what_is_recorded_without_the_writer() {
         let path = cache_path(DETAILS_CACHE_PREFIX, &project("CLOSE"));
-        let _remove = Remove::new(vec![path.clone()]);
-        let (details, changed) = DetailCache::new(HashMap::new());
-        // A quiet period far longer than the test: only closing can trigger this save.
-        let writer = tokio::spawn(write_details(
-            path.clone(),
-            details.by_key.clone(),
-            changed,
-            Duration::from_secs(3600),
-        ));
-        // A refresh in flight holds a clone, so the channel doesn't close with `details`.
-        let _refresh = details.clone();
+        let _remove = Remove(vec![path.clone()]);
+        // No writer is running, as when a refresh holds the channel open or the writer is stuck
+        // behind a slow disk: the caller does the save itself.
+        let (details, _changed) = DetailCache::new(HashMap::new(), Some(path.clone()));
 
         details.record(test_ticket("DEMO-1", "To Do"));
-        details.close().await;
+        details.close();
 
         assert_eq!(saved_keys(&path), ["DEMO-1"]);
-        writer.await.expect("the writer stops once it has saved");
-    }
-
-    #[tokio::test]
-    async fn closing_with_nothing_unsaved_writes_nothing() {
-        let path = cache_path(DETAILS_CACHE_PREFIX, &project("IDLE"));
-        let _remove = Remove::new(vec![path.clone()]);
-        let (details, changed) = DetailCache::new(HashMap::new());
-        tokio::spawn(write_details(
-            path.clone(),
-            details.by_key.clone(),
-            changed,
-            Duration::from_secs(3600),
-        ));
-
-        details.close().await;
-
-        assert!(!path.exists());
-        // Closing a cache whose writer is gone doesn't wait for it.
-        details.close().await;
     }
 
     #[test]
@@ -650,19 +596,30 @@ mod tests {
 
         // A file an earlier build made readable by everyone is tightened when it's rewritten.
         let existing = cache_path(MY_EMAIL_PREFIX, &project("MODE"));
-        let _remove = Remove::new(vec![existing.clone()]);
+        let _remove = Remove(vec![existing.clone()]);
         std::fs::create_dir_all(existing.parent().unwrap()).unwrap();
         std::fs::write(&existing, "\"old\"").unwrap();
         std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o644)).unwrap();
         write_cache_file(&existing, &"new").unwrap();
         assert_eq!(mode(&existing), 0o600);
 
-        // A directory made for the caches is closed to others too.
-        let dir = cache_dir().join(format!("private-{}", std::process::id()));
-        let made = dir.join("x.json");
-        write_cache_text(&made, "{}").unwrap();
-        assert_eq!((mode(&dir), mode(&made)), (0o700, 0o600));
-        std::fs::remove_file(&made).unwrap();
-        std::fs::remove_dir(&dir).unwrap();
+        // A directory made for the caches is closed to others, and so is one an earlier build
+        // made readable by everyone.
+        for (name, before) in [("new", None), ("old", Some(0o755))] {
+            let dir = cache_dir().join(format!("{name}-{}", std::process::id()));
+            if let Some(before) = before {
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(before)).unwrap();
+            }
+            let made = dir.join("x.json");
+            write_cache_text(&made, "{}").unwrap();
+            assert_eq!(
+                (mode(&dir), mode(&made)),
+                (0o700, 0o600),
+                "{name} directory"
+            );
+            std::fs::remove_file(&made).unwrap();
+            std::fs::remove_dir(&dir).unwrap();
+        }
     }
 }

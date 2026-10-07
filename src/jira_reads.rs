@@ -6,20 +6,19 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::ops::ControlFlow;
 
 use anyhow::{anyhow, Result};
 
 use crate::bounded::for_each_bounded;
 use crate::cache::{
-    name_from_email, normalize_email, Cache, Epic, TeamMember, Ticket, UNASSIGNED_TEAM_EMAIL,
-    UNASSIGNED_TEAM_NAME,
+    name_from_email, normalize_email, roster_member, Cache, Epic, TeamMember, Ticket,
+    UNASSIGNED_TEAM_EMAIL, UNASSIGNED_TEAM_NAME,
 };
 use crate::config::AppConfig;
 use crate::jira_client::fetch_my_email;
 use crate::jira_rest::describe;
-use crate::jql::{self, is_key, key_list, KEYS_PER_SEARCH};
+use crate::jql::{self, is_key, key_chunks};
 use crate::local_cache::{
     load_epics_cache, load_my_email, remember_my_email, save_epics_cache, DetailCache,
 };
@@ -37,11 +36,12 @@ const SEARCHES_AT_ONCE: usize = 4;
 
 /// Runs `search` on each of `jqls`, `SEARCHES_AT_ONCE` at a time, and gives each answer to `done`
 /// with the position of its query in `jqls`, as it arrives rather than in order. A search that
-/// panics answers with an error.
+/// panics answers with an error. `done` can answer `Break` to send no more queries; the ones
+/// already sent still answer.
 async fn search_each<S, F>(
     jqls: Vec<String>,
     search: S,
-    mut done: impl FnMut(usize, Result<Vec<Ticket>>),
+    mut done: impl FnMut(usize, Result<Vec<Ticket>>) -> ControlFlow<()>,
 ) where
     S: Fn(String) -> F,
     F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
@@ -57,29 +57,20 @@ async fn search_each<S, F>(
 
 /// The tickets every one of `jqls` finds, in the order of the queries. A search that fails stops
 /// the queued ones from being sent, and the first failure in query order fails them all (a query
-/// sent after the failure is later in that order than the one that failed).
+/// that wasn't sent has no answer to fail with).
 async fn search_in_order<S, F>(jqls: Vec<String>, search: S) -> Result<Vec<Ticket>>
 where
     S: Fn(String) -> F,
     F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
 {
-    let failed = Arc::new(AtomicBool::new(false));
-    let stop_after_failure = |jql: String| {
-        let (failed, search) = (failed.clone(), search(jql));
-        async move {
-            if failed.load(Ordering::SeqCst) {
-                anyhow::bail!("not sent, as an earlier search failed");
-            }
-            let found = search.await;
-            if found.is_err() {
-                failed.store(true, Ordering::SeqCst);
-            }
-            found
-        }
-    };
     let mut answers = Vec::new();
-    search_each(jqls, stop_after_failure, |at, found| {
-        answers.push((at, found))
+    search_each(jqls, search, |at, found| {
+        let flow = match found {
+            Ok(_) => ControlFlow::Continue(()),
+            Err(_) => ControlFlow::Break(()),
+        };
+        answers.push((at, found));
+        flow
     })
     .await;
     answers.sort_by_key(|(at, _)| *at);
@@ -99,14 +90,15 @@ async fn search_all(jqls: Vec<String>, fields: &'static [&'static str]) -> Resul
 }
 
 /// The searches that find the sub-tasks among `keys` and under them, `KEYS_PER_SEARCH` keys to a
-/// search, each key once. A chunk with no usable key sends no search.
+/// search, each key once. A key that isn't shaped like a ticket key is left out.
 fn subtasks_jqls(keys: &[String]) -> Vec<String> {
     let mut keys = keys.to_vec();
     keys.sort();
     keys.dedup();
-    keys.chunks(KEYS_PER_SEARCH)
-        .filter_map(key_list)
-        .map(|list| {
+    key_chunks(&keys)
+        .into_iter()
+        .map(|chunk| {
+            let list = chunk.join(",");
             format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
         })
         .collect()
@@ -173,38 +165,39 @@ async fn read_details<S, F>(
     S: Fn(String) -> F,
     F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
 {
-    let (valid, malformed): (Vec<String>, Vec<String>) =
-        keys.iter().cloned().partition(|key| is_key(key));
-    for key in malformed {
-        let error = format!("{key:?} isn't a ticket key");
-        deliver(key, Err(error));
+    for key in keys.iter().filter(|key| !is_key(key)) {
+        deliver(key.clone(), Err(format!("{key:?} isn't a ticket key")));
     }
 
-    let chunks: Vec<&[String]> = valid.chunks(KEYS_PER_SEARCH).collect();
+    let chunks = key_chunks(keys);
     let jqls = chunks
         .iter()
         .map(|chunk| format!("key in ({})", chunk.join(",")))
         .collect();
-    search_each(jqls, search, |at, found| match found {
-        Ok(tickets) => {
-            let mut found: HashMap<_, _> = tickets
-                .into_iter()
-                .map(|ticket| (ticket.key.clone(), ticket))
-                .collect();
-            for key in chunks[at] {
-                let result = found
-                    .remove(key)
-                    .map(as_detail)
-                    .ok_or_else(|| "Jira didn't return this ticket".to_string());
-                deliver(key.clone(), result);
+    search_each(jqls, search, |at, found| {
+        match found {
+            Ok(tickets) => {
+                let mut found: HashMap<_, _> = tickets
+                    .into_iter()
+                    .map(|ticket| (ticket.key.clone(), ticket))
+                    .collect();
+                for key in &chunks[at] {
+                    let result = found
+                        .remove(*key)
+                        .map(as_detail)
+                        .ok_or_else(|| "Jira didn't return this ticket".to_string());
+                    deliver(key.to_string(), result);
+                }
+            }
+            Err(e) => {
+                let error = describe(&e);
+                for key in &chunks[at] {
+                    deliver(key.to_string(), Err(error.clone()));
+                }
             }
         }
-        Err(e) => {
-            let error = describe(&e);
-            for key in chunks[at] {
-                deliver(key.clone(), Err(error.clone()));
-            }
-        }
+        // A failed chunk fails only its keys; the other chunks are still read.
+        ControlFlow::Continue(())
     })
     .await
 }
@@ -248,23 +241,6 @@ fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchSco
         jql::quote(&config.jira.project),
         jql::quote(&config.jira.team_name)
     )
-}
-
-/// The roster member `ticket` is assigned to: the one with the assignee's email, else the one
-/// with their display name, for when Jira hides the email (or the roster has another address).
-/// The list search only finds tickets assigned to a roster email, so an email the roster lacks
-/// is another address of someone on it, and the name is how to tell who.
-fn roster_member<'a>(members: &'a [TeamMember], ticket: &Ticket) -> Option<&'a TeamMember> {
-    let by_email = ticket
-        .assignee_email
-        .as_deref()
-        .and_then(|email| members.iter().find(|member| member.email == email));
-    by_email.or_else(|| {
-        let name = ticket.assignee.as_deref()?.to_lowercase();
-        members
-            .iter()
-            .find(|member| member.name.to_lowercase() == name)
-    })
 }
 
 /// Splits one search's tickets into My Work and Team, each ordered by key. Every ticket stays
@@ -327,13 +303,13 @@ fn key_order(a: &str, b: &str) -> std::cmp::Ordering {
 
 /// The searches that find the children of `epic_keys`, `KEYS_PER_SEARCH` epics to a search. A
 /// child names its epic through the Epic Link field (company-managed projects, when jira-cli's
-/// config knows the field) or `parent` (team-managed). A chunk with no usable key sends no
-/// search. The order keeps pages stable while tickets change underneath them.
+/// config knows the field) or `parent` (team-managed). A key that isn't shaped like a ticket
+/// key is left out. The order keeps pages stable while tickets change underneath them.
 fn epic_children_jqls(project: &str, epic_keys: &[String], has_epic_link: bool) -> Vec<String> {
-    epic_keys
-        .chunks(KEYS_PER_SEARCH)
-        .filter_map(key_list)
-        .map(|list| {
+    key_chunks(epic_keys)
+        .into_iter()
+        .map(|chunk| {
+            let list = chunk.join(",");
             let link = if has_epic_link {
                 format!("\"Epic Link\" in ({list}) OR ")
             } else {
@@ -527,7 +503,7 @@ async fn fetch_with_scope(
     scope: TicketFetchScope,
     details: &DetailCache,
 ) -> Result<Cache> {
-    crate::jira_rest::ready()?;
+    crate::jira_rest::ensure_ready()?;
     let mut team_members = config.team_members();
 
     let project = &config.jira.project;
@@ -1187,7 +1163,7 @@ mod tests {
         (found, most.load(std::sync::atomic::Ordering::SeqCst))
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn searches_run_four_at_a_time_and_answer_in_the_order_asked() {
         // Fewer queries than the limit all run at once; exactly the limit does too.
         assert_eq!(run_queries(3).await.1, 3);
@@ -1211,7 +1187,7 @@ mod tests {
         assert!(run_queries(0).await.0.unwrap().is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn one_failed_search_fails_them_all_and_the_first_in_query_order_is_reported() {
         // Query "7" fails after a while, and nothing is found for the read.
         let (found, _) = run_queries(10).await;
@@ -1236,7 +1212,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_failed_search_stops_the_queued_ones_from_being_sent() {
         let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let jqls = (0..10).map(|n| n.to_string()).collect();
@@ -1248,6 +1224,47 @@ mod tests {
         let mut sent = sent.lock().unwrap().clone();
         sent.sort();
         assert_eq!(sent, ["0", "1", "2", "3"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_search_that_panics_stops_the_queued_ones_too() {
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let jqls = (0..10).map(|n| n.to_string()).collect();
+
+        let found = search_in_order(jqls, |jql| {
+            let sent = sent.clone();
+            async move {
+                sent.lock().unwrap().push(jql.clone());
+                if jql == "1" {
+                    panic!("a parser bug");
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                Ok(vec![test_ticket(&format!("T-{jql}"), "To Do")])
+            }
+        })
+        .await;
+
+        assert!(found.is_err());
+        let mut sent = sent.lock().unwrap().clone();
+        sent.sort();
+        assert_eq!(sent, ["0", "1", "2", "3"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn when_two_searches_fail_the_earlier_query_is_the_one_reported() {
+        // Query 1 fails first (5 ms), query 0 later (20 ms): the report is query 0's.
+        let found = search_in_order(vec!["0".to_string(), "1".to_string()], |jql| async move {
+            let (wait, error) = if jql == "0" {
+                (20, "query 0 failed")
+            } else {
+                (5, "query 1 failed")
+            };
+            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+            anyhow::bail!(error)
+        })
+        .await;
+
+        assert_eq!(found.unwrap_err().to_string(), "query 0 failed");
     }
 
     #[tokio::test]
