@@ -123,7 +123,7 @@ pub async fn create_ticket_with_fields(
 
     let args_ref = args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
     let output = run_cmd("jira", &args_ref).await?;
-    // jira-cli typically outputs something like "Issue AMP-1234 created"
+    // jira-cli typically outputs something like "Issue DEMO-1234 created"
     // Extract the key
     let key = output
         .split_whitespace()

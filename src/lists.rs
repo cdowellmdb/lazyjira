@@ -58,7 +58,7 @@ pub fn bucket_tickets(
     (mine, team)
 }
 
-/// Orders ticket keys as Jira does: by project, then by number (`AMP-9` before `AMP-10`).
+/// Orders ticket keys as Jira does: by project, then by number (`DEMO-9` before `DEMO-10`).
 pub fn key_order(a: &str, b: &str) -> std::cmp::Ordering {
     let split = |key: &str| {
         let (project, number) = key.rsplit_once('-').unwrap_or((key, ""));
@@ -173,8 +173,8 @@ mod tests {
     fn test_config() -> AppConfig {
         AppConfig {
             jira: JiraConfig {
-                project: "AMP".into(),
-                team_name: "Code Generation".into(),
+                project: "DEMO".into(),
+                team_name: "Payments Platform".into(),
                 done_window_days: 14,
                 epics_i_care_about: vec![],
             },
@@ -217,15 +217,15 @@ mod tests {
     #[test]
     fn one_search_fills_my_work_and_team_by_the_roster_email() {
         let found = vec![
-            assigned("AMP-3", "To Do", "Sam", "sam.chen@example.com"),
-            assigned("AMP-2", "Done", "Alex", "alex.rivera@example.com"),
-            assigned("AMP-1", "To Do", "Alex", "alex.rivera@example.com"),
-            test_ticket("AMP-4", "To Do"),
+            assigned("DEMO-3", "To Do", "Sam", "sam.chen@example.com"),
+            assigned("DEMO-2", "Done", "Alex", "alex.rivera@example.com"),
+            assigned("DEMO-1", "To Do", "Alex", "alex.rivera@example.com"),
+            test_ticket("DEMO-4", "To Do"),
         ];
         let mut members = roster();
         let (mine, team) = bucket_tickets(found, &mut members, "alex.rivera@example.com");
-        assert_eq!(ticket_keys(&mine), ["AMP-1", "AMP-2"]);
-        assert_eq!(ticket_keys(&team), ["AMP-1", "AMP-2", "AMP-3", "AMP-4"]);
+        assert_eq!(ticket_keys(&mine), ["DEMO-1", "DEMO-2"]);
+        assert_eq!(ticket_keys(&team), ["DEMO-1", "DEMO-2", "DEMO-3", "DEMO-4"]);
     }
 
     #[test]
@@ -235,7 +235,7 @@ mod tests {
             .team
             .insert("Sam Chen".to_string(), "Sam.Chen@Example.com".to_string());
         let mut members = config.team_members();
-        let body = r#"{"total": 1, "issues": [{"key": "AMP-1", "fields": {
+        let body = r#"{"total": 1, "issues": [{"key": "DEMO-1", "fields": {
             "summary": "One", "status": {"name": "To Do"},
             "assignee": {"displayName": "Sam C.", "emailAddress": "SAM.CHEN@example.com"}}}]}"#;
         let found = crate::jira_issue::parse_search_page(body, None)
@@ -255,14 +255,14 @@ mod tests {
 
     #[test]
     fn an_assignee_whose_email_jira_hides_is_found_on_the_roster_by_display_name() {
-        let mut hidden = test_ticket("AMP-1", "To Do");
+        let mut hidden = test_ticket("DEMO-1", "To Do");
         hidden.assignee = Some("alex rivera".to_string());
         let mut members = roster();
 
         let (mine, team) = bucket_tickets(vec![hidden], &mut members, "alex.rivera@example.com");
 
         assert_eq!(members.len(), 2, "no one new joins the roster");
-        assert_eq!(ticket_keys(&mine), ["AMP-1"]);
+        assert_eq!(ticket_keys(&mine), ["DEMO-1"]);
         assert_eq!(
             team[0].assignee_email.as_deref(),
             Some("alex.rivera@example.com")
@@ -275,7 +275,7 @@ mod tests {
             name: "José Álvarez".into(),
             email: "jose@example.com".into(),
         }];
-        let mut hidden = test_ticket("AMP-1", "To Do");
+        let mut hidden = test_ticket("DEMO-1", "To Do");
         hidden.assignee = Some("JOSÉ ÁLVAREZ".to_string());
 
         let (_, team) = bucket_tickets(vec![hidden], &mut members, "me@example.com");
@@ -287,11 +287,11 @@ mod tests {
     #[test]
     fn a_ticket_nobody_on_the_roster_matches_stays_visible_under_its_assignee() {
         // An email the roster doesn't have: the assignee joins Team with that email.
-        let stranger = assigned("AMP-5", "To Do", "Pat Doe", "pat@example.com");
+        let stranger = assigned("DEMO-5", "To Do", "Pat Doe", "pat@example.com");
         // No email at all: the display name stands in for it, which jira-cli can assign to.
-        let mut hidden = test_ticket("AMP-6", "To Do");
+        let mut hidden = test_ticket("DEMO-6", "To Do");
         hidden.assignee = Some("Kim Lo".to_string());
-        let mut hidden_again = test_ticket("AMP-7", "To Do");
+        let mut hidden_again = test_ticket("DEMO-7", "To Do");
         hidden_again.assignee = Some("Kim Lo".to_string());
         let mut members = roster();
 
@@ -302,7 +302,7 @@ mod tests {
         );
 
         assert!(mine.is_empty());
-        assert_eq!(ticket_keys(&team), ["AMP-5", "AMP-6", "AMP-7"]);
+        assert_eq!(ticket_keys(&team), ["DEMO-5", "DEMO-6", "DEMO-7"]);
         let joined: Vec<_> = members[2..]
             .iter()
             .map(|m| (m.name.as_str(), m.email.as_str()))
@@ -323,7 +323,10 @@ mod tests {
     fn tickets_without_an_assignee_go_to_the_unassigned_row() {
         let mut members = roster();
         let (mine, team) = bucket_tickets(
-            vec![test_ticket("AMP-9", "To Do"), test_ticket("AMP-8", "To Do")],
+            vec![
+                test_ticket("DEMO-9", "To Do"),
+                test_ticket("DEMO-8", "To Do"),
+            ],
             &mut members,
             "alex.rivera@example.com",
         );
@@ -344,35 +347,35 @@ mod tests {
 
     #[test]
     fn keys_are_ordered_by_project_then_number() {
-        let mut found: Vec<Ticket> = ["AMP-10", "AMP-2", "AMP-9", "ABC-100", "AMP-1"]
+        let mut found: Vec<Ticket> = ["DEMO-10", "DEMO-2", "DEMO-9", "ABC-100", "DEMO-1"]
             .iter()
             .map(|key| test_ticket(key, "To Do"))
             .collect();
         found.sort_by(|a, b| key_order(&a.key, &b.key));
         assert_eq!(
             ticket_keys(&found),
-            ["ABC-100", "AMP-1", "AMP-2", "AMP-9", "AMP-10"]
+            ["ABC-100", "DEMO-1", "DEMO-2", "DEMO-9", "DEMO-10"]
         );
     }
 
     /// What the children searches answer, as Jira shapes it (the Epic Link field is a plain
-    /// string): three children of AMP-100, one found twice (two searches can both match it), one
-    /// of AMP-200 through `parent`, one through Epic Link, and one of an epic outside the list.
+    /// string): three children of DEMO-100, one found twice (two searches can both match it), one
+    /// of DEMO-200 through `parent`, one through Epic Link, and one of an epic outside the list.
     const CHILDREN_PAGE: &str = r#"{"total": 7, "issues": [
-        {"key": "AMP-3", "fields": {"summary": "Three", "status": {"name": "Resolved"},
-          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-100"}},
-        {"key": "AMP-1", "fields": {"summary": "One", "status": {"name": "Done"},
-          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-100"}},
-        {"key": "AMP-2", "fields": {"summary": "Two", "status": {"name": "In Progress"},
-          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-100"}},
-        {"key": "AMP-2", "fields": {"summary": "Two", "status": {"name": "In Progress"},
-          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-100"}},
-        {"key": "AMP-4", "fields": {"summary": "Four", "status": {"name": "To Do"},
-          "issuetype": {"name": "Story", "subtask": false}, "parent": {"key": "AMP-200"}}},
-        {"key": "AMP-5", "fields": {"summary": "Five", "status": {"name": "Done"},
-          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-200"}},
-        {"key": "AMP-6", "fields": {"summary": "Six", "status": {"name": "Done"},
-          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "AMP-999"}}]}"#;
+        {"key": "DEMO-3", "fields": {"summary": "Three", "status": {"name": "Resolved"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "DEMO-100"}},
+        {"key": "DEMO-1", "fields": {"summary": "One", "status": {"name": "Done"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "DEMO-100"}},
+        {"key": "DEMO-2", "fields": {"summary": "Two", "status": {"name": "In Progress"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "DEMO-100"}},
+        {"key": "DEMO-2", "fields": {"summary": "Two", "status": {"name": "In Progress"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "DEMO-100"}},
+        {"key": "DEMO-4", "fields": {"summary": "Four", "status": {"name": "To Do"},
+          "issuetype": {"name": "Story", "subtask": false}, "parent": {"key": "DEMO-200"}}},
+        {"key": "DEMO-5", "fields": {"summary": "Five", "status": {"name": "Done"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "DEMO-200"}},
+        {"key": "DEMO-6", "fields": {"summary": "Six", "status": {"name": "Done"},
+          "issuetype": {"name": "Task", "subtask": false}, "customfield_10857": "DEMO-999"}}]}"#;
 
     fn children_page() -> Vec<Ticket> {
         crate::jira_issue::parse_search_page(CHILDREN_PAGE, Some("customfield_10857"))
@@ -401,10 +404,10 @@ mod tests {
         let found = children_page();
         // The epic search can answer out of order, and a page boundary can repeat an epic.
         let listed = epic_tickets(&[
-            ("AMP-300", "Quiet"),
-            ("AMP-200", "Search"),
-            ("AMP-100", "Checkout"),
-            ("AMP-200", "Search"),
+            ("DEMO-300", "Quiet"),
+            ("DEMO-200", "Search"),
+            ("DEMO-100", "Checkout"),
+            ("DEMO-200", "Search"),
         ]);
 
         let epics = group_by_epic(listed, found);
@@ -417,16 +420,16 @@ mod tests {
         };
         assert_eq!(
             epics.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
-            ["AMP-100", "AMP-200", "AMP-300"]
+            ["DEMO-100", "DEMO-200", "DEMO-300"]
         );
         assert_eq!(epics[0].summary, "Checkout");
-        assert_eq!(keys(&epics[0]), ["AMP-1", "AMP-2", "AMP-3"]);
+        assert_eq!(keys(&epics[0]), ["DEMO-1", "DEMO-2", "DEMO-3"]);
         // A non-sub-task's parent is its epic when no Epic Link says otherwise.
-        assert_eq!(keys(&epics[1]), ["AMP-4", "AMP-5"]);
-        // AMP-6 names an epic that isn't listed, so it belongs to no epic here.
+        assert_eq!(keys(&epics[1]), ["DEMO-4", "DEMO-5"]);
+        // DEMO-6 names an epic that isn't listed, so it belongs to no epic here.
         assert!(epics[2].children.is_empty());
         for child in &epics[0].children {
-            assert_eq!(child.epic_key.as_deref(), Some("AMP-100"));
+            assert_eq!(child.epic_key.as_deref(), Some("DEMO-100"));
             assert_eq!(child.epic_name.as_deref(), Some("Checkout"));
         }
     }
@@ -435,17 +438,17 @@ mod tests {
     fn epic_progress_counts_the_children_and_their_sub_tasks() {
         let found = children_page();
         let listed = epic_tickets(&[
-            ("AMP-100", "Checkout"),
-            ("AMP-200", "Search"),
-            ("AMP-300", "Quiet"),
+            ("DEMO-100", "Checkout"),
+            ("DEMO-200", "Search"),
+            ("DEMO-300", "Quiet"),
         ]);
         let mut epics = group_by_epic(listed, found);
-        // AMP-1 gained a done sub-task, AMP-4 an open one: Jira doesn't link them to the epic.
+        // DEMO-1 gained a done sub-task, DEMO-4 an open one: Jira doesn't link them to the epic.
         subtasks::add_to_epics(
             &mut epics,
             &[
-                subtask("AMP-7", "AMP-1", "Done"),
-                subtask("AMP-8", "AMP-4", "To Do"),
+                subtask("DEMO-7", "DEMO-1", "Done"),
+                subtask("DEMO-8", "DEMO-4", "To Do"),
             ],
         );
 
@@ -453,9 +456,9 @@ mod tests {
             &["In Progress".to_string(), "To Do".to_string()],
             &["Done".to_string(), "Closed".to_string()],
         );
-        // Worked by hand: AMP-100 is AMP-1, AMP-2, AMP-3 and AMP-7, of which AMP-1, AMP-3
-        // (Resolved follows Done) and AMP-7 are done; AMP-200 is AMP-4, AMP-5 and AMP-8, of
-        // which only AMP-5 is done.
+        // Worked by hand: DEMO-100 is DEMO-1, DEMO-2, DEMO-3 and DEMO-7, of which DEMO-1, DEMO-3
+        // (Resolved follows Done) and DEMO-7 are done; DEMO-200 is DEMO-4, DEMO-5 and DEMO-8, of
+        // which only DEMO-5 is done.
         assert_eq!(
             epics
                 .iter()
@@ -465,20 +468,20 @@ mod tests {
         );
         assert_eq!(epics[0].progress_pct(&rules), 75.0);
         assert_eq!(epics[2].progress_pct(&rules), 0.0);
-        assert_eq!(epics[1].children[2].parent_key.as_deref(), Some("AMP-4"));
+        assert_eq!(epics[1].children[2].parent_key.as_deref(), Some("DEMO-4"));
     }
 
     #[test]
     fn reconcile_epic_child_statuses_uses_latest_ticket_status() {
         let mut epics = vec![Epic {
-            key: "AMP-100".to_string(),
+            key: "DEMO-100".to_string(),
             summary: "Epic".to_string(),
-            children: vec![test_ticket("AMP-1", "To Do")],
+            children: vec![test_ticket("DEMO-1", "To Do")],
         }];
-        let mut resolved = test_ticket("AMP-1", "To Do");
+        let mut resolved = test_ticket("DEMO-1", "To Do");
         resolved.status = "Resolved".to_string();
         let my_tickets = vec![resolved];
-        let team_tickets = vec![test_ticket("AMP-2", "Needs Triage")];
+        let team_tickets = vec![test_ticket("DEMO-2", "Needs Triage")];
 
         reconcile_epic_child_statuses(&mut epics, &my_tickets, &team_tickets);
 
@@ -488,9 +491,9 @@ mod tests {
     #[test]
     fn reconcile_epic_child_statuses_leaves_unknown_children_unchanged() {
         let mut epics = vec![Epic {
-            key: "AMP-100".to_string(),
+            key: "DEMO-100".to_string(),
             summary: "Epic".to_string(),
-            children: vec![test_ticket("AMP-1", "To Do")],
+            children: vec![test_ticket("DEMO-1", "To Do")],
         }];
 
         reconcile_epic_child_statuses(&mut epics, &[], &[]);
@@ -501,25 +504,25 @@ mod tests {
     #[test]
     fn an_epic_key_from_the_search_gets_its_name_from_the_epics() {
         let epics = vec![Epic {
-            key: "AMP-100".to_string(),
+            key: "DEMO-100".to_string(),
             summary: "Checkout".to_string(),
-            children: vec![test_ticket("AMP-2", "To Do")],
+            children: vec![test_ticket("DEMO-2", "To Do")],
         }];
-        let mut searched = test_ticket("AMP-1", "To Do");
-        searched.epic_key = Some("AMP-100".to_string());
+        let mut searched = test_ticket("DEMO-1", "To Do");
+        searched.epic_key = Some("DEMO-100".to_string());
         // Not a child in the epics cache yet, but the search says which epic it's in.
-        let mut mine = vec![searched, test_ticket("AMP-2", "To Do")];
+        let mut mine = vec![searched, test_ticket("DEMO-2", "To Do")];
         attach_epics_to_tickets(&mut mine, &mut [], &epics);
         assert_eq!(mine[0].epic_name.as_deref(), Some("Checkout"));
-        assert_eq!(mine[1].epic_key.as_deref(), Some("AMP-100"));
+        assert_eq!(mine[1].epic_key.as_deref(), Some("DEMO-100"));
         assert_eq!(mine[1].epic_name.as_deref(), Some("Checkout"));
 
         // The search is fresher than the epics cache, so its epic wins over the cache's.
-        let mut moved = test_ticket("AMP-2", "To Do");
-        moved.epic_key = Some("AMP-200".to_string());
+        let mut moved = test_ticket("DEMO-2", "To Do");
+        moved.epic_key = Some("DEMO-200".to_string());
         let mut mine = vec![moved];
         attach_epics_to_tickets(&mut mine, &mut [], &epics);
-        assert_eq!(mine[0].epic_key.as_deref(), Some("AMP-200"));
+        assert_eq!(mine[0].epic_key.as_deref(), Some("DEMO-200"));
         assert_eq!(mine[0].epic_name, None);
     }
 }

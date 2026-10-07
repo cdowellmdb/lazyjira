@@ -2253,8 +2253,8 @@ mod tests {
     fn sample_config() -> AppConfig {
         AppConfig {
             jira: crate::config::JiraConfig {
-                project: "AMP".to_string(),
-                team_name: "Code Generation".to_string(),
+                project: "DEMO".to_string(),
+                team_name: "Payments Platform".to_string(),
                 done_window_days: 14,
                 epics_i_care_about: vec![],
             },
@@ -2330,7 +2330,7 @@ mod tests {
                 most.fetch_max(running.fetch_add(1, SeqCst) + 1, SeqCst);
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 running.fetch_sub(1, SeqCst);
-                (format!("AMP-{n}"), Ok::<(), String>(()))
+                (format!("DEMO-{n}"), Ok::<(), String>(()))
             }
         })
         .await;
@@ -2424,7 +2424,7 @@ mod tests {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::MyWork;
-        app.cache.my_tickets = vec![ticket("AMP-1", "A", "In Progress")];
+        app.cache.my_tickets = vec![ticket("DEMO-1", "A", "In Progress")];
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         handle_main_keys(
             &mut app,
@@ -2454,7 +2454,7 @@ mod tests {
         .iter()
         .enumerate()
         .map(|(i, status)| {
-            let mut ticket = ticket(&format!("AMP-{i}"), "Summary", status);
+            let mut ticket = ticket(&format!("DEMO-{i}"), "Summary", status);
             ticket.description =
                 Some("*bold* [link|https://example.com] {color:red}red{color} @alex".into());
             ticket.labels = vec!["label".into()];
@@ -2473,7 +2473,7 @@ mod tests {
                     app.show_keybindings = overlay == 1;
                     app.settings = (overlay == 2).then(|| settings::Settings::new(&config));
                     if overlay == 3 {
-                        app.open_detail("AMP-0".into());
+                        app.open_detail("DEMO-0".into());
                     }
                     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
                     terminal.draw(|f| ui(f, &app, &config)).unwrap();
@@ -2560,7 +2560,7 @@ mod tests {
     fn comment_shift_enter_inserts_newline() {
         let mut app = App::new();
         app.comment_state = Some(crate::app::CommentState {
-            ticket_key: "AMP-1".to_string(),
+            ticket_key: "DEMO-1".to_string(),
             body: widgets::form::editor("hello"),
         });
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2575,7 +2575,7 @@ mod tests {
     fn comment_enter_requires_non_empty_body() {
         let mut app = App::new();
         app.comment_state = Some(crate::app::CommentState {
-            ticket_key: "AMP-1".to_string(),
+            ticket_key: "DEMO-1".to_string(),
             body: widgets::form::editor("   "),
         });
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2590,7 +2590,7 @@ mod tests {
     fn comment_ctrl_j_inserts_newline() {
         let mut app = App::new();
         app.comment_state = Some(crate::app::CommentState {
-            ticket_key: "AMP-1".to_string(),
+            ticket_key: "DEMO-1".to_string(),
             body: widgets::form::editor("hello"),
         });
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2606,7 +2606,7 @@ mod tests {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::MyWork;
-        app.cache.my_tickets = vec![ticket("AMP-1", "A", "In Progress")];
+        app.cache.my_tickets = vec![ticket("DEMO-1", "A", "In Progress")];
         app.selected_index = 1; // current ticket row
 
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2621,7 +2621,7 @@ mod tests {
 
         match app.bulk_state {
             Some(BulkState::ActionPicker { targets, .. }) => {
-                assert_eq!(targets, vec!["AMP-1".to_string()]);
+                assert_eq!(targets, vec!["DEMO-1".to_string()]);
             }
             _ => panic!("expected bulk action picker"),
         }
@@ -2654,7 +2654,7 @@ mod tests {
         app.loading = false;
         app.active_tab = Tab::Epics;
         app.cache.epics = vec![crate::cache::Epic {
-            key: "AMP-500".to_string(),
+            key: "DEMO-500".to_string(),
             summary: "Epic Header".to_string(),
             children: vec![],
         }];
@@ -2670,7 +2670,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(app.detail_epic_key.as_deref(), Some("AMP-500"));
+        assert_eq!(app.detail_epic_key.as_deref(), Some("DEMO-500"));
         assert!(app.detail_ticket_key.is_none());
     }
 
@@ -2681,7 +2681,7 @@ mod tests {
         app.active_tab = Tab::Epics;
         app.search = Some(String::new());
         app.cache.epics = vec![crate::cache::Epic {
-            key: "AMP-501".to_string(),
+            key: "DEMO-501".to_string(),
             summary: "Epic Header Search".to_string(),
             children: vec![],
         }];
@@ -2690,7 +2690,7 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         handle_search_keys(&mut app, KeyCode::Enter, KeyModifiers::NONE, &tx).await;
 
-        assert_eq!(app.detail_epic_key.as_deref(), Some("AMP-501"));
+        assert_eq!(app.detail_epic_key.as_deref(), Some("DEMO-501"));
         assert!(app.detail_ticket_key.is_none());
     }
 
@@ -2715,8 +2715,8 @@ mod tests {
         app.active_tab = Tab::Filters;
         app.filter_focus = FilterFocus::Results;
         app.filter_results = vec![
-            ticket("AMP-70", "Grouped", "In Progress"),
-            ticket("AMP-71", "Grouped too", "In Progress"),
+            ticket("DEMO-70", "Grouped", "In Progress"),
+            ticket("DEMO-71", "Grouped too", "In Progress"),
         ];
         app.mark_cache_changed();
         app.selected_index = 1;
@@ -2736,8 +2736,8 @@ mod tests {
         app.active_tab = Tab::Filters;
         app.filter_focus = FilterFocus::Results;
         app.filter_results = vec![
-            ticket("AMP-72", "In progress", "In Progress"),
-            ticket("AMP-73", "Ready", "Ready for Work"),
+            ticket("DEMO-72", "In progress", "In Progress"),
+            ticket("DEMO-73", "Ready", "Ready for Work"),
         ];
         app.mark_cache_changed();
 
@@ -2758,7 +2758,7 @@ mod tests {
         app.loading = false;
         app.active_tab = Tab::Filters;
         app.filter_focus = FilterFocus::Results;
-        app.filter_results = vec![ticket("AMP-74", "Grouped", "In Progress")];
+        app.filter_results = vec![ticket("DEMO-74", "Grouped", "In Progress")];
         app.collapsed_filters.insert("In Progress".to_string());
         app.mark_cache_changed();
         app.selected_index = 0;
@@ -2777,7 +2777,7 @@ mod tests {
         app.loading = false;
         app.active_tab = Tab::Filters;
         app.filter_focus = FilterFocus::Results;
-        let mut ticket = ticket("AMP-75", "Ticket detail", "In Progress");
+        let mut ticket = ticket("DEMO-75", "Ticket detail", "In Progress");
         ticket.detail_loaded = true;
         app.filter_results = vec![ticket];
         app.mark_cache_changed();
@@ -2787,7 +2787,7 @@ mod tests {
         let mut config = sample_config();
         handle_filter_keys(&mut app, KeyCode::Enter, &tx, &mut config);
 
-        assert_eq!(app.detail_ticket_key.as_deref(), Some("AMP-75"));
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("DEMO-75"));
     }
 
     #[tokio::test]

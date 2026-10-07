@@ -427,7 +427,10 @@ mod tests {
         let summary = summarize(
             BulkAction::Move,
             target.clone(),
-            vec![("AMP-1".to_string(), Ok(())), ("AMP-2".to_string(), Ok(()))],
+            vec![
+                ("DEMO-1".to_string(), Ok(())),
+                ("DEMO-2".to_string(), Ok(())),
+            ],
             Vec::new(),
         );
         assert_eq!(summary.target, target);
@@ -445,10 +448,10 @@ mod tests {
                 member_name: "Dev".to_string(),
             },
             vec![
-                ("AMP-1".to_string(), Ok(())),
-                ("AMP-2".to_string(), Err("boom".to_string())),
+                ("DEMO-1".to_string(), Ok(())),
+                ("DEMO-2".to_string(), Err("boom".to_string())),
             ],
-            vec![("AMP-3".to_string(), "already assigned".to_string())],
+            vec![("DEMO-3".to_string(), "already assigned".to_string())],
         );
         assert_eq!(summary.total, 3);
         assert_eq!(summary.attempted, 2);
@@ -457,7 +460,7 @@ mod tests {
         assert_eq!(summary.failed_details.len(), 1);
         assert_eq!(
             summary.skipped,
-            [("AMP-3".to_string(), "already assigned".to_string())]
+            [("DEMO-3".to_string(), "already assigned".to_string())]
         );
     }
 
@@ -471,9 +474,9 @@ mod tests {
             },
             vec![],
             vec![
-                ("AMP-1".to_string(), "already Closed".to_string()),
+                ("DEMO-1".to_string(), "already Closed".to_string()),
                 (
-                    "AMP-2".to_string(),
+                    "DEMO-2".to_string(),
                     "no transition to Closed from Open".to_string(),
                 ),
             ],

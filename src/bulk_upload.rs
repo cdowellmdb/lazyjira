@@ -227,7 +227,7 @@ mod tests {
 
     fn sample_context() -> BulkUploadContext {
         let mut epics = HashSet::new();
-        epics.insert("AMP-1".to_string());
+        epics.insert("DEMO-1".to_string());
         let mut summaries = HashSet::new();
         summaries.insert("existing summary".to_string());
         BulkUploadContext::new(epics, summaries)
@@ -246,13 +246,13 @@ mod tests {
     #[test]
     fn parse_success_with_all_supported_fields() {
         let csv = "summary,type,assignee_email,epic_key,labels,description\n\
-                   \"CSV task\",Bug,dev@example.com,AMP-1,\"frontend|urgent\",\"first line\nsecond line, with comma\"\n";
+                   \"CSV task\",Bug,dev@example.com,DEMO-1,\"frontend|urgent\",\"first line\nsecond line, with comma\"\n";
         let path = write_temp_csv(csv);
         let preview = parse_csv_preview(&path, &sample_context()).expect("parse");
         let row = &preview.rows[0];
         assert_eq!(row.issue_type, "Bug");
         assert_eq!(row.assignee_email.as_deref(), Some("dev@example.com"));
-        assert_eq!(row.epic_key.as_deref(), Some("AMP-1"));
+        assert_eq!(row.epic_key.as_deref(), Some("DEMO-1"));
         assert_eq!(
             row.labels,
             vec!["frontend".to_string(), "urgent".to_string()]
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn row_validation_catches_expected_errors() {
         let csv = "summary,type,assignee_email,epic_key\n\
-                   ,Feature,bad-email,AMP-999\n";
+                   ,Feature,bad-email,DEMO-999\n";
         let path = write_temp_csv(csv);
         let preview = parse_csv_preview(&path, &sample_context()).expect("parse");
         let row = &preview.rows[0];
