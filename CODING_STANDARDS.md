@@ -6,11 +6,17 @@ Reviewers apply these rules to every change; `code-review` reads them for its St
 
 Code quality and architecture are release requirements. Before raising any PR, run all four reviews: `ponytail:ponytail-review`, `code-review` (both Standards and Spec), `thermo-nuclear-code-quality-review`, and `pragmatic-programmer`. Address every P0, P1 and P2 finding and re-review the affected changes before opening the PR. These reviews are mandatory for every PR.
 
+A change that contradicts an explicit line in the spec or ticket is at least P2, however small it looks: shrinking a click target from 3 cells to 1 against a spec that kept it is P2.
+
 ## Promised bounds have boundary tests
 
-When a docstring, comment or ADR promises a limit, a unit, or what is retained, a test exercises the exact boundary and asserts the exact value. An inequality does not prove what was kept.
+When a docstring, comment, ADR, spec or ticket line promises a limit, a unit, what is retained, or that something stays unchanged, a test exercises the exact boundary and asserts the exact value. An inequality does not prove what was kept.
 
-For example, "searches 50 keys at a time" needs a test with exactly 50 keys (one search) and one with 51 (two searches, the second holding only the 51st key). `assert!(searches.len() <= 2)` passes even when a key is dropped. Test the promised unit too: a column width needs wide characters (`unicode-width`, not `str::len`), and a byte limit needs multi-byte input split at the boundary.
+For example, "searches 50 keys at a time" needs a test with exactly 50 keys (one search) and one with 51 (two searches, the second holding only the 51st key). `assert!(searches.len() <= 2)` passes even when a key is dropped. Test the promised unit too: a column width needs wide characters (`unicode-width`, not `str::len`), and a byte limit needs multi-byte input split at the boundary. A promise of no change is pinned to the old values: "mouse hit targets keep their current cells" needs a test asserting those cells.
+
+## README moves with the change
+
+A change to keys, flags, config or what the lists show updates README.md in the same PR.
 
 ## PR bodies
 
