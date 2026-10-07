@@ -1163,7 +1163,7 @@ mod tests {
         (found, most.load(std::sync::atomic::Ordering::SeqCst))
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn searches_run_four_at_a_time_and_answer_in_the_order_asked() {
         // Fewer queries than the limit all run at once; exactly the limit does too.
         assert_eq!(run_queries(3).await.1, 3);
@@ -1187,7 +1187,7 @@ mod tests {
         assert!(run_queries(0).await.0.unwrap().is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn one_failed_search_fails_them_all_and_the_first_in_query_order_is_reported() {
         // Query "7" fails after a while, and nothing is found for the read.
         let (found, _) = run_queries(10).await;
@@ -1212,7 +1212,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_failed_search_stops_the_queued_ones_from_being_sent() {
         let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let jqls = (0..10).map(|n| n.to_string()).collect();

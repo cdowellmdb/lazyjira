@@ -84,7 +84,7 @@ mod tests {
         (most.load(SeqCst), positions)
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn no_more_than_the_limit_run_at_once() {
         // Fewer than the limit all run at once, and so do exactly as many as the limit.
         assert_eq!(run(3, 2).await, (2, vec![0, 1]));
