@@ -4,4 +4,4 @@ Lazyjira uses the existing Jira CLI for ticket reads, creation, comments, assign
 
 **Update:** ticket reads (lists, epics, details) now use Jira's REST API too ([ADR 0005](0005-read-lists-over-jira-rest-search.md)), which supersedes the read half of this decision. jira-cli still answers `jira me`, creates tickets, comments, assigns and edits fields.
 
-Recorded from the existing design in [CLAUDE.md](../../CLAUDE.md#moves-use-jiras-transitions) and [the transition implementation](../../src/jira_rest.rs).
+Recorded from the existing design in [the architecture notes](../architecture.md#moves-use-jiras-transitions) and [the transition implementation](../../src/jira_rest.rs).

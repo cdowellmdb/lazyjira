@@ -27,7 +27,7 @@ struct SetupState {
 pub async fn run_setup(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<AppConfig> {
     let user_email = crate::jira_client::fetch_my_email()
         .await
-        .unwrap_or_else(|_| "unknown@mongodb.com".to_string());
+        .unwrap_or_else(|_| "unknown@example.com".to_string());
 
     let mut state = SetupState {
         step: SetupStep::ProjectKey,
@@ -185,7 +185,7 @@ fn render_setup(f: &mut ratatui::Frame, state: &SetupState) {
             ]));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "  (e.g., AMP, SERVER, CLOUD)  Press Enter to continue.",
+                "  (e.g., DEMO, SERVER, CLOUD)  Press Enter to continue.",
                 Style::default().fg(Color::DarkGray),
             )));
         }

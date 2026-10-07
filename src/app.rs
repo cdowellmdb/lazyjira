@@ -2042,7 +2042,7 @@ mod tests {
 
     #[test]
     fn step_detail_moves_between_tickets_skipping_headers() {
-        let mut app = my_work_app(&[("DSCI-1", "In Progress"), ("DSCI-2", "Backlog")]);
+        let mut app = my_work_app(&[("DEMO-1", "In Progress"), ("DEMO-2", "Backlog")]);
         fn row_of(app: &mut App, key: &str) -> usize {
             (0..app.item_count())
                 .find(|&i| {
@@ -2051,25 +2051,25 @@ mod tests {
                 })
                 .unwrap()
         }
-        let first = row_of(&mut app, "DSCI-1");
-        let second = row_of(&mut app, "DSCI-2");
+        let first = row_of(&mut app, "DEMO-1");
+        let second = row_of(&mut app, "DEMO-2");
         assert!(second > first + 1, "a status header sits between them");
 
         app.selected_index = first;
-        app.open_detail("DSCI-1".to_string());
+        app.open_detail("DEMO-1".to_string());
         assert_eq!(app.detail_position(), Some((1, 2)));
 
-        // DSCI-2's detail isn't loaded, so it needs fetching.
-        assert_eq!(app.step_detail(true), Some("DSCI-2".to_string()));
-        assert_eq!(app.detail_ticket_key.as_deref(), Some("DSCI-2"));
+        // DEMO-2's detail isn't loaded, so it needs fetching.
+        assert_eq!(app.step_detail(true), Some("DEMO-2".to_string()));
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("DEMO-2"));
         assert_eq!(app.selected_index, second);
         assert_eq!(app.detail_position(), Some((2, 2)));
 
         // Nothing after the last ticket.
         assert_eq!(app.step_detail(true), None);
-        assert_eq!(app.detail_ticket_key.as_deref(), Some("DSCI-2"));
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("DEMO-2"));
 
-        assert_eq!(app.step_detail(false), Some("DSCI-1".to_string()));
+        assert_eq!(app.step_detail(false), Some("DEMO-1".to_string()));
         assert_eq!(app.selected_index, first);
         // Its fetch is already running.
         app.step_detail(true);
@@ -2078,20 +2078,20 @@ mod tests {
 
     #[test]
     fn opening_a_loaded_detail_still_fetches_jiras_copy() {
-        let mut app = my_work_app(&[("DSCI-1", "In Progress")]);
+        let mut app = my_work_app(&[("DEMO-1", "In Progress")]);
         app.cache.my_tickets[0].detail_loaded = true;
         // The cached detail shows at once, and its fetch starts anyway: Jira's may be newer.
         assert_eq!(
-            app.open_fresh_detail("DSCI-1".into()),
-            Some("DSCI-1".into())
+            app.open_fresh_detail("DEMO-1".into()),
+            Some("DEMO-1".into())
         );
-        assert_eq!(app.detail_ticket_key.as_deref(), Some("DSCI-1"));
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("DEMO-1"));
         // Not twice while one is running.
-        assert_eq!(app.open_fresh_detail("DSCI-1".into()), None);
-        app.end_detail_fetch("DSCI-1");
+        assert_eq!(app.open_fresh_detail("DEMO-1".into()), None);
+        app.end_detail_fetch("DEMO-1");
         assert_eq!(
-            app.open_fresh_detail("DSCI-1".into()),
-            Some("DSCI-1".into())
+            app.open_fresh_detail("DEMO-1".into()),
+            Some("DEMO-1".into())
         );
     }
 
@@ -2117,12 +2117,12 @@ mod tests {
     #[test]
     fn detail_fetch_error_clears_on_retry() {
         let mut app = App::new();
-        assert!(app.begin_detail_fetch("DSCI-1"));
-        app.end_detail_fetch("DSCI-1");
-        app.fail_detail_fetch("DSCI-1", "timed out".to_string());
-        assert_eq!(app.detail_fetch_error("DSCI-1"), Some("timed out"));
-        assert!(app.begin_detail_fetch("DSCI-1"));
-        assert_eq!(app.detail_fetch_error("DSCI-1"), None);
+        assert!(app.begin_detail_fetch("DEMO-1"));
+        app.end_detail_fetch("DEMO-1");
+        app.fail_detail_fetch("DEMO-1", "timed out".to_string());
+        assert_eq!(app.detail_fetch_error("DEMO-1"), Some("timed out"));
+        assert!(app.begin_detail_fetch("DEMO-1"));
+        assert_eq!(app.detail_fetch_error("DEMO-1"), None);
     }
 
     fn my_work_group_names(app: &App) -> Vec<String> {
@@ -2142,18 +2142,18 @@ mod tests {
     }
 
     fn family_app() -> App {
-        let mut first = ticket("AMP-2", "First sub-task");
-        first.parent_key = Some("AMP-1".into());
-        let mut second = ticket("AMP-3", "Second sub-task");
-        second.parent_key = Some("AMP-1".into());
+        let mut first = ticket("DEMO-2", "First sub-task");
+        first.parent_key = Some("DEMO-1".into());
+        let mut second = ticket("DEMO-3", "Second sub-task");
+        second.parent_key = Some("DEMO-1".into());
         epics_app(vec![Epic {
-            key: "AMP-100".to_string(),
+            key: "DEMO-100".to_string(),
             summary: "Auth".to_string(),
             children: vec![
-                ticket("AMP-1", "Parent"),
+                ticket("DEMO-1", "Parent"),
                 first,
                 second,
-                ticket("AMP-4", "Alone"),
+                ticket("DEMO-4", "Alone"),
             ],
         }])
     }
@@ -2174,42 +2174,42 @@ mod tests {
         assert_eq!(app.item_count(), 5);
 
         // `z` on a sub-task folds its parent and moves the selection up to it.
-        row_of(&mut app, "AMP-3");
+        row_of(&mut app, "DEMO-3");
         app.toggle_fold_at_cursor();
         assert_eq!(app.item_count(), 3);
-        assert_eq!(app.selected_ticket_key().as_deref(), Some("AMP-1"));
-        assert!(app.is_parent_folded("AMP-1"));
+        assert_eq!(app.selected_ticket_key().as_deref(), Some("DEMO-1"));
+        assert!(app.is_parent_folded("DEMO-1"));
         assert_eq!(app.epics_visible_epics()[0].total, 4);
-        assert!(!app.is_collapsed(Tab::Epics, "AMP-100"));
+        assert!(!app.is_collapsed(Tab::Epics, "DEMO-100"));
 
         // `z` on the folded parent shows them again, and the selection stays on it.
         app.toggle_fold_at_cursor();
         assert_eq!(app.item_count(), 5);
-        assert_eq!(app.selected_ticket_key().as_deref(), Some("AMP-1"));
+        assert_eq!(app.selected_ticket_key().as_deref(), Some("DEMO-1"));
     }
 
     #[test]
     fn z_on_a_ticket_with_no_family_folds_its_group() {
         let mut app = family_app();
-        row_of(&mut app, "AMP-4");
+        row_of(&mut app, "DEMO-4");
         assert_eq!(app.selected_fold_parent(), None);
         app.toggle_fold_at_cursor();
-        assert!(app.is_collapsed(Tab::Epics, "AMP-100"));
+        assert!(app.is_collapsed(Tab::Epics, "DEMO-100"));
         assert!(app.collapsed_parents.is_empty());
     }
 
     #[test]
     fn a_fold_survives_a_refresh_and_a_sub_task_with_no_parent_row_isnt_hidden() {
         let mut app = family_app();
-        row_of(&mut app, "AMP-1");
+        row_of(&mut app, "DEMO-1");
         app.toggle_fold_at_cursor();
         let cache = app.cache.clone();
         app.replace_cache(cache, 0);
         assert_eq!(app.item_count(), 3);
 
         // The parent isn't in the list (say a search matches only the sub-task): it stays visible.
-        app.collapsed_parents.insert("AMP-9".into());
-        app.cache.epics[0].children[3].parent_key = Some("AMP-9".into());
+        app.collapsed_parents.insert("DEMO-9".into());
+        app.cache.epics[0].children[3].parent_key = Some("DEMO-9".into());
         app.mark_cache_changed();
         assert_eq!(app.item_count(), 3);
     }
@@ -2218,14 +2218,14 @@ mod tests {
     fn epics_item_count_matches_visible_child_rows() {
         let app = epics_app(vec![
             Epic {
-                key: "AMP-100".to_string(),
+                key: "DEMO-100".to_string(),
                 summary: "Auth".to_string(),
-                children: vec![ticket("AMP-1", "Session"), ticket("AMP-2", "Password")],
+                children: vec![ticket("DEMO-1", "Session"), ticket("DEMO-2", "Password")],
             },
             Epic {
-                key: "AMP-200".to_string(),
+                key: "DEMO-200".to_string(),
                 summary: "Perf".to_string(),
-                children: vec![ticket("AMP-3", "Cache")],
+                children: vec![ticket("DEMO-3", "Cache")],
             },
         ]);
 
@@ -2237,52 +2237,52 @@ mod tests {
     fn epics_selected_ticket_key_uses_cross_epic_row_order() {
         let mut app = epics_app(vec![
             Epic {
-                key: "AMP-100".to_string(),
+                key: "DEMO-100".to_string(),
                 summary: "Auth".to_string(),
-                children: vec![ticket("AMP-1", "Session"), ticket("AMP-2", "Password")],
+                children: vec![ticket("DEMO-1", "Session"), ticket("DEMO-2", "Password")],
             },
             Epic {
-                key: "AMP-200".to_string(),
+                key: "DEMO-200".to_string(),
                 summary: "Perf".to_string(),
-                children: vec![ticket("AMP-3", "Cache")],
+                children: vec![ticket("DEMO-3", "Cache")],
             },
         ]);
 
-        // Items: H(AMP-100), T(AMP-1), T(AMP-2), H(AMP-200), T(AMP-3)
+        // Items: H(DEMO-100), T(DEMO-1), T(DEMO-2), H(DEMO-200), T(DEMO-3)
         app.selected_index = 4;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-3".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-3".to_string()));
     }
 
     #[test]
     fn epics_filtered_search_mapping_is_deterministic() {
         let mut app = epics_app(vec![
             Epic {
-                key: "AMP-100".to_string(),
+                key: "DEMO-100".to_string(),
                 summary: "Auth Platform".to_string(),
                 children: vec![
-                    ticket("AMP-1", "Session resume"),
-                    ticket("AMP-2", "Passwords"),
+                    ticket("DEMO-1", "Session resume"),
+                    ticket("DEMO-2", "Passwords"),
                 ],
             },
             Epic {
-                key: "AMP-200".to_string(),
+                key: "DEMO-200".to_string(),
                 summary: "Performance".to_string(),
                 children: vec![
-                    ticket("AMP-3", "Session cache"),
-                    ticket("AMP-4", "Load test"),
+                    ticket("DEMO-3", "Session cache"),
+                    ticket("DEMO-4", "Load test"),
                 ],
             },
         ]);
 
         app.search = Some("session".to_string());
-        // Items: H(AMP-100), T(AMP-1), H(AMP-200), T(AMP-3)
+        // Items: H(DEMO-100), T(DEMO-1), H(DEMO-200), T(DEMO-3)
         assert_eq!(app.item_count(), 4);
 
         app.selected_index = 3;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-3".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-3".to_string()));
 
         app.search = Some("auth".to_string());
-        // Items: H(AMP-100), T(AMP-1), T(AMP-2)
+        // Items: H(DEMO-100), T(DEMO-1), T(DEMO-2)
         assert_eq!(app.item_count(), 3);
     }
 
@@ -2290,22 +2290,22 @@ mod tests {
     fn epics_with_zero_children_contribute_no_selectable_rows() {
         let mut app = epics_app(vec![
             Epic {
-                key: "AMP-100".to_string(),
+                key: "DEMO-100".to_string(),
                 summary: "Empty Epic".to_string(),
                 children: vec![],
             },
             Epic {
-                key: "AMP-200".to_string(),
+                key: "DEMO-200".to_string(),
                 summary: "Auth".to_string(),
-                children: vec![ticket("AMP-1", "Session")],
+                children: vec![ticket("DEMO-1", "Session")],
             },
         ]);
 
-        // H(AMP-100), H(AMP-200), T(AMP-1)
+        // H(DEMO-100), H(DEMO-200), T(DEMO-1)
         assert_eq!(app.item_count(), 3);
 
         app.search = Some("empty".to_string());
-        // H(AMP-100) only, no children
+        // H(DEMO-100) only, no children
         assert_eq!(app.item_count(), 1);
         assert_eq!(app.selected_ticket_key(), None);
     }
@@ -2316,27 +2316,27 @@ mod tests {
         app.active_tab = Tab::MyWork;
         app.loading = false;
 
-        let mut t = ticket("AMP-1", "Refactor parser");
+        let mut t = ticket("DEMO-1", "Refactor parser");
         t.status = "In Progress".to_string();
         t.labels = vec!["metis".to_string(), "backend".to_string()];
         app.cache.my_tickets = vec![t];
 
         app.search = Some("metis".to_string());
-        // H(In Progress) + T(AMP-1)
+        // H(In Progress) + T(DEMO-1)
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-1".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-1".to_string()));
     }
 
     #[test]
     fn my_work_groups_workflow_statuses_before_done() {
         let mut app = my_work_app(&[
-            ("DSCI-2000", "Stalled"),
-            ("DSCI-2478", "Backlog"),
-            ("DSCI-3100", "In Progress"),
-            ("DSCI-3240", "On Deck"),
-            ("DSCI-3241", "On Deck"),
-            ("DSCI-3300", "Done"),
+            ("DEMO-2000", "Stalled"),
+            ("DEMO-2478", "Backlog"),
+            ("DEMO-3100", "In Progress"),
+            ("DEMO-3240", "On Deck"),
+            ("DEMO-3241", "On Deck"),
+            ("DEMO-3300", "Done"),
         ]);
 
         // Configured statuses first, then unlisted ones in first-seen (key) order, then done.
@@ -2347,12 +2347,12 @@ mod tests {
         // 5 headers + 6 tickets; the last workflow-status row sits just above Done.
         assert_eq!(app.item_count(), 11);
         app.selected_index = 8;
-        assert_eq!(app.selected_ticket_key(), Some("DSCI-3241".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-3241".to_string()));
         app.selected_index = 10;
-        assert_eq!(app.selected_ticket_key(), Some("DSCI-3300".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-3300".to_string()));
     }
 
-    fn dsci_statuses() -> crate::config::StatusConfig {
+    fn demo_statuses() -> crate::config::StatusConfig {
         let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect();
         crate::config::StatusConfig {
             active: names(&[
@@ -2369,12 +2369,12 @@ mod tests {
     #[test]
     fn my_work_filters_and_epics_follow_the_configured_status_order() {
         let statuses = [
-            ("DSCI-1", "Resolved"),
-            ("DSCI-2", "Stalled"),
-            ("DSCI-3", "In Team Review"),
-            ("DSCI-4", "Backlog"),
-            ("DSCI-5", "Blocked"),
-            ("DSCI-6", "On Deck"),
+            ("DEMO-1", "Resolved"),
+            ("DEMO-2", "Stalled"),
+            ("DEMO-3", "In Team Review"),
+            ("DEMO-4", "Backlog"),
+            ("DEMO-5", "Blocked"),
+            ("DEMO-6", "On Deck"),
         ];
         let expected = [
             "Backlog",
@@ -2386,11 +2386,11 @@ mod tests {
         ];
 
         let mut app = my_work_app(&statuses);
-        app.set_status_rules(&dsci_statuses());
+        app.set_status_rules(&demo_statuses());
         assert_eq!(my_work_group_names(&app), expected);
 
         let mut app = filters_app(tickets_with_statuses(&statuses));
-        app.set_status_rules(&dsci_statuses());
+        app.set_status_rules(&demo_statuses());
         let filter_groups: Vec<_> = app
             .filters_visible_by_status()
             .iter()
@@ -2399,11 +2399,11 @@ mod tests {
         assert_eq!(filter_groups, expected);
 
         let mut app = epics_app(vec![Epic {
-            key: "DSCI-100".to_string(),
+            key: "DEMO-100".to_string(),
             summary: "Epic".to_string(),
             children: tickets_with_statuses(&statuses),
         }]);
-        app.set_status_rules(&dsci_statuses());
+        app.set_status_rules(&demo_statuses());
         let groups = app.epics_visible_epics();
         let children = groups[0].tickets.as_ref().unwrap();
         let child_statuses: Vec<_> = children.iter().map(|(_, t)| t.status.as_str()).collect();
@@ -2413,12 +2413,12 @@ mod tests {
     #[test]
     fn my_work_collapses_workflow_status_groups() {
         let mut app = my_work_app(&[
-            ("DSCI-1", "In Progress"),
-            ("DSCI-2", "On Deck"),
-            ("DSCI-3", "On Deck"),
+            ("DEMO-1", "In Progress"),
+            ("DEMO-2", "On Deck"),
+            ("DEMO-3", "On Deck"),
         ]);
 
-        app.selected_index = 4; // T(DSCI-3)
+        app.selected_index = 4; // T(DEMO-3)
         app.toggle_group_collapse("On Deck");
         assert_eq!(app.item_count(), 3);
         assert_eq!(app.selected_header_group_id(), Some("On Deck".to_string()));
@@ -2433,9 +2433,9 @@ mod tests {
     #[test]
     fn my_work_focus_done_and_search_apply_to_workflow_statuses() {
         let mut app = my_work_app(&[
-            ("DSCI-1", "In Progress"),
-            ("DSCI-2", "On Deck"),
-            ("DSCI-3", "Done"),
+            ("DEMO-1", "In Progress"),
+            ("DEMO-2", "On Deck"),
+            ("DEMO-3", "Done"),
         ]);
 
         app.cycle_status_focus(true);
@@ -2446,20 +2446,20 @@ mod tests {
         app.cycle_status_focus(false);
         assert_eq!(app.status_focus, None);
         assert_eq!(my_work_group_names(&app), ["In Progress", "On Deck"]);
-        app.search = Some("dsci-2".to_string());
+        app.search = Some("demo-2".to_string());
         assert_eq!(my_work_group_names(&app), ["On Deck"]);
     }
 
     #[test]
     fn focus_cycles_through_the_workflow_statuses_shown_then_back_to_all() {
         let mut app = my_work_app(&[
-            ("DSCI-1", "In Team Review"),
-            ("DSCI-2", "On Deck"),
-            ("DSCI-3", "Done"),
-            ("DSCI-4", "Backlog"),
-            ("DSCI-5", "On Deck"),
+            ("DEMO-1", "In Team Review"),
+            ("DEMO-2", "On Deck"),
+            ("DEMO-3", "Done"),
+            ("DEMO-4", "Backlog"),
+            ("DEMO-5", "On Deck"),
         ]);
-        app.set_status_rules(&dsci_statuses());
+        app.set_status_rules(&demo_statuses());
 
         // Only statuses the tickets are in, in display order, and never a done one.
         assert_eq!(
@@ -2472,7 +2472,7 @@ mod tests {
         assert_eq!(app.status_focus_message(), "Focus: On Deck (2 of 3)");
         assert_eq!(my_work_group_names(&app), ["On Deck", "Done"]);
         app.selected_index = 2;
-        assert_eq!(app.selected_ticket_key(), Some("DSCI-5".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-5".to_string()));
 
         app.cycle_status_focus(true);
         assert_eq!(app.status_focus, Some("In Team Review".to_string()));
@@ -2486,8 +2486,8 @@ mod tests {
 
     #[test]
     fn focus_skips_statuses_hidden_by_search_and_restarts_from_a_stale_focus() {
-        let mut app = my_work_app(&[("DSCI-1", "In Progress"), ("DSCI-2", "On Deck")]);
-        app.search = Some("dsci-2".to_string());
+        let mut app = my_work_app(&[("DEMO-1", "In Progress"), ("DEMO-2", "On Deck")]);
+        app.search = Some("demo-2".to_string());
         assert_eq!(app.focusable_statuses(), ["On Deck"]);
 
         // A focused status that is no longer shown (moved away, say) restarts the cycle.
@@ -2520,14 +2520,14 @@ mod tests {
             },
         ];
         app.cache.team_tickets = tickets_with_statuses(&[
-            ("DSCI-1", "Stalled"),
-            ("DSCI-2", "On Deck"),
-            ("DSCI-3", "Closed"),
+            ("DEMO-1", "Stalled"),
+            ("DEMO-2", "On Deck"),
+            ("DEMO-3", "Closed"),
         ]);
         app.cache.team_tickets[0].assignee_email = Some("dev@example.com".to_string());
         app.cache.team_tickets[1].assignee_email = Some("ops@example.com".to_string());
         app.cache.team_tickets[2].assignee_email = Some("ops@example.com".to_string());
-        app.set_status_rules(&dsci_statuses());
+        app.set_status_rules(&demo_statuses());
 
         assert_eq!(app.focusable_statuses(), ["On Deck", "Stalled"]);
         app.cycle_status_focus(true);
@@ -2535,7 +2535,7 @@ mod tests {
         assert_eq!(app.item_count(), 4);
         assert_eq!(app.selected_ticket_key(), None);
         app.selected_index = 2;
-        assert_eq!(app.selected_ticket_key(), Some("DSCI-2".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-2".to_string()));
 
         app.active_tab = Tab::Epics;
         assert!(app.focusable_statuses().is_empty());
@@ -2549,11 +2549,11 @@ mod tests {
             done: names(&["Done", "Cancelled", "Won't Do", "Denied"]),
         };
         let tickets = [
-            ("DSCI-1", "In Progress"),
-            ("DSCI-2", "Cancelled"),
-            ("DSCI-3", "Won't Do"),
-            ("DSCI-4", "Denied"),
-            ("DSCI-5", "On Deck"),
+            ("DEMO-1", "In Progress"),
+            ("DEMO-2", "Cancelled"),
+            ("DEMO-3", "Won't Do"),
+            ("DEMO-4", "Denied"),
+            ("DEMO-5", "On Deck"),
         ];
 
         // My Work: done groups come last, `d` hides them, and focus skips them.
@@ -2604,7 +2604,7 @@ mod tests {
 
         // Epics: they count toward progress.
         let epic = Epic {
-            key: "DSCI-100".to_string(),
+            key: "DEMO-100".to_string(),
             summary: "Epic".to_string(),
             children: tickets_with_statuses(&tickets),
         };
@@ -2621,17 +2621,17 @@ mod tests {
             email: "dev@example.com".to_string(),
         }];
 
-        let mut t = ticket("AMP-2", "Triage regression");
+        let mut t = ticket("DEMO-2", "Triage regression");
         t.status = "Needs Triage".to_string();
         t.labels = vec!["infra".to_string()];
         t.assignee_email = Some("dev@example.com".to_string());
         app.cache.team_tickets = vec![t];
 
         app.search = Some("infra".to_string());
-        // H(dev@example.com) + T(AMP-2)
+        // H(dev@example.com) + T(DEMO-2)
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-2".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-2".to_string()));
     }
 
     #[test]
@@ -2644,9 +2644,9 @@ mod tests {
             email: "dev@example.com".to_string(),
         }];
         app.cache.team_tickets = tickets_with_statuses(&[
-            ("DSCI-1", "In Progress"),
-            ("DSCI-2", "On Deck"),
-            ("DSCI-3", "Done"),
+            ("DEMO-1", "In Progress"),
+            ("DEMO-2", "On Deck"),
+            ("DEMO-3", "Done"),
         ]);
         for t in &mut app.cache.team_tickets {
             t.assignee_email = Some("dev@example.com".to_string());
@@ -2661,47 +2661,47 @@ mod tests {
         app.toggle_show_done();
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("DSCI-1".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-1".to_string()));
     }
 
     #[test]
     fn epics_search_matches_child_labels() {
         let mut app = epics_app(vec![Epic {
-            key: "AMP-500".to_string(),
+            key: "DEMO-500".to_string(),
             summary: "Platform".to_string(),
             children: {
-                let mut t = ticket("AMP-55", "Improve cache");
+                let mut t = ticket("DEMO-55", "Improve cache");
                 t.labels = vec!["perf".to_string()];
                 vec![t]
             },
         }]);
 
         app.search = Some("perf".to_string());
-        // H(AMP-500) + T(AMP-55)
+        // H(DEMO-500) + T(DEMO-55)
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-55".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-55".to_string()));
     }
 
     #[test]
     fn epics_focus_filter_limits_epics_view() {
         let mut app = epics_app(vec![
             Epic {
-                key: "AMP-100".to_string(),
+                key: "DEMO-100".to_string(),
                 summary: "Auth".to_string(),
-                children: vec![ticket("AMP-1", "Session")],
+                children: vec![ticket("DEMO-1", "Session")],
             },
             Epic {
-                key: "AMP-200".to_string(),
+                key: "DEMO-200".to_string(),
                 summary: "Perf".to_string(),
-                children: vec![ticket("AMP-2", "Cache")],
+                children: vec![ticket("DEMO-2", "Cache")],
             },
         ]);
 
-        app.set_epics_i_care_about(vec!["amp-200".to_string()]);
+        app.set_epics_i_care_about(vec!["demo-200".to_string()]);
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-2".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-2".to_string()));
     }
 
     #[test]
@@ -2709,25 +2709,25 @@ mod tests {
         let app = {
             let mut app = epics_app(vec![
                 Epic {
-                    key: "AMP-100".to_string(),
+                    key: "DEMO-100".to_string(),
                     summary: "Auth".to_string(),
-                    children: vec![ticket("AMP-1", "Session")],
+                    children: vec![ticket("DEMO-1", "Session")],
                 },
                 Epic {
-                    key: "AMP-300".to_string(),
+                    key: "DEMO-300".to_string(),
                     summary: "Perf".to_string(),
-                    children: vec![ticket("AMP-3", "Cache")],
+                    children: vec![ticket("DEMO-3", "Cache")],
                 },
                 Epic {
-                    key: "AMP-200".to_string(),
+                    key: "DEMO-200".to_string(),
                     summary: "Runner".to_string(),
-                    children: vec![ticket("AMP-2", "Task")],
+                    children: vec![ticket("DEMO-2", "Task")],
                 },
             ]);
             app.set_epics_i_care_about(vec![
-                "AMP-300".to_string(),
-                "AMP-100".to_string(),
-                "AMP-200".to_string(),
+                "DEMO-300".to_string(),
+                "DEMO-100".to_string(),
+                "DEMO-200".to_string(),
             ]);
             app
         };
@@ -2737,7 +2737,7 @@ mod tests {
             .into_iter()
             .map(|group| group.header.key.as_str())
             .collect();
-        assert_eq!(ordered_keys, vec!["AMP-300", "AMP-100", "AMP-200"]);
+        assert_eq!(ordered_keys, vec!["DEMO-300", "DEMO-100", "DEMO-200"]);
     }
 
     #[test]
@@ -2746,23 +2746,23 @@ mod tests {
         app.active_tab = Tab::Unassigned;
         app.loading = false;
 
-        let mut t1 = ticket("AMP-91", "Missing owner in epic one");
+        let mut t1 = ticket("DEMO-91", "Missing owner in epic one");
         t1.assignee = Some("Unassigned".to_string());
         t1.assignee_email = Some("__unassigned__".to_string());
-        t1.epic_key = Some("AMP-100".to_string());
+        t1.epic_key = Some("DEMO-100".to_string());
         t1.epic_name = Some("Epic One".to_string());
 
-        let mut t2 = ticket("AMP-92", "Another owner gap in epic one");
+        let mut t2 = ticket("DEMO-92", "Another owner gap in epic one");
         t2.assignee = Some("Unassigned".to_string());
         t2.assignee_email = Some("__unassigned__".to_string());
-        t2.epic_key = Some("AMP-100".to_string());
+        t2.epic_key = Some("DEMO-100".to_string());
         t2.epic_name = Some("Epic One".to_string());
 
-        let mut t3 = ticket("AMP-93", "Unassigned without epic");
+        let mut t3 = ticket("DEMO-93", "Unassigned without epic");
         t3.assignee = Some("Unassigned".to_string());
         t3.assignee_email = Some("__unassigned__".to_string());
 
-        let mut assigned = ticket("AMP-94", "Assigned ticket");
+        let mut assigned = ticket("DEMO-94", "Assigned ticket");
         assigned.assignee = Some("Dev".to_string());
         assigned.assignee_email = Some("dev@example.com".to_string());
 
@@ -2772,11 +2772,11 @@ mod tests {
         assert_eq!(app.item_count(), 5);
         // Verify ticket keys are reachable by selection
         app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-91".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-91".to_string()));
         app.selected_index = 2;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-92".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-92".to_string()));
         app.selected_index = 4;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-93".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-93".to_string()));
     }
 
     #[test]
@@ -2785,33 +2785,33 @@ mod tests {
         app.active_tab = Tab::Unassigned;
         app.loading = false;
 
-        let mut t1 = ticket("AMP-101", "Upgrade parser error handling");
+        let mut t1 = ticket("DEMO-101", "Upgrade parser error handling");
         t1.assignee = Some("Unassigned".to_string());
         t1.assignee_email = Some("__unassigned__".to_string());
-        t1.epic_key = Some("AMP-501".to_string());
+        t1.epic_key = Some("DEMO-501".to_string());
         t1.epic_name = Some("Parser Platform".to_string());
         t1.labels = vec!["infra".to_string()];
 
-        let mut t2 = ticket("AMP-102", "Refactor retries");
+        let mut t2 = ticket("DEMO-102", "Refactor retries");
         t2.assignee = Some("Unassigned".to_string());
         t2.assignee_email = Some("__unassigned__".to_string());
-        t2.epic_key = Some("AMP-502".to_string());
+        t2.epic_key = Some("DEMO-502".to_string());
         t2.epic_name = Some("Runner".to_string());
         t2.labels = vec!["perf".to_string()];
 
         app.cache.team_tickets = vec![t1, t2];
 
         app.search = Some("parser".to_string());
-        // H(AMP-501) + T(AMP-101)
+        // H(DEMO-501) + T(DEMO-101)
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-101".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-101".to_string()));
 
         app.search = Some("perf".to_string());
-        // H(AMP-502) + T(AMP-102)
+        // H(DEMO-502) + T(DEMO-102)
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-102".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-102".to_string()));
     }
 
     #[test]
@@ -2819,16 +2819,16 @@ mod tests {
         let mut app = App::new();
         app.active_tab = Tab::MyWork;
         app.loading = false;
-        let mut t = ticket("AMP-10", "Parser migration");
+        let mut t = ticket("DEMO-10", "Parser migration");
         t.status = "In Progress".to_string();
         app.cache.my_tickets = vec![t];
 
-        // H(In Progress), T(AMP-10)
+        // H(In Progress), T(DEMO-10)
         app.selected_index = 1;
         app.toggle_selection_at_cursor();
-        assert!(app.is_ticket_selected("AMP-10"));
+        assert!(app.is_ticket_selected("DEMO-10"));
         app.toggle_selection_at_cursor();
-        assert!(!app.is_ticket_selected("AMP-10"));
+        assert!(!app.is_ticket_selected("DEMO-10"));
     }
 
     #[test]
@@ -2837,24 +2837,24 @@ mod tests {
         app.active_tab = Tab::MyWork;
         app.loading = false;
 
-        let mut t1 = ticket("AMP-11", "A");
+        let mut t1 = ticket("DEMO-11", "A");
         t1.status = "In Progress".to_string();
-        let mut t2 = ticket("AMP-12", "B");
+        let mut t2 = ticket("DEMO-12", "B");
         t2.status = "In Progress".to_string();
         app.cache.my_tickets = vec![t1, t2];
 
         app.selected_index = 0; // In Progress header
         app.toggle_selection_at_cursor();
-        assert!(app.is_ticket_selected("AMP-11"));
-        assert!(app.is_ticket_selected("AMP-12"));
+        assert!(app.is_ticket_selected("DEMO-11"));
+        assert!(app.is_ticket_selected("DEMO-12"));
         assert_eq!(
             app.group_selection_state("In Progress"),
             GroupSelectionState::All
         );
 
         app.toggle_selection_at_cursor();
-        assert!(!app.is_ticket_selected("AMP-11"));
-        assert!(!app.is_ticket_selected("AMP-12"));
+        assert!(!app.is_ticket_selected("DEMO-11"));
+        assert!(!app.is_ticket_selected("DEMO-12"));
         assert_eq!(
             app.group_selection_state("In Progress"),
             GroupSelectionState::None
@@ -2866,13 +2866,13 @@ mod tests {
         let mut app = App::new();
         app.active_tab = Tab::MyWork;
         app.loading = false;
-        let mut t1 = ticket("AMP-13", "A");
+        let mut t1 = ticket("DEMO-13", "A");
         t1.status = "In Progress".to_string();
-        let mut t2 = ticket("AMP-14", "B");
+        let mut t2 = ticket("DEMO-14", "B");
         t2.status = "In Progress".to_string();
         app.cache.my_tickets = vec![t1, t2];
 
-        app.selected_ticket_keys.insert("AMP-13".to_string());
+        app.selected_ticket_keys.insert("DEMO-13".to_string());
         assert_eq!(
             app.group_selection_state("In Progress"),
             GroupSelectionState::Partial
@@ -2881,9 +2881,9 @@ mod tests {
 
     #[test]
     fn filters_item_count_includes_status_headers() {
-        let mut in_progress = ticket("AMP-40", "Grouped");
+        let mut in_progress = ticket("DEMO-40", "Grouped");
         in_progress.status = "In Progress".to_string();
-        let mut ready = ticket("AMP-41", "Queued");
+        let mut ready = ticket("DEMO-41", "Queued");
         ready.status = "Ready for Work".to_string();
 
         let app = filters_app(vec![in_progress, ready]);
@@ -2893,9 +2893,9 @@ mod tests {
 
     #[test]
     fn filters_selected_ticket_key_skips_status_headers() {
-        let mut in_progress = ticket("AMP-42", "Grouped");
+        let mut in_progress = ticket("DEMO-42", "Grouped");
         in_progress.status = "In Progress".to_string();
-        let mut ready = ticket("AMP-43", "Queued");
+        let mut ready = ticket("DEMO-43", "Queued");
         ready.status = "Ready for Work".to_string();
 
         let mut app = filters_app(vec![in_progress, ready]);
@@ -2904,30 +2904,30 @@ mod tests {
         assert_eq!(app.selected_ticket_key(), None);
 
         app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("AMP-42".to_string()));
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-42".to_string()));
     }
 
     #[test]
     fn filters_header_toggle_selects_and_clears_group_tickets() {
-        let mut first = ticket("AMP-44", "First");
+        let mut first = ticket("DEMO-44", "First");
         first.status = "In Progress".to_string();
-        let mut second = ticket("AMP-45", "Second");
+        let mut second = ticket("DEMO-45", "Second");
         second.status = "In Progress".to_string();
 
         let mut app = filters_app(vec![first, second]);
 
         app.selected_index = 0;
         app.toggle_selection_at_cursor();
-        assert!(app.is_ticket_selected("AMP-44"));
-        assert!(app.is_ticket_selected("AMP-45"));
+        assert!(app.is_ticket_selected("DEMO-44"));
+        assert!(app.is_ticket_selected("DEMO-45"));
         assert_eq!(
             app.group_selection_state("In Progress"),
             GroupSelectionState::All
         );
 
         app.toggle_selection_at_cursor();
-        assert!(!app.is_ticket_selected("AMP-44"));
-        assert!(!app.is_ticket_selected("AMP-45"));
+        assert!(!app.is_ticket_selected("DEMO-44"));
+        assert!(!app.is_ticket_selected("DEMO-45"));
         assert_eq!(
             app.group_selection_state("In Progress"),
             GroupSelectionState::None
@@ -2939,9 +2939,9 @@ mod tests {
         let mut app = App::new();
         app.active_tab = Tab::MyWork;
         app.loading = false;
-        let mut t1 = ticket("AMP-21", "A");
+        let mut t1 = ticket("DEMO-21", "A");
         t1.status = "In Progress".to_string();
-        let mut t2 = ticket("AMP-22", "B");
+        let mut t2 = ticket("DEMO-22", "B");
         t2.status = "Ready for Work".to_string();
         app.cache.my_tickets = vec![t1, t2];
 
@@ -2955,22 +2955,22 @@ mod tests {
     fn selected_visible_ticket_keys_preserve_row_order() {
         let mut app = epics_app(vec![
             Epic {
-                key: "AMP-100".to_string(),
+                key: "DEMO-100".to_string(),
                 summary: "Auth".to_string(),
-                children: vec![ticket("AMP-1", "Session"), ticket("AMP-2", "Password")],
+                children: vec![ticket("DEMO-1", "Session"), ticket("DEMO-2", "Password")],
             },
             Epic {
-                key: "AMP-200".to_string(),
+                key: "DEMO-200".to_string(),
                 summary: "Perf".to_string(),
-                children: vec![ticket("AMP-3", "Cache")],
+                children: vec![ticket("DEMO-3", "Cache")],
             },
         ]);
 
-        app.selected_ticket_keys.insert("AMP-3".to_string());
-        app.selected_ticket_keys.insert("AMP-1".to_string());
+        app.selected_ticket_keys.insert("DEMO-3".to_string());
+        app.selected_ticket_keys.insert("DEMO-1".to_string());
         assert_eq!(
             app.selected_visible_ticket_keys_in_order(),
-            vec!["AMP-1".to_string(), "AMP-3".to_string()]
+            vec!["DEMO-1".to_string(), "DEMO-3".to_string()]
         );
     }
 
@@ -2979,17 +2979,17 @@ mod tests {
         let mut app = App::new();
         app.active_tab = Tab::MyWork;
         app.loading = false;
-        let mut active = ticket("AMP-31", "Active");
+        let mut active = ticket("DEMO-31", "Active");
         active.status = "In Progress".to_string();
-        let mut done = ticket("AMP-32", "Done");
+        let mut done = ticket("DEMO-32", "Done");
         done.status = "Closed".to_string();
         app.cache.my_tickets = vec![active, done];
 
-        app.selected_ticket_keys.insert("AMP-31".to_string());
-        app.selected_ticket_keys.insert("AMP-32".to_string());
+        app.selected_ticket_keys.insert("DEMO-31".to_string());
+        app.selected_ticket_keys.insert("DEMO-32".to_string());
         app.toggle_show_done(); // hides closed tickets
-        assert!(app.is_ticket_selected("AMP-31"));
-        assert!(!app.is_ticket_selected("AMP-32"));
+        assert!(app.is_ticket_selected("DEMO-31"));
+        assert!(!app.is_ticket_selected("DEMO-32"));
     }
 
     fn assigned_to(key: &str, name: &str, email: &str) -> Ticket {
@@ -3003,10 +3003,10 @@ mod tests {
     #[test]
     fn a_detail_fetch_replaces_the_assignees_email_when_the_ticket_was_reassigned() {
         let mut app = App::new();
-        app.cache.team_tickets = vec![assigned_to("AMP-1", "Sam Chen", "sam.chen@example.com")];
+        app.cache.team_tickets = vec![assigned_to("DEMO-1", "Sam Chen", "sam.chen@example.com")];
 
-        let detail = assigned_to("AMP-1", "Alex Rivera", "alex@example.com");
-        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+        let detail = assigned_to("DEMO-1", "Alex Rivera", "alex@example.com");
+        assert!(app.enrich_ticket("DEMO-1", app.moves.now(), &detail));
 
         let ticket = &app.cache.team_tickets[0];
         assert_eq!(ticket.assignee.as_deref(), Some("Alex Rivera"));
@@ -3022,11 +3022,11 @@ mod tests {
         }];
         // The list read placed this ticket by display name and stamped the roster's email on
         // it, because Jira's own address for Sam (an alias) isn't the roster's.
-        app.cache.team_tickets = vec![assigned_to("AMP-1", "Sam C.", "sam.chen@example.com")];
+        app.cache.team_tickets = vec![assigned_to("DEMO-1", "Sam C.", "sam.chen@example.com")];
 
         // The same person, with the address Jira shows.
-        let detail = assigned_to("AMP-1", "Sam C.", "sam.alias@example.com");
-        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+        let detail = assigned_to("DEMO-1", "Sam C.", "sam.alias@example.com");
+        assert!(app.enrich_ticket("DEMO-1", app.moves.now(), &detail));
 
         assert_eq!(
             app.cache.team_tickets[0].assignee_email.as_deref(),
@@ -3056,13 +3056,13 @@ mod tests {
         // Nobody had it when the list was read; now Alex does, under an address the roster
         // doesn't have, and Team groups by the roster's.
         app.cache.team_tickets = vec![assigned_to(
-            "AMP-1",
+            "DEMO-1",
             crate::cache::UNASSIGNED_TEAM_NAME,
             crate::cache::UNASSIGNED_TEAM_EMAIL,
         )];
 
-        let detail = assigned_to("AMP-1", "Alex Rivera", "alex.alias@example.com");
-        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+        let detail = assigned_to("DEMO-1", "Alex Rivera", "alex.alias@example.com");
+        assert!(app.enrich_ticket("DEMO-1", app.moves.now(), &detail));
 
         assert_eq!(
             app.cache.team_tickets[0].assignee_email.as_deref(),
@@ -3083,19 +3083,19 @@ mod tests {
             member("Sam Chen", "sam.chen@example.com"),
             member("Alex Rivera", "alex.rivera@example.com"),
         ];
-        app.cache.team_tickets = vec![assigned_to("AMP-1", "Sam Chen", "sam.chen@example.com")];
+        app.cache.team_tickets = vec![assigned_to("DEMO-1", "Sam Chen", "sam.chen@example.com")];
         app.cache
             .team_tickets
-            .push(assigned_to("AMP-2", "Sam Chen", "sam.chen@example.com"));
+            .push(assigned_to("DEMO-2", "Sam Chen", "sam.chen@example.com"));
 
-        // AMP-1 goes to a roster member, found by name; AMP-2 to a stranger, who has no email
+        // DEMO-1 goes to a roster member, found by name; DEMO-2 to a stranger, who has no email
         // to go by.
-        let mut to_alex = assigned_to("AMP-1", "Alex Rivera", "unused");
+        let mut to_alex = assigned_to("DEMO-1", "Alex Rivera", "unused");
         to_alex.assignee_email = None;
-        let mut to_stranger = assigned_to("AMP-2", "Pat Doe", "unused");
+        let mut to_stranger = assigned_to("DEMO-2", "Pat Doe", "unused");
         to_stranger.assignee_email = None;
-        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &to_alex));
-        assert!(app.enrich_ticket("AMP-2", app.moves.now(), &to_stranger));
+        assert!(app.enrich_ticket("DEMO-1", app.moves.now(), &to_alex));
+        assert!(app.enrich_ticket("DEMO-2", app.moves.now(), &to_stranger));
 
         assert_eq!(
             app.cache.team_tickets[0].assignee_email.as_deref(),
@@ -3111,12 +3111,12 @@ mod tests {
     #[test]
     fn a_detail_fetch_gives_a_ticket_with_no_email_the_one_jira_shows() {
         let mut app = App::new();
-        let mut ticket = assigned_to("AMP-1", "Sam C.", "unused");
+        let mut ticket = assigned_to("DEMO-1", "Sam C.", "unused");
         ticket.assignee_email = None;
         app.cache.my_tickets = vec![ticket];
 
-        let detail = assigned_to("AMP-1", "Sam C.", "sam@example.com");
-        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+        let detail = assigned_to("DEMO-1", "Sam C.", "sam@example.com");
+        assert!(app.enrich_ticket("DEMO-1", app.moves.now(), &detail));
 
         assert_eq!(
             app.cache.my_tickets[0].assignee_email.as_deref(),
@@ -3127,10 +3127,10 @@ mod tests {
     #[test]
     fn a_detail_without_a_status_does_not_replace_the_ticket_status() {
         let mut app = App::new();
-        app.cache.my_tickets = vec![Ticket::for_test("AMP-1", "In Progress")];
+        app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "In Progress")];
 
-        let detail = Ticket::for_test("AMP-1", crate::cache::UNKNOWN_STATUS);
-        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+        let detail = Ticket::for_test("DEMO-1", crate::cache::UNKNOWN_STATUS);
+        assert!(app.enrich_ticket("DEMO-1", app.moves.now(), &detail));
 
         assert_eq!(app.cache.my_tickets[0].status, "In Progress");
     }

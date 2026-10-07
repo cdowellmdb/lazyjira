@@ -152,18 +152,18 @@ mod tests {
     }
 
     fn keys(count: usize) -> Vec<String> {
-        (1..=count).map(|n| format!("DSCI-{n}")).collect()
+        (1..=count).map(|n| format!("DEMO-{n}")).collect()
     }
 
     #[test]
     fn only_keys_shaped_like_jira_keys_reach_a_jql_list() {
-        let keys: Vec<String> = ["DSCI-1", "x\") OR 1=1", "", "AB_2"]
+        let keys: Vec<String> = ["DEMO-1", "x\") OR 1=1", "", "AB_2"]
             .map(String::from)
             .into();
-        assert_eq!(key_chunks(&keys), [["DSCI-1", "AB_2"]]);
+        assert_eq!(key_chunks(&keys), [["DEMO-1", "AB_2"]]);
         assert!(key_chunks(&["no good".to_string()]).is_empty());
         assert!(key_chunks(&[]).is_empty());
-        assert!(is_key("DSCI-3244") && !is_key("DSCI 1") && !is_key(""));
+        assert!(is_key("DEMO-3244") && !is_key("DEMO 1") && !is_key(""));
     }
 
     #[test]
@@ -173,7 +173,7 @@ mod tests {
         assert_eq!(sizes(&keys(50)), [50]);
         let fifty_one = keys(51);
         assert_eq!(sizes(&fifty_one), [50, 1]);
-        assert_eq!(key_chunks(&fifty_one)[1], ["DSCI-51"]);
+        assert_eq!(key_chunks(&fifty_one)[1], ["DEMO-51"]);
         // A malformed key among 50 real ones doesn't push the 50th into a second search.
         let mut with_bad = keys(50);
         with_bad.insert(10, "bad key".to_string());
@@ -183,16 +183,16 @@ mod tests {
     #[test]
     fn the_epic_list_is_every_epic_in_the_project() {
         assert_eq!(
-            epics_jql("AMP"),
-            "project = \"AMP\" AND issuetype = Epic ORDER BY key"
+            epics_jql("DEMO"),
+            "project = \"DEMO\" AND issuetype = Epic ORDER BY key"
         );
     }
 
     fn test_config() -> AppConfig {
         AppConfig {
             jira: JiraConfig {
-                project: "AMP".into(),
-                team_name: "Code Generation".into(),
+                project: "DEMO".into(),
+                team_name: "Payments Platform".into(),
                 done_window_days: 14,
                 epics_i_care_about: vec![],
             },
@@ -213,10 +213,10 @@ mod tests {
         let emails = ["alex@example.com", "sam@example.com"];
         assert_eq!(
             lists_jql(&config, &emails, TicketFetchScope::ActiveOnly),
-            "project = \"AMP\" AND (\
+            "project = \"DEMO\" AND (\
              (assignee in (\"alex@example.com\", \"sam@example.com\") \
               AND status in (\"In Progress\", \"To Do\")) \
-             OR (assignee is EMPTY AND \"Assigned Teams\" = \"Code Generation\" \
+             OR (assignee is EMPTY AND \"Assigned Teams\" = \"Payments Platform\" \
               AND status in (\"In Progress\", \"To Do\"))) ORDER BY key"
         );
     }
@@ -232,79 +232,79 @@ mod tests {
         );
         assert_eq!(
             jql,
-            "project = \"AMP\" AND (\
+            "project = \"DEMO\" AND (\
              (assignee in (\"alex@example.com\") AND (status in (\"In Progress\", \"To Do\") \
               OR (status in (\"Done\", \"Closed\") AND updated >= -7d))) \
-             OR (assignee is EMPTY AND \"Assigned Teams\" = \"Code Generation\" \
+             OR (assignee is EMPTY AND \"Assigned Teams\" = \"Payments Platform\" \
               AND status in (\"In Progress\", \"To Do\"))) ORDER BY key"
         );
     }
 
     fn epic_keys(count: usize) -> Vec<String> {
-        (1..=count).map(|n| format!("AMP-{n}")).collect()
+        (1..=count).map(|n| format!("DEMO-{n}")).collect()
     }
 
     #[test]
     fn epic_children_are_searched_fifty_epics_at_a_time() {
         // Exactly 50 epics: one search holding all of them.
-        let one = epic_children_jqls("AMP", &epic_keys(50), true);
+        let one = epic_children_jqls("DEMO", &epic_keys(50), true);
         assert_eq!(one.len(), 1);
         assert_eq!(one[0], {
             let list = epic_keys(50).join(",");
             format!(
-                "project = \"AMP\" AND (\"Epic Link\" in ({list}) OR parent in ({list})) \
+                "project = \"DEMO\" AND (\"Epic Link\" in ({list}) OR parent in ({list})) \
                  ORDER BY key"
             )
         });
         // 51 epics: a second search that holds only the 51st.
-        let two = epic_children_jqls("AMP", &epic_keys(51), true);
+        let two = epic_children_jqls("DEMO", &epic_keys(51), true);
         assert_eq!(two.len(), 2);
         assert_eq!(two[0], one[0]);
         assert_eq!(
             two[1],
-            "project = \"AMP\" AND (\"Epic Link\" in (AMP-51) OR parent in (AMP-51)) \
+            "project = \"DEMO\" AND (\"Epic Link\" in (DEMO-51) OR parent in (DEMO-51)) \
              ORDER BY key"
         );
-        assert!(epic_children_jqls("AMP", &[], true).is_empty());
+        assert!(epic_children_jqls("DEMO", &[], true).is_empty());
     }
 
     #[test]
     fn without_an_epic_link_field_only_the_parent_link_is_searched() {
         assert_eq!(
-            epic_children_jqls("AMP", &epic_keys(2), false),
-            ["project = \"AMP\" AND (parent in (AMP-1,AMP-2)) ORDER BY key"]
+            epic_children_jqls("DEMO", &epic_keys(2), false),
+            ["project = \"DEMO\" AND (parent in (DEMO-1,DEMO-2)) ORDER BY key"]
         );
     }
 
     #[test]
     fn epic_keys_that_are_not_shaped_like_keys_stay_out_of_the_query() {
-        let keys = vec!["AMP-1".to_string(), "x\") OR 1=1".to_string()];
+        let keys = vec!["DEMO-1".to_string(), "x\") OR 1=1".to_string()];
         assert_eq!(
-            epic_children_jqls("AMP", &keys, false),
-            ["project = \"AMP\" AND (parent in (AMP-1)) ORDER BY key"]
+            epic_children_jqls("DEMO", &keys, false),
+            ["project = \"DEMO\" AND (parent in (DEMO-1)) ORDER BY key"]
         );
         // A chunk with nothing left to ask about sends no search.
-        assert!(epic_children_jqls("AMP", &["no good".to_string()], false).is_empty());
+        assert!(epic_children_jqls("DEMO", &["no good".to_string()], false).is_empty());
     }
 
     #[test]
     fn a_malformed_epic_key_takes_no_place_in_a_search() {
         let search =
-            |list: String| format!("project = \"AMP\" AND (parent in ({list})) ORDER BY key");
+            |list: String| format!("project = \"DEMO\" AND (parent in ({list})) ORDER BY key");
         // 50 usable keys and a malformed one: still one search of exactly the 50 epics.
         let mut keys = epic_keys(50);
         keys.insert(10, "no good".to_string());
         assert_eq!(
-            epic_children_jqls("AMP", &keys, false),
+            epic_children_jqls("DEMO", &keys, false),
             [search(epic_keys(50).join(","))]
         );
         // The 51st usable key starts the second search, alone.
-        keys.push("AMP-51".to_string());
+        keys.push("DEMO-51".to_string());
         assert_eq!(
-            epic_children_jqls("AMP", &keys, false),
+            epic_children_jqls("DEMO", &keys, false),
             [
                 search(epic_keys(50).join(",")),
-                search("AMP-51".to_string())
+                search("DEMO-51".to_string())
             ]
         );
     }
@@ -312,22 +312,22 @@ mod tests {
     #[test]
     fn a_saved_filter_is_limited_to_the_project_and_keeps_its_own_order() {
         assert_eq!(
-            scoped_jql("AMP", "type = Bug AND assignee = currentUser()"),
-            "project = \"AMP\" AND (type = Bug AND assignee = currentUser()) \
+            scoped_jql("DEMO", "type = Bug AND assignee = currentUser()"),
+            "project = \"DEMO\" AND (type = Bug AND assignee = currentUser()) \
              ORDER BY created DESC"
         );
         // The filter's own ordering wins, and stays outside the parentheses.
         assert_eq!(
-            scoped_jql("AMP", "status = Blocked order by updated ASC"),
-            "project = \"AMP\" AND (status = Blocked) order by updated ASC"
+            scoped_jql("DEMO", "status = Blocked order by updated ASC"),
+            "project = \"DEMO\" AND (status = Blocked) order by updated ASC"
         );
         assert_eq!(
-            scoped_jql("AMP", "ORDER BY priority DESC"),
-            "project = \"AMP\" ORDER BY priority DESC"
+            scoped_jql("DEMO", "ORDER BY priority DESC"),
+            "project = \"DEMO\" ORDER BY priority DESC"
         );
         assert_eq!(
-            scoped_jql("AMP", "  "),
-            "project = \"AMP\" ORDER BY created DESC"
+            scoped_jql("DEMO", "  "),
+            "project = \"DEMO\" ORDER BY created DESC"
         );
     }
 
@@ -338,7 +338,7 @@ mod tests {
         };
         // Zero-padded, so the order the searches sort the keys into is the order of the numbers.
         let padded = |range: std::ops::RangeInclusive<u32>| -> Vec<String> {
-            range.map(|n| format!("AMP-{n:03}")).collect()
+            range.map(|n| format!("DEMO-{n:03}")).collect()
         };
         // Exactly 50 keys: one search holding all of them.
         let fifty = subtasks_jqls(&padded(1..=50));
@@ -352,12 +352,15 @@ mod tests {
             subtasks_jqls(&shuffled),
             [
                 sub_task_search(padded(1..=50).join(",")),
-                sub_task_search("AMP-051".to_string())
+                sub_task_search("DEMO-051".to_string())
             ]
         );
         // Anything that isn't shaped like a key stays out; nothing left, no search.
-        let keys = vec!["AMP-1".to_string(), "x\") OR 1=1".to_string()];
-        assert_eq!(subtasks_jqls(&keys), [sub_task_search("AMP-1".to_string())]);
+        let keys = vec!["DEMO-1".to_string(), "x\") OR 1=1".to_string()];
+        assert_eq!(
+            subtasks_jqls(&keys),
+            [sub_task_search("DEMO-1".to_string())]
+        );
         assert!(subtasks_jqls(&["no good".to_string()]).is_empty());
         assert!(subtasks_jqls(&[]).is_empty());
     }
@@ -368,7 +371,7 @@ mod tests {
             format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
         };
         let padded = |range: std::ops::RangeInclusive<u32>| -> Vec<String> {
-            range.map(|n| format!("AMP-{n:03}")).collect()
+            range.map(|n| format!("DEMO-{n:03}")).collect()
         };
         // 50 usable keys and a malformed one, which sorts first: still one search of exactly
         // the 50.
@@ -379,12 +382,12 @@ mod tests {
             [sub_task_search(padded(1..=50).join(","))]
         );
         // The 51st usable key starts the second search, alone.
-        keys.push("AMP-051".to_string());
+        keys.push("DEMO-051".to_string());
         assert_eq!(
             subtasks_jqls(&keys),
             [
                 sub_task_search(padded(1..=50).join(",")),
-                sub_task_search("AMP-051".to_string())
+                sub_task_search("DEMO-051".to_string())
             ]
         );
     }
@@ -407,7 +410,7 @@ mod tests {
         );
         assert_eq!(
             epic_children_jqls(r#"A"B"#, &epic_keys(1), false),
-            [r#"project = "A\"B" AND (parent in (AMP-1)) ORDER BY key"#]
+            [r#"project = "A\"B" AND (parent in (DEMO-1)) ORDER BY key"#]
         );
     }
 }

@@ -363,21 +363,21 @@ mod tests {
 
     #[test]
     fn the_details_cache_fills_only_what_the_list_search_does_not_return() {
-        let mut fresh = test_ticket("AMP-1", "To Do");
+        let mut fresh = test_ticket("DEMO-1", "To Do");
         fresh.assignee = Some("Alex R.".to_string());
         fresh.assignee_email = Some("alex.rivera@example.com".to_string());
         fresh.labels = vec!["new".into()];
-        fresh.epic_key = Some("AMP-100".into());
-        let mut stale = test_ticket("AMP-1", "Blocked");
+        fresh.epic_key = Some("DEMO-100".into());
+        let mut stale = test_ticket("DEMO-1", "Blocked");
         stale.assignee = Some("Old Owner".into());
         stale.assignee_email = Some("old@example.com".into());
         stale.labels = vec!["old".into()];
-        stale.epic_key = Some("AMP-50".into());
-        stale.parent_key = Some("AMP-7".into());
+        stale.epic_key = Some("DEMO-50".into());
+        stale.parent_key = Some("DEMO-7".into());
         stale.description = Some("Body".into());
         stale.reporter = Some("Pat".into());
         stale.detail_loaded = true;
-        let cached = HashMap::from([("AMP-1".to_string(), stale)]);
+        let cached = HashMap::from([("DEMO-1".to_string(), stale)]);
 
         hydrate_ticket_from_details_cache(&mut fresh, &cached);
 
@@ -388,7 +388,7 @@ mod tests {
             Some("alex.rivera@example.com")
         );
         assert_eq!(fresh.labels, ["new"]);
-        assert_eq!(fresh.epic_key.as_deref(), Some("AMP-100"));
+        assert_eq!(fresh.epic_key.as_deref(), Some("DEMO-100"));
         // A re-parented sub-task must not get its old parent back from the cache.
         assert_eq!(fresh.parent_key, None);
         assert_eq!(fresh.description.as_deref(), Some("Body"));
@@ -400,18 +400,18 @@ mod tests {
     fn a_cached_detail_counts_as_loaded_as_it_was_stored_whether_or_not_it_has_a_reporter() {
         // Jira has no reporter for a deleted user, and such a ticket must not be fetched again
         // on every refresh; an entry stored before its detail was read isn't loaded either.
-        let mut no_reporter = test_ticket("AMP-1", "To Do");
+        let mut no_reporter = test_ticket("DEMO-1", "To Do");
         no_reporter.detail_loaded = true;
-        let mut not_loaded = test_ticket("AMP-2", "To Do");
+        let mut not_loaded = test_ticket("DEMO-2", "To Do");
         not_loaded.reporter = Some("Pat".into());
         let cached = HashMap::from([
-            ("AMP-1".to_string(), no_reporter),
-            ("AMP-2".to_string(), not_loaded),
+            ("DEMO-1".to_string(), no_reporter),
+            ("DEMO-2".to_string(), not_loaded),
         ]);
 
-        let mut one = test_ticket("AMP-1", "To Do");
+        let mut one = test_ticket("DEMO-1", "To Do");
         hydrate_ticket_from_details_cache(&mut one, &cached);
-        let mut two = test_ticket("AMP-2", "To Do");
+        let mut two = test_ticket("DEMO-2", "To Do");
         hydrate_ticket_from_details_cache(&mut two, &cached);
 
         assert!(one.detail_loaded);
@@ -466,12 +466,12 @@ mod tests {
         );
 
         assert_eq!(
-            cache_file(&dir, EPICS_CACHE_PREFIX, "AMP"),
-            PathBuf::from("/home/me/.cache/lazyjira/lazyjira_epics_cache_AMP.json")
+            cache_file(&dir, EPICS_CACHE_PREFIX, "DEMO"),
+            PathBuf::from("/home/me/.cache/lazyjira/lazyjira_epics_cache_DEMO.json")
         );
         assert_eq!(
-            cache_file(&dir, DETAILS_CACHE_PREFIX, "AMP"),
-            PathBuf::from("/home/me/.cache/lazyjira/lazyjira_ticket_details_cache_AMP.json")
+            cache_file(&dir, DETAILS_CACHE_PREFIX, "DEMO"),
+            PathBuf::from("/home/me/.cache/lazyjira/lazyjira_ticket_details_cache_DEMO.json")
         );
         assert_eq!(
             cache_file(&dir, MY_EMAIL_PREFIX, "DEMO"),

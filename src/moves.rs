@@ -130,7 +130,7 @@ mod tests {
     use super::*;
     use crate::cache::{Cache, Epic, Ticket};
 
-    const KEY: &str = "DSCI-2478";
+    const KEY: &str = "DEMO-2478";
 
     /// An app where `KEY` is in Backlog in My Work, Team, an epic, and filter results.
     fn app_with_ticket_everywhere() -> App {
@@ -139,7 +139,7 @@ mod tests {
         app.cache.my_tickets = vec![Ticket::for_test(KEY, "Backlog")];
         app.cache.team_tickets = vec![Ticket::for_test(KEY, "Backlog")];
         app.cache.epics = vec![Epic {
-            key: "DSCI-1".to_string(),
+            key: "DEMO-1".to_string(),
             summary: "Epic".to_string(),
             children: vec![Ticket::for_test(KEY, "Backlog")],
         }];
@@ -187,7 +187,7 @@ mod tests {
         app.finish_move(KEY, Ok(()));
 
         assert_eq!(statuses_everywhere(&app), ["Resolved"; 4]);
-        assert_eq!(app.flash.as_deref(), Some("Moved DSCI-2478 to Resolved"));
+        assert_eq!(app.flash.as_deref(), Some("Moved DEMO-2478 to Resolved"));
     }
 
     #[test]
@@ -261,10 +261,10 @@ mod tests {
         let mut app = App::new();
         assert!(app.moves.start(KEY, "Closed"));
         assert!(!app.moves.start(KEY, "In Progress"));
-        assert!(app.moves.start("DSCI-1", "In Progress"));
+        assert!(app.moves.start("DEMO-1", "In Progress"));
         assert_eq!(
             app.moves.pending_message().as_deref(),
-            Some("Moving DSCI-1 to In Progress, DSCI-2478 to Closed…")
+            Some("Moving DEMO-1 to In Progress, DEMO-2478 to Closed…")
         );
 
         app.finish_move(KEY, Err("boom".to_string()));
@@ -274,13 +274,13 @@ mod tests {
     #[test]
     fn failures_are_dismissed_oldest_first() {
         let mut app = App::new();
-        for key in ["DSCI-1", "DSCI-2"] {
+        for key in ["DEMO-1", "DEMO-2"] {
             assert!(app.moves.start(key, "Closed"));
             app.finish_move(key, Err(format!("{} failed", key)));
         }
 
         app.moves.dismiss_failure();
-        assert_eq!(app.moves.failures()[0].key, "DSCI-2");
+        assert_eq!(app.moves.failures()[0].key, "DEMO-2");
         app.moves.dismiss_failure();
         assert!(app.moves.failures().is_empty());
     }

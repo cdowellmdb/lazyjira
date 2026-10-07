@@ -7,6 +7,9 @@ The commit message should be structured as follows:
 [optional body]
 [optional footer(s)]
 ```
+
+Merge commits on feature or integration branches keep git's default message, with no type: PRs are squash-merged, so the squash title is what lands on `main`, and it follows these rules.
+
 The commit contains the following structural elements, to communicate intent to the consumers of your library:
 
 - fix: a commit of the type fix patches a bug in your codebase (this correlates with PATCH in Semantic Versioning).
@@ -61,7 +64,7 @@ Refs: #123
 ### Specification
 The key words “MUST”, “MUST NOT”, “REQUIRED”, “SHALL”, “SHALL NOT”, “SHOULD”, “SHOULD NOT”, “RECOMMENDED”, “MAY”, and “OPTIONAL” in this document are to be interpreted as described in RFC 2119.
 
-- Commits MUST be prefixed with a type, which consists of a noun, feat, fix, etc., followed by the OPTIONAL scope, OPTIONAL !, and REQUIRED terminal colon and space.
+- Commits MUST be prefixed with a type, which consists of a noun, feat, fix, etc., followed by the OPTIONAL scope, OPTIONAL !, and REQUIRED terminal colon and space. Merge commits on feature or integration branches are exempt (see above).
 - The type feat MUST be used when a commit adds a new feature to your application or library.
 - The type fix MUST be used when a commit represents a bug fix for your application.
 - A scope MAY be provided after a type. A scope MUST consist of a noun describing a section of the codebase surrounded by parenthesis, e.g., fix(parser):

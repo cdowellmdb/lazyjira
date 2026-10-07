@@ -103,7 +103,7 @@ pub fn parse_transitions(body: &str) -> Result<Vec<Transition>> {
 }
 
 /// Keeps one transition, the one with the lowest id, from each group that shares a name,
-/// destination and set of fields. Jira can offer such twins (DSCI stories have two
+/// destination and set of fields. Jira can offer such twins (a story workflow can have two
 /// "Ready for Work" transitions). The user can't tell them apart, so listing both, or refusing
 /// a shortcut as ambiguous, would only make them guess. The lowest id is simply a stable pick.
 fn merge_indistinguishable(transitions: impl IntoIterator<Item = Transition>) -> Vec<Transition> {

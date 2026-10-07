@@ -81,7 +81,7 @@ lazyjira
 
 The first run asks for two things:
 
-1. **Jira project key**, for example `AMP`.
+1. **Jira project key**, for example `DEMO`.
 2. **Team name**, which must match your team's value in the Jira `Assigned Teams` field. The Unassigned tab uses it to find your team's unassigned tickets.
 
 lazyjira then saves `~/.config/lazyjira/config.toml`, adds you to the team roster using the email from `jira me`, and loads your tickets. Press `?` at any time to see the keybindings.
@@ -94,10 +94,10 @@ Config lives at `~/.config/lazyjira/config.toml`. lazyjira reads it at startup, 
 
 ```toml
 [jira]
-project = "AMP"
-team_name = "Code Generation"
+project = "DEMO"
+team_name = "Payments Platform"
 done_window_days = 14
-epics_i_care_about = ["AMP-100", "AMP-200"]
+epics_i_care_about = ["DEMO-100", "DEMO-200"]
 
 [team]
 "Alice Smith" = "alice.smith@example.com"
@@ -260,7 +260,7 @@ Press `U` from any main view, enter the path to a CSV file, and review the previ
 
 ```csv
 summary,type,assignee_email,epic_key,labels,description
-"Fix flaky login test",Bug,qa@example.com,AMP-5678,"test|stability","Intermittent failure in CI"
+"Fix flaky login test",Bug,qa@example.com,DEMO-5678,"test|stability","Intermittent failure in CI"
 ```
 
 - `summary` is the only required column.

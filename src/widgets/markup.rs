@@ -941,13 +941,13 @@ mod tests {
 
     #[test]
     fn tables_align_columns() {
-        let lines = render("||Name||Owner||\n|MAGE|[~cdowell]|\n|x|y|", 40);
+        let lines = render("||Name||Owner||\n|PAY|[~arivera]|\n|x|y|", 40);
         assert_eq!(
             text(&lines),
             vec![
                 "Name │ Owner",
                 "─────┼─────────",
-                "MAGE │ @cdowell",
+                "PAY  │ @arivera",
                 "x    │ y",
             ]
         );

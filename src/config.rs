@@ -221,10 +221,10 @@ mod tests {
 
         AppConfig {
             jira: JiraConfig {
-                project: "AMP".to_string(),
-                team_name: "Code Generation".to_string(),
+                project: "DEMO".to_string(),
+                team_name: "Payments Platform".to_string(),
                 done_window_days: 14,
-                epics_i_care_about: vec!["AMP-100".to_string(), "AMP-200".to_string()],
+                epics_i_care_about: vec!["DEMO-100".to_string(), "DEMO-200".to_string()],
             },
             team,
             statuses: StatusConfig::default(),
@@ -345,12 +345,12 @@ team_name = "My Team"
     fn epics_i_care_about_ordered_normalizes_keys() {
         let config = AppConfig {
             jira: JiraConfig {
-                project: "AMP".to_string(),
-                team_name: "Code Generation".to_string(),
+                project: "DEMO".to_string(),
+                team_name: "Payments Platform".to_string(),
                 done_window_days: 14,
                 epics_i_care_about: vec![
-                    "amp-100".to_string(),
-                    " AMP-200 ".to_string(),
+                    "demo-100".to_string(),
+                    " DEMO-200 ".to_string(),
                     "".to_string(),
                 ],
             },
@@ -363,7 +363,7 @@ team_name = "My Team"
 
         assert_eq!(
             config.epics_i_care_about_ordered(),
-            vec!["AMP-100".to_string(), "AMP-200".to_string()]
+            vec!["DEMO-100".to_string(), "DEMO-200".to_string()]
         );
     }
 
@@ -371,13 +371,13 @@ team_name = "My Team"
     fn epics_i_care_about_ordered_preserves_input_order() {
         let config = AppConfig {
             jira: JiraConfig {
-                project: "AMP".to_string(),
-                team_name: "Code Generation".to_string(),
+                project: "DEMO".to_string(),
+                team_name: "Payments Platform".to_string(),
                 done_window_days: 14,
                 epics_i_care_about: vec![
-                    "amp-200".to_string(),
-                    "AMP-100".to_string(),
-                    " amp-200 ".to_string(),
+                    "demo-200".to_string(),
+                    "DEMO-100".to_string(),
+                    " demo-200 ".to_string(),
                 ],
             },
             team: BTreeMap::new(),
@@ -389,7 +389,7 @@ team_name = "My Team"
 
         assert_eq!(
             config.epics_i_care_about_ordered(),
-            vec!["AMP-200".to_string(), "AMP-100".to_string()]
+            vec!["DEMO-200".to_string(), "DEMO-100".to_string()]
         );
     }
 }
