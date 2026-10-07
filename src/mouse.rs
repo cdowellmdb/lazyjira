@@ -345,19 +345,28 @@ pub fn register_rows(
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect::<String>();
-            let prefix = text.find('[').unwrap_or(0) as u16;
+            // The row's first mark is its selection mark; each character before it is one column.
+            let mark = text
+                .find(crate::views::common::MARKS)
+                .map_or(0, |at| text[..at].chars().count()) as u16;
             targets.push((
                 Rect::new(
-                    rect.x + prefix,
+                    rect.x + mark,
                     rect.y,
-                    rect.width.saturating_sub(prefix).min(3),
+                    rect.width.saturating_sub(mark).min(1),
                     1,
                 ),
                 Target::Mark(index),
             ));
             if header {
+                // A header's fold arrow follows its mark and a space.
                 targets.push((
-                    Rect::new(rect.x + 4, rect.y, rect.width.saturating_sub(4).min(1), 1),
+                    Rect::new(
+                        rect.x + mark + 2,
+                        rect.y,
+                        rect.width.saturating_sub(mark + 2).min(1),
+                        1,
+                    ),
                     Target::Fold(index),
                 ));
             } else if let Some(arrow) = text.split(" │ ").next().and_then(|key_cell| {

@@ -5,8 +5,8 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
-    KEY_WIDTH,
+    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
+    ticket_marker, truncate, KEY_WIDTH,
 };
 
 fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
@@ -148,11 +148,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     ticket.labels.join(", ")
                 };
-                let marker = if app.is_ticket_selected(&ticket.key) {
-                    "[x]"
-                } else {
-                    "[ ]"
-                };
+                let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let (key_cell, summary) =
                     ticket_cells(app, group.family.get(index).copied(), ticket, marker);
 
@@ -220,11 +216,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     ticket.labels.join(", ")
                 };
-                let marker = if app.is_ticket_selected(&ticket.key) {
-                    "[x]"
-                } else {
-                    "[ ]"
-                };
+                let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let (key_cell, summary) =
                     ticket_cells(app, group.family.get(index).copied(), ticket, marker);
 
@@ -283,6 +275,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);
+    color_marks(&mut lines);
 
     // Scroll to keep selected row visible
     let visible = area.height.saturating_sub(2) as usize;
