@@ -12,8 +12,8 @@ use anyhow::{anyhow, Result};
 
 use crate::bounded::for_each_bounded;
 use crate::cache::{
-    name_from_email, normalize_email, Cache, Epic, TeamMember, Ticket, UNASSIGNED_TEAM_EMAIL,
-    UNASSIGNED_TEAM_NAME,
+    name_from_email, normalize_email, roster_member, Cache, Epic, TeamMember, Ticket,
+    UNASSIGNED_TEAM_EMAIL, UNASSIGNED_TEAM_NAME,
 };
 use crate::config::AppConfig;
 use crate::jira_client::fetch_my_email;
@@ -241,23 +241,6 @@ fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetchSco
         jql::quote(&config.jira.project),
         jql::quote(&config.jira.team_name)
     )
-}
-
-/// The roster member `ticket` is assigned to: the one with the assignee's email, else the one
-/// with their display name, for when Jira hides the email (or the roster has another address).
-/// The list search only finds tickets assigned to a roster email, so an email the roster lacks
-/// is another address of someone on it, and the name is how to tell who.
-fn roster_member<'a>(members: &'a [TeamMember], ticket: &Ticket) -> Option<&'a TeamMember> {
-    let by_email = ticket
-        .assignee_email
-        .as_deref()
-        .and_then(|email| members.iter().find(|member| member.email == email));
-    by_email.or_else(|| {
-        let name = ticket.assignee.as_deref()?.to_lowercase();
-        members
-            .iter()
-            .find(|member| member.name.to_lowercase() == name)
-    })
 }
 
 /// Splits one search's tickets into My Work and Team, each ordered by key. Every ticket stays

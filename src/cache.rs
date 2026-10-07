@@ -233,6 +233,23 @@ pub enum ActivityKind {
     Comment { body: String },
 }
 
+/// The roster member `ticket` is assigned to: the one with the assignee's email, else the one
+/// with their display name, for when Jira hides the email (or the roster has another address).
+/// The list search only finds tickets assigned to a roster email, so an email the roster lacks
+/// is another address of someone on it, and the name is how to tell who.
+pub fn roster_member<'a>(members: &'a [TeamMember], ticket: &Ticket) -> Option<&'a TeamMember> {
+    let by_email = ticket
+        .assignee_email
+        .as_deref()
+        .and_then(|email| members.iter().find(|member| member.email == email));
+    by_email.or_else(|| {
+        let name = ticket.assignee.as_deref()?.to_lowercase();
+        members
+            .iter()
+            .find(|member| member.name.to_lowercase() == name)
+    })
+}
+
 /// The Team row that holds tickets nobody has taken, and the email that stands for it.
 pub const UNASSIGNED_TEAM_NAME: &str = "Unassigned";
 pub const UNASSIGNED_TEAM_EMAIL: &str = "__unassigned__";

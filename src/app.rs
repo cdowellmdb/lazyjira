@@ -1,5 +1,5 @@
 use crate::bulk_actions::BulkState;
-use crate::cache::{Cache, UNASSIGNED_TEAM_EMAIL, UNASSIGNED_TEAM_NAME};
+use crate::cache::{roster_member, Cache, UNASSIGNED_TEAM_EMAIL, UNASSIGNED_TEAM_NAME};
 use crate::subtasks::{nest, Family};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -1751,19 +1751,24 @@ impl App {
         if self.moves.is_stale(key, requested_at) {
             return false;
         }
+        let members = self.cache.team_members.clone();
         self.update_ticket(key, |ticket| {
             if detail.status != crate::cache::UNKNOWN_STATUS {
                 ticket.status = detail.status.clone();
             }
             // The list read may have placed the ticket under a roster member by display name and
-            // stamped that member's email on it, so Jira's own address (an alias) replaces it
-            // only when the ticket has none or the assignee is someone else.
+            // stamped that member's email on it, so the ticket's email changes only when it has
+            // none or the assignee is someone else. Team groups by the roster's address for the
+            // new assignee, so that is what it takes, else Jira's, which may be none: a stranger
+            // with a hidden email has no row, rather than staying with the previous owner.
             let reassigned = detail.assignee.is_some() && detail.assignee != ticket.assignee;
             if detail.assignee.is_some() {
                 ticket.assignee = detail.assignee.clone();
             }
-            if detail.assignee_email.is_some() && (reassigned || ticket.assignee_email.is_none()) {
-                ticket.assignee_email = detail.assignee_email.clone();
+            if reassigned || ticket.assignee_email.is_none() {
+                ticket.assignee_email = roster_member(&members, detail)
+                    .map(|member| member.email.clone())
+                    .or_else(|| detail.assignee_email.clone());
             }
             if detail.reporter.is_some() {
                 ticket.reporter = detail.reporter.clone();
@@ -2944,6 +2949,79 @@ mod tests {
             Some("sam.chen@example.com")
         );
         assert_eq!(app.team_visible_tickets_by_member()[0].total, 1);
+    }
+
+    fn roster_member(name: &str, email: &str) -> crate::cache::TeamMember {
+        crate::cache::TeamMember {
+            name: name.to_string(),
+            email: email.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_ticket_taken_by_a_roster_member_goes_under_the_rosters_email_for_them() {
+        let mut app = App::new();
+        app.cache.team_members = vec![
+            roster_member("Sam Chen", "sam.chen@example.com"),
+            roster_member("Alex Rivera", "alex.rivera@example.com"),
+            roster_member(
+                crate::cache::UNASSIGNED_TEAM_NAME,
+                crate::cache::UNASSIGNED_TEAM_EMAIL,
+            ),
+        ];
+        // Nobody had it when the list was read; now Alex does, under an address the roster
+        // doesn't have, and Team groups by the roster's.
+        app.cache.team_tickets = vec![assigned_to(
+            "AMP-1",
+            crate::cache::UNASSIGNED_TEAM_NAME,
+            crate::cache::UNASSIGNED_TEAM_EMAIL,
+        )];
+
+        let detail = assigned_to("AMP-1", "Alex Rivera", "alex.alias@example.com");
+        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &detail));
+
+        assert_eq!(
+            app.cache.team_tickets[0].assignee_email.as_deref(),
+            Some("alex.rivera@example.com")
+        );
+        let alex = app
+            .team_visible_tickets_by_member()
+            .into_iter()
+            .find(|group| group.total == 1)
+            .expect("the ticket is in a Team row");
+        assert_eq!(alex.header.0.name, "Alex Rivera");
+    }
+
+    #[test]
+    fn a_reassignment_to_someone_whose_email_jira_hides_never_keeps_the_previous_owners() {
+        let mut app = App::new();
+        app.cache.team_members = vec![
+            roster_member("Sam Chen", "sam.chen@example.com"),
+            roster_member("Alex Rivera", "alex.rivera@example.com"),
+        ];
+        app.cache.team_tickets = vec![assigned_to("AMP-1", "Sam Chen", "sam.chen@example.com")];
+        app.cache
+            .team_tickets
+            .push(assigned_to("AMP-2", "Sam Chen", "sam.chen@example.com"));
+
+        // AMP-1 goes to a roster member, found by name; AMP-2 to a stranger, who has no email
+        // to go by.
+        let mut to_alex = assigned_to("AMP-1", "Alex Rivera", "unused");
+        to_alex.assignee_email = None;
+        let mut to_stranger = assigned_to("AMP-2", "Pat Doe", "unused");
+        to_stranger.assignee_email = None;
+        assert!(app.enrich_ticket("AMP-1", app.moves.now(), &to_alex));
+        assert!(app.enrich_ticket("AMP-2", app.moves.now(), &to_stranger));
+
+        assert_eq!(
+            app.cache.team_tickets[0].assignee_email.as_deref(),
+            Some("alex.rivera@example.com")
+        );
+        assert_eq!(
+            app.cache.team_tickets[1].assignee.as_deref(),
+            Some("Pat Doe")
+        );
+        assert_eq!(app.cache.team_tickets[1].assignee_email, None);
     }
 
     #[test]
