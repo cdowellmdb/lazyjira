@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::App;
 use crate::views::common::{
     color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, truncate, Shared, KEY_WIDTH,
+    ticket_marker, truncate, updated_cell, Shared, KEY_WIDTH, UPDATED_WIDTH,
 };
 
 fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
@@ -15,7 +15,7 @@ fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
     let mut epic_w = 24usize;
     let mut labels_w = 22usize;
     let inner = panel().inner(area).width as usize;
-    let prefix_and_separators = 2 + key_w + 3 + 3 + 3;
+    let prefix_and_separators = 2 + key_w + 3 + 3 + 3 + UPDATED_WIDTH + 3;
     let mut overflow = prefix_and_separators + summary_w + epic_w + labels_w;
 
     if overflow > inner {
@@ -84,6 +84,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 header.push_span(separator(Style::default()));
                 header.push_span(Span::styled(format!("{:<epic_w$}", "EPIC"), heading_style));
             }
+            header.push_span(separator(Style::default()));
+            header.push_span(Span::styled("UPDATED", heading_style));
             if shared.labels_column {
                 header.push_span(separator(Style::default()));
                 header.push_span(Span::styled(
@@ -165,18 +167,21 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 separator(base),
             ]);
             row.spans.extend(summary);
+            let muted = if is_selected {
+                Style::default().fg(Color::Gray).bg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
             if shared.epic_column {
                 let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
                 row.push_span(separator(base));
                 row.push_span(Span::styled(
                     format!("{:<epic_w$}", truncate(epic_str, epic_w)),
-                    if is_selected {
-                        Style::default().fg(Color::Gray).bg(Color::DarkGray)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    },
+                    muted,
                 ));
             }
+            row.push_span(separator(base));
+            row.push_span(Span::styled(updated_cell(app, ticket), muted));
             if shared.labels_column {
                 row.push_span(separator(base));
                 row.push_span(Span::styled(

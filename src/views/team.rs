@@ -7,7 +7,7 @@ use crate::app::App;
 use crate::cache::Ticket;
 use crate::views::common::{
     color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, truncate, Shared, KEY_WIDTH,
+    ticket_marker, truncate, updated_cell, Shared, KEY_WIDTH, UPDATED_WIDTH,
 };
 
 fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
@@ -17,7 +17,7 @@ fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
     let mut epic_w = 20usize;
     let mut labels_w = 18usize;
     let inner = panel().inner(area).width as usize;
-    let prefix_and_separators = 2 + key_w + 3 + status_w + 3 + 3 + 3;
+    let prefix_and_separators = 2 + key_w + 3 + status_w + 3 + 3 + 3 + UPDATED_WIDTH + 3;
     let mut overflow = prefix_and_separators + summary_w + epic_w + labels_w;
 
     if overflow > inner {
@@ -62,21 +62,25 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let heading_style = Style::default()
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
-    // The Epic and Labels cells that `shared` leaves on a row; `muted` styles them unselected.
-    let push_epic_and_labels =
+    // The Epic and Labels cells that `shared` leaves on a row, with the Updated cell between;
+    // `muted` styles them unselected.
+    let push_trailing_cells =
         |row: &mut Line<'_>, ticket: &Ticket, base: Style, is_selected: bool, muted: Style| {
+            let gray = if is_selected {
+                Style::default().fg(Color::Gray).bg(Color::DarkGray)
+            } else {
+                muted
+            };
             if shared.epic_column {
                 let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
                 row.push_span(Span::styled(" │ ", base.fg(Color::DarkGray)));
                 row.push_span(Span::styled(
                     format!("{:<epic_w$}", truncate(epic_str, epic_w)),
-                    if is_selected {
-                        Style::default().fg(Color::Gray).bg(Color::DarkGray)
-                    } else {
-                        muted
-                    },
+                    gray,
                 ));
             }
+            row.push_span(Span::styled(" │ ", base.fg(Color::DarkGray)));
+            row.push_span(Span::styled(updated_cell(app, ticket), gray));
             if shared.labels_column {
                 row.push_span(Span::styled(" │ ", base.fg(Color::DarkGray)));
                 row.push_span(Span::styled(
@@ -161,6 +165,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             ]);
             for (shown, title, width) in [
                 (shared.epic_column, "EPIC", epic_w),
+                (true, "UPDATED", UPDATED_WIDTH),
                 (shared.labels_column, "LABELS", labels_w),
             ] {
                 if shown {
@@ -208,7 +213,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
-                push_epic_and_labels(
+                push_trailing_cells(
                     &mut row,
                     ticket,
                     base,
@@ -263,7 +268,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
-                push_epic_and_labels(
+                push_trailing_cells(
                     &mut row,
                     ticket,
                     base,

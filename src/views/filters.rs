@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, FilterFocus};
 use crate::views::common::{
     color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, truncate, Shared, KEY_WIDTH,
+    ticket_marker, truncate, updated_cell, Shared, KEY_WIDTH, UPDATED_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -121,7 +121,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let key_w = KEY_WIDTH;
         let status_w = 14usize;
         let inner = panel().inner(area).width as usize;
-        let fixed = 2 + key_w + 3 + status_w + 3 + 3;
+        let fixed = 2 + key_w + 3 + status_w + 3 + 3 + UPDATED_WIDTH + 3;
         let summary_w = inner.saturating_sub(fixed).max(12);
 
         let heading_style = Style::default()
@@ -134,9 +134,11 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
+            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("UPDATED", heading_style),
         ]));
 
-        let header_w = 2 + key_w + 3 + status_w + 3 + summary_w;
+        let header_w = 2 + key_w + 3 + status_w + 3 + summary_w + 3 + UPDATED_WIDTH;
         let groups = app.filters_visible_by_status();
         lines.extend(Shared::of(&groups).line(header_w));
         lines.push(Line::from(Span::styled(
@@ -222,6 +224,15 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ];
                 row.extend(summary);
+                row.push(Span::styled(" │ ", base.fg(Color::DarkGray)));
+                row.push(Span::styled(
+                    updated_cell(app, ticket),
+                    base.fg(if is_selected {
+                        Color::Gray
+                    } else {
+                        Color::DarkGray
+                    }),
+                ));
                 lines.push(Line::from(row));
             }
 

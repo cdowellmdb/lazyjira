@@ -256,3 +256,58 @@ impl Shared {
         )))
     }
 }
+
+/// Width of the Updated column: its heading's.
+pub const UPDATED_WIDTH: usize = 7;
+
+/// A row's Updated cell: how long ago Jira last updated the ticket, right-aligned, or "-" when
+/// the read didn't say.
+pub fn updated_cell(app: &App, ticket: &Ticket) -> String {
+    let age = ticket
+        .updated_secs()
+        .map_or_else(|| "-".to_string(), |at| age(at, (app.clock)()));
+    format!("{age:>UPDATED_WIDTH$}")
+}
+
+/// How long ago `updated` was at `now` (both Unix seconds), in its largest whole unit: "59m",
+/// "23h", "6d", "3w". A time ahead of `now` (clocks disagree) is "0m".
+pub fn age(updated: i64, now: i64) -> String {
+    let minutes = (now - updated).max(0) / 60;
+    match minutes {
+        m if m < 60 => format!("{m}m"),
+        m if m < 60 * 24 => format!("{}h", m / 60),
+        m if m < 60 * 24 * 7 => format!("{}d", m / (60 * 24)),
+        m => format!("{}w", m / (60 * 24 * 7)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn age_uses_the_largest_whole_unit() {
+        const MIN: i64 = 60;
+        const HOUR: i64 = 60 * MIN;
+        const DAY: i64 = 24 * HOUR;
+        let now = 1_790_763_800;
+        for (ago, expected) in [
+            (-5 * MIN, "0m"), // a clock running behind Jira's
+            (0, "0m"),
+            (59, "0m"),
+            (59 * MIN, "59m"),
+            (HOUR - 1, "59m"),
+            (HOUR, "1h"),
+            (23 * HOUR, "23h"),
+            (DAY - 1, "23h"),
+            (DAY, "1d"),
+            (6 * DAY, "6d"),
+            (7 * DAY - 1, "6d"),
+            (7 * DAY, "1w"),
+            (20 * DAY, "2w"),
+            (400 * DAY, "57w"),
+        ] {
+            assert_eq!(age(now - ago, now), expected, "{ago}s ago");
+        }
+    }
+}
