@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, FilterFocus};
 use crate::views::common::{
     color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, truncate, KEY_WIDTH,
+    ticket_marker, truncate, Shared, KEY_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -137,13 +137,15 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
         ]));
 
         let header_w = 2 + key_w + 3 + status_w + 3 + summary_w;
+        let groups = app.filters_visible_by_status();
+        lines.extend(Shared::of(&groups).line(header_w));
         lines.push(Line::from(Span::styled(
             "─".repeat(header_w),
             Style::default().fg(Color::DarkGray),
         )));
         lines.push(Line::from(""));
 
-        for group in app.filters_visible_by_status() {
+        for group in groups {
             let status = &group.header;
             mouse_rows.push((lines.len(), group.index, true));
             let is_header_selected = results_focused && group.index == app.selected_index;
@@ -188,14 +190,19 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 }
 
                 let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
-                let (key_cell, summary) =
-                    ticket_cells(app, group.family.get(index).copied(), ticket, marker);
-
                 let base = if is_selected {
                     Style::default().bg(Color::DarkGray)
                 } else {
                     Style::default()
                 };
+                let (key_cell, summary) = ticket_cells(
+                    app,
+                    group.family.get(index).copied(),
+                    ticket,
+                    marker,
+                    summary_w,
+                    base,
+                );
 
                 let status_style = if is_selected {
                     Style::default()
@@ -205,7 +212,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Style::default().fg(status_color(&ticket.status, app.status_rules()))
                 };
 
-                lines.push(Line::from(vec![
+                let mut row = vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
@@ -213,11 +220,9 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         status_style,
                     ),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<summary_w$}", truncate(&summary, summary_w)),
-                        base,
-                    ),
-                ]));
+                ];
+                row.extend(summary);
+                lines.push(Line::from(row));
             }
 
             lines.push(Line::from(""));

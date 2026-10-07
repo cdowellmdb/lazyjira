@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::App;
 use crate::views::common::{
     color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, truncate, KEY_WIDTH,
+    ticket_marker, Shared, KEY_WIDTH,
 };
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
@@ -64,6 +64,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
         ]));
+        lines.extend(Shared::of(&grouped).line(4 + key_w + 3 + status_w + 3 + summary_w));
         lines.push(Line::from(""));
     }
 
@@ -126,10 +127,16 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 Style::default().fg(status_color(&ticket.status, app.status_rules()))
             };
             let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
-            let (key_cell, summary) =
-                ticket_cells(app, group.family.get(index).copied(), ticket, marker);
+            let (key_cell, summary) = ticket_cells(
+                app,
+                group.family.get(index).copied(),
+                ticket,
+                marker,
+                summary_w,
+                base,
+            );
 
-            lines.push(Line::from(vec![
+            let mut row = vec![
                 Span::styled(format!("    {:<key_w$}", key_cell), base),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
                 Span::styled(
@@ -137,11 +144,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     status_style,
                 ),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:<summary_w$}", truncate(&summary, summary_w)),
-                    base,
-                ),
-            ]));
+            ];
+            row.extend(summary);
+            lines.push(Line::from(row));
         }
 
         lines.push(Line::from(""));
