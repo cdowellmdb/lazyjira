@@ -129,6 +129,79 @@ mod tests {
         }
     }
     #[test]
+    fn done_groups_start_folded_and_stay_unfolded_across_refreshes() {
+        let screen = |app: &App, tab: Tab| -> String {
+            let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|frame| match tab {
+                    Tab::MyWork => my_work::render(frame, frame.area(), app),
+                    _ => filters::render(frame, frame.area(), app, &config),
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..30)
+                .map(|y| {
+                    (0..120)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                        + "\n"
+                })
+                .collect()
+        };
+        let tickets = vec![
+            Ticket::for_test("DEMO-1", "In Progress"),
+            Ticket::for_test("DEMO-2", "Closed"),
+            Ticket::for_test("DEMO-3", "Closed"),
+            Ticket::for_test("DEMO-4", "Resolved"),
+        ];
+        let mut cache = crate::cache::Cache::empty();
+        cache.my_tickets = tickets.clone();
+
+        let mut app = App::new();
+        app.loading = false;
+        app.replace_cache(cache.clone(), app.moves.now());
+        let text = screen(&app, Tab::MyWork);
+        assert!(text.contains("▼ IN PROGRESS (1)"), "{text}");
+        assert!(text.contains("DEMO-1"), "{text}");
+        // Folded, each done group keeps its header and count but draws no rows.
+        assert!(text.contains("▶ CLOSED (2)"), "{text}");
+        assert!(text.contains("▶ RESOLVED (1)"), "{text}");
+        for key in ["DEMO-2", "DEMO-3", "DEMO-4"] {
+            assert!(!text.contains(key), "{key} is folded away: {text}");
+        }
+
+        // Unfolded by the user, Closed stays open through a background refresh.
+        app.toggle_group_collapse("Closed");
+        app.replace_cache(cache.clone(), app.moves.now());
+        let text = screen(&app, Tab::MyWork);
+        assert!(text.contains("▼ CLOSED (2)"), "{text}");
+        assert!(text.contains("DEMO-2") && text.contains("DEMO-3"), "{text}");
+        assert!(text.contains("▶ RESOLVED (1)"), "{text}");
+
+        // `d` still hides done tickets, headers included, and shows them again.
+        app.toggle_show_done();
+        let text = screen(&app, Tab::MyWork);
+        assert!(
+            !text.contains("CLOSED") && !text.contains("RESOLVED"),
+            "{text}"
+        );
+        app.toggle_show_done();
+        assert!(screen(&app, Tab::MyWork).contains("▼ CLOSED (2)"));
+
+        // A filter's results start with their done groups folded too.
+        app.active_tab = Tab::Filters;
+        app.filter_focus = FilterFocus::Results;
+        app.show_filter_results(tickets, app.moves.now());
+        let text = screen(&app, Tab::Filters);
+        assert!(text.contains("DEMO-1"), "{text}");
+        assert!(
+            !text.contains("DEMO-2") && !text.contains("DEMO-4"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn sub_tasks_sit_under_their_parent_or_name_it() {
         let rows_of = |app: &App, tab: Tab| -> Vec<String> {
             let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
