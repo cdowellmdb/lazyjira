@@ -599,12 +599,8 @@ async fn main() -> Result<()> {
                     app.end_detail_fetch(&key);
                     match result {
                         Ok(detail) => {
-                            if app.enrich_ticket(&key, requested_at, &detail)
-                                && !app.details.record(detail)
-                            {
-                                app.flash = Some(
-                                    "Detail cache writer unavailable; skipping write".to_string(),
-                                );
+                            if app.enrich_ticket(&key, requested_at, &detail) {
+                                app.details.record(detail);
                             }
                         }
                         Err(e) => app.fail_detail_fetch(&key, e),

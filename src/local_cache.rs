@@ -233,10 +233,11 @@ impl DetailCache {
         (details, rx)
     }
 
-    /// Keep a freshly fetched detail. False when the writer has stopped, so it won't reach disk.
-    pub fn record(&self, detail: Ticket) -> bool {
+    /// Keep a freshly fetched detail. The writer saves it once details stop arriving; if the
+    /// writer has stopped, `close` still saves it at quit.
+    pub fn record(&self, detail: Ticket) {
         lock_details(&self.by_key).insert(detail.key.clone(), detail);
-        self.changed.send(()).is_ok()
+        let _ = self.changed.send(());
     }
 
     /// Saves the details, for when the app quits: details recorded in the last moments are still
@@ -701,6 +702,19 @@ mod tests {
         });
 
         assert!(payloads.contains(&std::fs::read_to_string(&path).unwrap()));
+    }
+
+    #[test]
+    fn details_recorded_after_the_writer_stopped_are_still_saved_at_quit() {
+        let path = cache_path(DETAILS_CACHE_PREFIX, &project("STOPPED"));
+        let _remove = Remove(vec![path.clone()]);
+        let (details, changed) = DetailCache::new(HashMap::new(), Some(path.clone()));
+        drop(changed);
+
+        details.record(test_ticket("DEMO-1", "To Do"));
+        details.close();
+
+        assert_eq!(saved_keys(&path), ["DEMO-1"]);
     }
 
     #[test]
