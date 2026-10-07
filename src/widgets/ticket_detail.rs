@@ -785,19 +785,19 @@ mod tests {
     fn ticket() -> Ticket {
         Ticket {
             key: "DEMO-3228".to_string(),
-            summary: "MAGE: MongoDB Agent Grading & Evaluation benchmark".to_string(),
+            summary: "PAY: Payments Platform Revamp".to_string(),
             status: "In Progress".to_string(),
-            assignee: Some("Christian Dowell".to_string()),
-            reporter: Some("Christian Dowell".to_string()),
+            assignee: Some("Alex Rivera".to_string()),
+            reporter: Some("Alex Rivera".to_string()),
             description: Some(
-                "*Stakeholders:* Christian Dowell (owner)\n\nh2. Goals\n# Replay the changes\n# Grade the result"
+                "*Stakeholders:* Alex Rivera (owner)\n\nh2. Goals\n# Replay the changes\n# Grade the result"
                     .to_string(),
             ),
             labels: vec!["DEMO".to_string(), "data-science".to_string()],
             detail_loaded: true,
             activity: vec![
-                comment("2026-09-02T10:00:00.000+0000", "Eliza Spang", "Second *reply*"),
-                comment("2026-09-01T09:30:00.000+0000", "Christian Dowell", "First"),
+                comment("2026-09-02T10:00:00.000+0000", "Sam Lee", "Second *reply*"),
+                comment("2026-09-01T09:30:00.000+0000", "Alex Rivera", "First"),
             ],
             ..Ticket::default()
         }
@@ -888,7 +888,7 @@ mod tests {
         assert!(lines[row(&lines, "Status")].contains("● In Progress"));
         assert!(lines[row(&lines, "Labels")].contains(" DEMO   data-science "));
         assert!(lines[row(&lines, "── Comments (2) ─")].contains('─'));
-        assert!(row(&lines, "Christian Dowell  2026-09-01 09:30") < row(&lines, "Eliza Spang"));
+        assert!(row(&lines, "Alex Rivera  2026-09-01 09:30") < row(&lines, "Sam Lee"));
         assert!(lines[row(&lines, "Second reply")].contains("   Second reply"));
     }
 
