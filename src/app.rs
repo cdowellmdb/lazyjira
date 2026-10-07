@@ -27,6 +27,8 @@ pub(crate) struct VisibleGroup<'a, H> {
     /// The rows (by index) that are a parent with sub-tasks, or a sub-task under its parent.
     /// The sub-tasks of a folded parent have no row, but `total` still counts them.
     pub family: HashMap<usize, Family>,
+    /// The sub-tasks of folded parents in an expanded group: no row, but still in the list.
+    pub folded_subtasks: Vec<&'a crate::cache::Ticket>,
 }
 
 #[derive(Debug, Clone)]
@@ -344,6 +346,9 @@ pub struct App {
     pub collapsed_parents: HashSet<String>,
     pub collapsed_unassigned: HashSet<String>,
     pub collapsed_filters: HashSet<String>,
+    /// The done statuses My Work has folded, until its first full-scope read is applied; `None`
+    /// after, when no read folds anything. A failed read changes nothing.
+    my_work_done_folded: Option<HashSet<String>>,
     /// Optional epic focus order used by the Epics tab; empty means show all epics.
     epics_i_care_about_rank: HashMap<String, usize>,
     /// Status order and done/active, from the `[statuses]` config.
@@ -409,6 +414,7 @@ impl App {
             collapsed_parents: HashSet::new(),
             collapsed_unassigned: HashSet::new(),
             collapsed_filters: HashSet::new(),
+            my_work_done_folded: Some(HashSet::new()),
             epics_i_care_about_rank: HashMap::new(),
             status_rules: crate::cache::StatusRules::default(),
         }
@@ -533,6 +539,41 @@ impl App {
     pub fn replace_cache(&mut self, cache: Cache, requested_at: u64) {
         self.ensure_visible_keys_cache();
         self.cache = cache;
+        self.fold_new_done_groups();
+        self.reapply_moves_since(requested_at);
+        self.mark_cache_changed();
+    }
+
+    /// Replaces the cache with a full-scope read (Full or Manual), which brings done tickets:
+    /// its new done groups fold, and after it no read folds any, so a group that first appears
+    /// later (a ticket just closed) shows open.
+    pub fn replace_cache_full_scope(&mut self, cache: Cache, requested_at: u64) {
+        self.replace_cache(cache, requested_at);
+        self.my_work_done_folded = None;
+    }
+
+    /// Folds each done group a read brings to My Work the first time it appears, until a
+    /// full-scope read is applied (`replace_cache_full_scope`): startup reads (the snapshot, the
+    /// active-only read) may lack done tickets.
+    fn fold_new_done_groups(&mut self) {
+        let Some(folded) = &mut self.my_work_done_folded else {
+            return;
+        };
+        for ticket in &self.cache.my_tickets {
+            if self.status_rules.is_done(&ticket.status) && folded.insert(ticket.status.clone()) {
+                self.collapsed_my_work.insert(ticket.status.clone());
+            }
+        }
+    }
+
+    /// Shows a filter query's results (requested at `requested_at`), with their done groups folded.
+    pub fn show_filter_results(&mut self, tickets: Vec<crate::cache::Ticket>, requested_at: u64) {
+        self.collapsed_filters = tickets
+            .iter()
+            .filter(|ticket| self.status_rules.is_done(&ticket.status))
+            .map(|ticket| ticket.status.clone())
+            .collect();
+        self.filter_results = tickets;
         self.reapply_moves_since(requested_at);
         self.mark_cache_changed();
     }
@@ -741,22 +782,25 @@ impl App {
                 next_index += 1;
                 let total = rows.len();
                 let mut family = HashMap::new();
+                let mut folded_subtasks = Vec::new();
                 let tickets = (!self.is_collapsed(tab, &id)).then(|| {
                     rows.into_iter()
-                        .filter(|(ticket, role)| {
-                            !(*role == Some(Family::Child)
+                        .filter_map(|(ticket, role)| {
+                            if role == Some(Family::Child)
                                 && ticket
                                     .parent_key
                                     .as_ref()
-                                    .is_some_and(|parent| self.collapsed_parents.contains(parent)))
-                        })
-                        .map(|(ticket, role)| {
+                                    .is_some_and(|parent| self.collapsed_parents.contains(parent))
+                            {
+                                folded_subtasks.push(ticket);
+                                return None;
+                            }
                             let index = next_index;
                             next_index += 1;
                             if let Some(role) = role {
                                 family.insert(index, role);
                             }
-                            (index, ticket)
+                            Some((index, ticket))
                         })
                         .collect()
                 });
@@ -767,6 +811,7 @@ impl App {
                     total,
                     tickets,
                     family,
+                    folded_subtasks,
                 }
             })
             .collect()
@@ -1143,6 +1188,7 @@ impl App {
                 continue;
             }
 
+            self.status_rules.order_done(&mut done);
             visible.push((member, active, done));
         }
 

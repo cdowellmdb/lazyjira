@@ -545,7 +545,7 @@ async fn main() -> Result<()> {
                         (CacheRefreshPhase::Full, Ok(cache))
                             if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
                         {
-                            app.replace_cache(cache, requested_at);
+                            app.replace_cache_full_scope(cache, requested_at);
                             app.cache_stale_age_secs = None;
                             app.ticket_sync_stage = None;
                             app.clamp_selection();
@@ -567,7 +567,7 @@ async fn main() -> Result<()> {
                         }
                         (CacheRefreshPhase::Manual, Ok(cache)) => {
                             app.loading = false;
-                            app.replace_cache(cache, requested_at);
+                            app.replace_cache_full_scope(cache, requested_at);
                             app.cache_stale_age_secs = None;
                             app.ticket_sync_stage = None;
                             app.clamp_selection();
@@ -718,10 +718,7 @@ async fn main() -> Result<()> {
                     match result {
                         Ok(tickets) => {
                             let count = tickets.len();
-                            app.filter_results = tickets;
-                            app.reapply_moves_since(requested_at);
-                            app.collapsed_filters.clear();
-                            app.mark_cache_changed();
+                            app.show_filter_results(tickets, requested_at);
                             app.prune_selection_to_visible();
                             app.filter_focus = FilterFocus::Results;
                             app.selected_index = 0;

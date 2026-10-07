@@ -345,25 +345,38 @@ pub fn register_rows(
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect::<String>();
-            let prefix = text.find('[').unwrap_or(0) as u16;
+            // The row's first mark is its selection mark, as many columns in as the text before it.
+            let mark = text
+                .find(crate::views::common::MARKS)
+                .map_or(0, |at| unicode_width::UnicodeWidthStr::width(&text[..at]))
+                as u16;
+            // The mark and the cells either side of it, so a click a cell off (or on a font's
+            // wider glyph) still toggles; a header's fold arrow is two cells after the mark.
+            let start = mark.saturating_sub(1);
             targets.push((
                 Rect::new(
-                    rect.x + prefix,
+                    rect.x + start,
                     rect.y,
-                    rect.width.saturating_sub(prefix).min(3),
+                    rect.width.saturating_sub(start).min(mark + 2 - start),
                     1,
                 ),
                 Target::Mark(index),
             ));
             if header {
+                // A header's fold arrow follows its mark and a space.
                 targets.push((
-                    Rect::new(rect.x + 4, rect.y, rect.width.saturating_sub(4).min(1), 1),
+                    Rect::new(
+                        rect.x + mark + 2,
+                        rect.y,
+                        rect.width.saturating_sub(mark + 2).min(1),
+                        1,
+                    ),
                     Target::Fold(index),
                 ));
             } else if let Some(arrow) = text.split(" │ ").next().and_then(|key_cell| {
                 key_cell
                     .find(['▼', '▶'])
-                    .map(|at| key_cell[..at].chars().count())
+                    .map(|at| unicode_width::UnicodeWidthStr::width(&key_cell[..at]))
             }) {
                 // A parent's fold arrow sits in its key cell.
                 targets.push((
@@ -892,6 +905,61 @@ mod tests {
         })
         .await;
         assert!(app.bulk_state.is_none());
+    }
+
+    /// Presses and releases the left button at `at`.
+    async fn click_at(
+        app: &mut App,
+        config: &mut AppConfig,
+        tx: &UnboundedSender<BackgroundMessage>,
+        at: Position,
+    ) {
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            send(app, config, tx, kind, at).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn clicking_a_cell_either_side_of_a_mark_still_toggles_selection() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        // Either side, where a click lands when a font draws the mark wide.
+        for (side, offset) in [("left", -1), ("right", 1)] {
+            let mut app = App::new();
+            app.loading = false;
+            app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "To Do")];
+            draw(&app, &config);
+            let mark = locate(&app, "☐ DEMO-1");
+            let at = Position::new(mark.x.checked_add_signed(offset).unwrap(), mark.y);
+            click_at(&mut app, &mut config, &tx, at).await;
+            assert!(app.is_ticket_selected("DEMO-1"), "{side}");
+            assert!(!app.is_detail_open(), "{side}");
+        }
+    }
+
+    #[tokio::test]
+    async fn clicking_a_headers_arrow_two_cells_after_its_mark_folds_without_selecting() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "To Do")];
+        draw(&app, &config);
+        let mark = locate(&app, "☐ ▼ TO DO");
+        click_at(
+            &mut app,
+            &mut config,
+            &tx,
+            Position::new(mark.x + 2, mark.y),
+        )
+        .await;
+        assert!(app.is_collapsed(Tab::MyWork, "To Do"));
+        assert!(!app.is_ticket_selected("DEMO-1"));
     }
 
     #[tokio::test]

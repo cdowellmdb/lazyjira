@@ -174,8 +174,9 @@ impl StatusRules {
         self.place(name).done
     }
 
-    /// Groups tickets by status name in display order. Tickets keep their order within a
-    /// group, and unlisted statuses keep their first-seen order.
+    /// Groups tickets by status name in display order. Done groups are in `order_done`'s order;
+    /// other groups keep their tickets' order, and unlisted
+    /// statuses keep their first-seen order.
     pub fn group<'a>(
         &self,
         tickets: impl IntoIterator<Item = &'a Ticket>,
@@ -192,6 +193,11 @@ impl StatusRules {
         }
         // The sort is stable, so unlisted statuses keep their first-seen order.
         groups.sort_by_key(|(status, _)| self.rank(status));
+        for (status, tickets) in &mut groups {
+            if self.is_done(status) {
+                self.order_done(tickets);
+            }
+        }
         groups
     }
 
@@ -202,6 +208,12 @@ impl StatusRules {
                 .cmp(&self.rank(&b.status))
                 .then_with(|| a.key.cmp(&b.key))
         });
+    }
+
+    /// Orders done tickets for display: most recently updated first, those without an `updated`
+    /// last; ties keep their order. Every list of done tickets goes through it.
+    pub fn order_done(&self, done: &mut [&Ticket]) {
+        done.sort_by_cached_key(|ticket| std::cmp::Reverse(ticket.updated_secs()));
     }
 }
 
@@ -283,14 +295,42 @@ pub struct Ticket {
     #[serde(default)]
     pub parent_key: Option<String>,
     /// Jira's `updated` timestamp as Jira sends it (`2026-09-30T10:23:20.000+0000`). Filled by
-    /// the list search; caches from before it load without one. Nothing shows it yet: it is kept
-    /// for an Updated column in the lists.
+    /// the list search; caches from before it load without one. The lists show its age and
+    /// order done groups by it.
     #[serde(default)]
     pub updated: Option<String>,
     #[serde(default)]
     pub detail_loaded: bool,
     #[serde(default)]
     pub activity: Vec<ActivityEntry>,
+}
+
+impl Ticket {
+    /// `updated` in Unix seconds, or `None` when it's missing or not Jira's
+    /// `YYYY-MM-DDTHH:MM:SS.fff±HHMM` (or `±HH:MM`).
+    pub fn updated_secs(&self) -> Option<i64> {
+        let s = self.updated.as_deref()?;
+        let num = |range: std::ops::Range<usize>| s.get(range)?.parse::<i64>().ok();
+        let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+        let secs = num(11..13)? * 3600 + num(14..16)? * 60 + num(17..19)?;
+        let sign_at = 19 + s.get(19..)?.find(['+', '-'])?;
+        let offset = s[sign_at + 1..].replace(':', "");
+        let offset = offset.get(0..2)?.parse::<i64>().ok()? * 3600
+            + offset.get(2..4)?.parse::<i64>().ok()? * 60;
+        let offset = if s[sign_at..].starts_with('-') {
+            -offset
+        } else {
+            offset
+        };
+        // Days since 1970-01-01 in the proleptic Gregorian calendar (Howard Hinnant's
+        // days_from_civil), counting years from March so the leap day ends the year.
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+        let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+        Some(days * 86_400 + secs - offset)
+    }
 }
 
 #[cfg(test)]
@@ -548,5 +588,55 @@ mod tests {
         rules.sort_tickets(&mut refs);
         let keys: Vec<&str> = refs.iter().map(|t| t.key.as_str()).collect();
         assert_eq!(keys, ["DSCI-1", "DSCI-2", "DSCI-9", "DSCI-3"]);
+    }
+
+    #[test]
+    fn done_tickets_list_newest_first_with_missing_updates_last_and_ties_in_order() {
+        let at = |key: &str, updated: Option<&str>| {
+            let mut ticket = Ticket::for_test(key, "Closed");
+            ticket.updated = updated.map(|time| format!("2026-09-{time}.000+0000"));
+            ticket
+        };
+        let tickets = [
+            at("DEMO-1", None),
+            at("DEMO-2", Some("01T00:00:00")),
+            at("DEMO-3", Some("30T10:00:00")),
+            at("DEMO-4", Some("01T00:00:00")),
+            at("DEMO-5", None),
+        ];
+        let mut refs: Vec<&Ticket> = tickets.iter().collect();
+        StatusRules::default().order_done(&mut refs);
+        let keys: Vec<&str> = refs.iter().map(|t| t.key.as_str()).collect();
+        assert_eq!(keys, ["DEMO-3", "DEMO-2", "DEMO-4", "DEMO-1", "DEMO-5"]);
+    }
+
+    #[test]
+    fn updated_secs_reads_jiras_timestamp_in_its_offset() {
+        let at = |updated: Option<&str>| {
+            let mut ticket = Ticket::for_test("DSCI-1", "Closed");
+            ticket.updated = updated.map(String::from);
+            ticket.updated_secs()
+        };
+        assert_eq!(at(Some("1970-01-01T00:00:00.000+0000")), Some(0));
+        assert_eq!(
+            at(Some("2026-09-30T10:23:20.000+0000")),
+            Some(1_790_763_800)
+        );
+        // The same instant written two hours east, and with a colon in the offset.
+        assert_eq!(
+            at(Some("2026-09-30T12:23:20.000+0200")),
+            Some(1_790_763_800)
+        );
+        assert_eq!(
+            at(Some("2026-09-30T05:23:20.000-05:00")),
+            Some(1_790_763_800)
+        );
+        // A leap day, one second before midnight.
+        assert_eq!(
+            at(Some("2024-02-29T23:59:59.000+0000")),
+            Some(1_709_251_199)
+        );
+        assert_eq!(at(None), None);
+        assert_eq!(at(Some("yesterday")), None);
     }
 }

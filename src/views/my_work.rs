@@ -5,8 +5,8 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
-    KEY_WIDTH,
+    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
+    ticket_marker, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
@@ -15,7 +15,7 @@ fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
     let mut epic_w = 24usize;
     let mut labels_w = 22usize;
     let inner = panel().inner(area).width as usize;
-    let prefix_and_separators = 2 + key_w + 3 + 3 + 3;
+    let prefix_and_separators = 2 + key_w + 4 * SEPARATOR_WIDTH + UPDATED_WIDTH;
     let mut overflow = prefix_and_separators + summary_w + epic_w + labels_w;
 
     if overflow > inner {
@@ -51,10 +51,14 @@ fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.my_work_visible_by_status();
+    let now = crate::local_cache::now_unix_secs() as i64;
+    let shared = Shared::of(&grouped, Columns::EpicAndLabels);
     let (key_w, summary_w, epic_w, labels_w) = my_work_column_widths(area);
+    let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
     let heading_style = Style::default()
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
+    let separator = |style: Style| Span::styled(" │ ", style.fg(Color::DarkGray));
 
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_visual_line: Option<usize> = None;
@@ -64,16 +68,15 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     for group in &grouped {
         let status = &group.header;
         if !has_rows {
-            let header_w = 2 + key_w + 3 + summary_w + 3 + epic_w + 3 + labels_w;
-            lines.push(Line::from(vec![
+            let mut header = Line::from(vec![
                 Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
-                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+                separator(Style::default()),
                 Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
-                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:<epic_w$}", "EPIC"), heading_style),
-                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:<labels_w$}", "LABELS"), heading_style),
-            ]));
+            ]);
+            shared.push_trailing_headings(&mut header, heading_style, epic_w, labels_w);
+            let header_w = header.width();
+            lines.push(header);
+            lines.extend(shared.line(header_w));
             lines.push(Line::from(Span::styled(
                 "─".repeat(header_w),
                 Style::default().fg(Color::DarkGray),
@@ -130,47 +133,23 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 Style::default()
             };
-            let marker = if app.is_ticket_selected(&ticket.key) {
-                "[x]"
-            } else {
-                "[ ]"
-            };
-            let (key_cell, summary) =
-                ticket_cells(app, group.family.get(index).copied(), ticket, marker);
+            let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
+            let (key_cell, summary) = ticket_cells(
+                app,
+                group.family.get(index).copied(),
+                ticket,
+                marker,
+                summary_w,
+                base,
+            );
 
-            let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
-            let labels_str = if ticket.labels.is_empty() {
-                "-".to_string()
-            } else {
-                ticket.labels.join(", ")
-            };
-
-            lines.push(Line::from(vec![
+            let mut row = Line::from(vec![
                 Span::styled(format!("  {:<key_w$}", key_cell), base),
-                Span::styled(" │ ", base.fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:<summary_w$}", truncate(&summary, summary_w)),
-                    base,
-                ),
-                Span::styled(" │ ", base.fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:<epic_w$}", truncate(epic_str, epic_w)),
-                    if is_selected {
-                        Style::default().fg(Color::Gray).bg(Color::DarkGray)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    },
-                ),
-                Span::styled(" │ ", base.fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:<labels_w$}", truncate(&labels_str, labels_w)),
-                    if is_selected {
-                        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    },
-                ),
-            ]));
+                separator(base),
+            ]);
+            row.spans.extend(summary);
+            shared.push_trailing_cells(now, &mut row, ticket, base, epic_w, labels_w);
+            lines.push(row);
         }
 
         // Blank line between groups
@@ -185,6 +164,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);
+    color_marks(&mut lines);
 
     // Scroll to keep selected row visible
     let visible = area.height.saturating_sub(2) as usize;

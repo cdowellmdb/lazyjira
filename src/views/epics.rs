@@ -5,8 +5,8 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
-    KEY_WIDTH,
+    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
+    ticket_marker, truncate, KEY_WIDTH,
 };
 
 fn child_column_widths(area: Rect) -> (usize, usize, usize) {
@@ -109,7 +109,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             format!("{}  ({} / {} done, {:.1}%)", progress, done, total, pct)
         };
         let inner = panel().inner(area).width as usize;
-        let prefix = 4 + 1 + 1 + 10 + 2; // marker + indicator + space + key + gap
+        let prefix = 2 + 1 + 1 + 10 + 2; // mark + indicator + space + key + gap
         let epic_summary_w = inner.saturating_sub(prefix).max(12);
 
         let header_key_style = if is_header_selected {
@@ -178,15 +178,17 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     Style::default().fg(status_color(&ticket.status, app.status_rules()))
                 };
-                let marker = if app.is_ticket_selected(&ticket.key) {
-                    "[x]"
-                } else {
-                    "[ ]"
-                };
-                let (key_cell, summary) =
-                    ticket_cells(app, group.family.get(index).copied(), ticket, marker);
+                let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
+                let (key_cell, summary) = ticket_cells(
+                    app,
+                    group.family.get(index).copied(),
+                    ticket,
+                    marker,
+                    summary_w,
+                    base,
+                );
 
-                lines.push(Line::from(vec![
+                let mut row = vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
@@ -194,11 +196,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         status_style,
                     ),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<summary_w$}", truncate(&summary, summary_w)),
-                        base,
-                    ),
-                ]));
+                ];
+                row.extend(summary);
+                lines.push(Line::from(row));
             }
         }
 
@@ -228,6 +228,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);
+    color_marks(&mut lines);
 
     // Scroll to keep selected row visible
     let visible = area.height.saturating_sub(2) as usize;

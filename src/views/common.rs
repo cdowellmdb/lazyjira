@@ -2,8 +2,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
-use crate::app::App;
-use crate::app::GroupSelectionState;
+use crate::app::{App, GroupSelectionState, VisibleGroup};
 use crate::cache::{Status, StatusRules, Ticket};
 use crate::subtasks::Family;
 
@@ -67,23 +66,87 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-pub fn group_marker(state: GroupSelectionState) -> &'static str {
+const UNSELECTED: char = '☐';
+const SELECTED: char = '☒';
+const PARTIAL: char = '⊟';
+/// The selection marks, each one column wide (East Asian Width "N"): unselected, selected, and a
+/// group with some of its tickets selected.
+pub const MARKS: [char; 3] = [UNSELECTED, SELECTED, PARTIAL];
+
+pub fn ticket_marker(selected: bool) -> char {
+    if selected {
+        SELECTED
+    } else {
+        UNSELECTED
+    }
+}
+
+pub fn group_marker(state: GroupSelectionState) -> char {
     match state {
-        GroupSelectionState::None => "[ ]",
-        GroupSelectionState::Partial => "[~]",
-        GroupSelectionState::All => "[x]",
+        GroupSelectionState::None => UNSELECTED,
+        GroupSelectionState::Partial => PARTIAL,
+        GroupSelectionState::All => SELECTED,
+    }
+}
+
+/// `base` in the muted color: gray on the selected row (`base` has its background), so it shows
+/// against the highlight, and dark gray elsewhere.
+pub fn muted(base: Style) -> Style {
+    base.fg(if base.bg.is_some() {
+        Color::Gray
+    } else {
+        Color::DarkGray
+    })
+}
+
+/// Colors each line's selection mark: `muted` when unselected, cyan when selected or partial. Only a line's first mark is the
+/// selection, since a summary may contain one. Call after `highlight_row`.
+pub fn color_marks(lines: &mut [Line<'_>]) {
+    for line in lines {
+        let Some((index, at)) = line
+            .spans
+            .iter()
+            .enumerate()
+            .find_map(|(index, span)| span.content.find(MARKS).map(|at| (index, at)))
+        else {
+            continue;
+        };
+        let span = line.spans.remove(index);
+        let (before, rest) = span.content.split_at(at);
+        let mark_len = rest.chars().next().map_or(0, char::len_utf8);
+        let (mark, after) = rest.split_at(mark_len);
+        // The mark's style with the row's, so `muted` sees the highlight.
+        let row = line.style.patch(span.style);
+        let mark_style = if mark.starts_with(UNSELECTED) {
+            muted(row)
+        } else {
+            row.fg(Color::Cyan)
+        };
+        let parts = [
+            Span::styled(before.to_string(), span.style),
+            Span::styled(mark.to_string(), mark_style),
+            Span::styled(after.to_string(), span.style),
+        ];
+        line.spans.splice(
+            index..index,
+            parts.into_iter().filter(|part| !part.content.is_empty()),
+        );
     }
 }
 
 /// A ticket row's key and summary cells, given its place in a parent's family. A sub-task under
 /// its parent is indented, and a parent shows whether its sub-tasks are folded, with how many are
-/// hidden. A sub-task whose parent is elsewhere leads its summary with the parent's key.
+/// hidden. A sub-task whose parent is elsewhere leads its summary with the parent's key, muted so
+/// the summary reads first (gray on the selected row, as other muted cells are). The summary is
+/// drawn in `base`, truncated and padded to `width`.
 pub fn ticket_cells(
     app: &App,
     family: Option<Family>,
     ticket: &Ticket,
-    marker: &str,
-) -> (String, String) {
+    marker: char,
+    width: usize,
+    base: Style,
+) -> (String, Vec<Span<'static>>) {
     let folded = app.is_parent_folded(&ticket.key);
     let key = match family {
         Some(Family::Child) => format!("  {} {}", marker, ticket.key),
@@ -92,15 +155,259 @@ pub fn ticket_cells(
         }
         None => format!("{} {}", marker, ticket.key),
     };
-    let summary = match (family, &ticket.parent_key) {
-        (Some(Family::Parent(count)), _) if folded => format!(
-            "({} sub-task{}) {}",
-            count,
-            if count == 1 { "" } else { "s" },
-            ticket.summary
+    let (prefix, summary) = match (family, &ticket.parent_key) {
+        (Some(Family::Parent(count)), _) if folded => (
+            String::new(),
+            format!(
+                "({} sub-task{}) {}",
+                count,
+                if count == 1 { "" } else { "s" },
+                ticket.summary
+            ),
         ),
-        (None, Some(parent)) => format!("{} › {}", parent, ticket.summary),
-        _ => ticket.summary.clone(),
+        (None, Some(parent)) => (format!("{} › ", parent), ticket.summary.clone()),
+        _ => (String::new(), ticket.summary.clone()),
     };
-    (key, summary)
+    let cell = format!("{:<width$}", truncate(&(prefix.clone() + &summary), width));
+    let split = cell
+        .char_indices()
+        .nth(prefix.chars().count())
+        .map_or(cell.len(), |(i, _)| i);
+    let (prefix, summary) = cell.split_at(split);
+    (
+        key,
+        vec![
+            Span::styled(prefix.to_string(), muted(base)),
+            Span::styled(summary.to_string(), base),
+        ],
+    )
+}
+
+/// Width of the ` │ ` between two columns.
+pub const SEPARATOR_WIDTH: usize = 3;
+
+/// The columns a tab has that `Shared` may hide, which decides what its shared line names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Columns {
+    /// Epic and Labels columns, each hidden while every row shares its value (My Work, Team).
+    EpicAndLabels,
+    /// Neither: the shared line names a shared epic and labels (Filters).
+    Neither,
+    /// Neither, and the groups are epics, whose headers name them, so the shared line names only
+    /// labels (Unassigned).
+    GroupedByEpic,
+}
+
+/// What every row a tab draws has in common, so it is shown once instead of on every row.
+/// Rows with no epic don't count when deciding whether an epic is shared.
+pub struct Shared {
+    epic: Option<String>,
+    labels: Vec<String>,
+    /// Some rows' epics differ, so rows need their Epic column.
+    epic_column: bool,
+    /// Some row has a label not every row has, so rows need their Labels column.
+    labels_column: bool,
+}
+
+impl Shared {
+    /// The shared values of the rows `groups` draw, in a tab with `columns`, counting the
+    /// sub-tasks of folded parents (as group totals do) but nothing in a folded group.
+    pub fn of<H>(groups: &[VisibleGroup<'_, H>], columns: Columns) -> Self {
+        let rows: Vec<&Ticket> = groups
+            .iter()
+            .flat_map(|group| {
+                let drawn = group.tickets.iter().flatten().map(|(_, ticket)| *ticket);
+                drawn.chain(group.folded_subtasks.iter().copied())
+            })
+            .collect();
+        let mut epics: Vec<&str> = rows.iter().filter_map(|t| t.epic_name.as_deref()).collect();
+        epics.sort_unstable();
+        epics.dedup();
+        let labels: Vec<String> = rows.first().map_or_else(Vec::new, |first| {
+            first
+                .labels
+                .iter()
+                .filter(|label| rows.iter().all(|t| t.labels.contains(label)))
+                .cloned()
+                .collect()
+        });
+        let has_columns = columns == Columns::EpicAndLabels;
+        Shared {
+            epic: (epics.len() == 1 && columns != Columns::GroupedByEpic)
+                .then(|| epics[0].to_string()),
+            epic_column: has_columns && epics.len() > 1,
+            labels_column: has_columns
+                && rows
+                    .iter()
+                    .any(|t| t.labels.iter().any(|label| !labels.contains(label))),
+            labels,
+        }
+    }
+
+    /// The summary's width once the hidden Epic and Labels columns, and their separators, give
+    /// it theirs. For `Columns::EpicAndLabels` tabs, whose widths count both columns.
+    pub fn summary_width(&self, summary_w: usize, epic_w: usize, labels_w: usize) -> usize {
+        [(self.epic_column, epic_w), (self.labels_column, labels_w)]
+            .into_iter()
+            .filter(|(shown, _)| !shown)
+            .fold(summary_w, |w, (_, hidden)| w + hidden + SEPARATOR_WIDTH)
+    }
+
+    /// Pushes the headings, in `style`, of the cells `push_trailing_cells` draws.
+    pub fn push_trailing_headings(
+        &self,
+        header: &mut Line<'static>,
+        style: Style,
+        epic_w: usize,
+        labels_w: usize,
+    ) {
+        for (shown, title, width) in [
+            (self.epic_column, "EPIC", epic_w),
+            (true, "UPDATED", UPDATED_WIDTH),
+            (self.labels_column, "LABELS", labels_w),
+        ] {
+            if shown {
+                header.push_span(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+                header.push_span(Span::styled(format!("{title:<width$}"), style));
+            }
+        }
+    }
+
+    /// Pushes a row's trailing cells: Epic (when shown), Updated (its age at `now`), and Labels
+    /// (when shown), muted in `base`, the row's style (with its background on the selected row, where labels are
+    /// yellow).
+    pub fn push_trailing_cells(
+        &self,
+        now: i64,
+        row: &mut Line<'static>,
+        ticket: &Ticket,
+        base: Style,
+        epic_w: usize,
+        labels_w: usize,
+    ) {
+        let separator = Span::styled(" │ ", base.fg(Color::DarkGray));
+        if self.epic_column {
+            let epic = ticket.epic_name.as_deref().unwrap_or("-");
+            row.push_span(separator.clone());
+            row.push_span(Span::styled(
+                format!("{:<epic_w$}", truncate(epic, epic_w)),
+                muted(base),
+            ));
+        }
+        row.push_span(separator.clone());
+        row.push_span(Span::styled(updated_cell(now, ticket), muted(base)));
+        if self.labels_column {
+            let labels = truncate(&self.row_labels(ticket), labels_w);
+            row.push_span(separator);
+            row.push_span(Span::styled(
+                format!("{labels:<labels_w$}"),
+                if base.bg.is_some() {
+                    base.fg(Color::Yellow)
+                } else {
+                    muted(base)
+                },
+            ));
+        }
+    }
+
+    /// A row's Labels cell: its labels that not every row has.
+    pub fn row_labels(&self, ticket: &Ticket) -> String {
+        let own: Vec<&str> = ticket
+            .labels
+            .iter()
+            .filter(|label| !self.labels.contains(label))
+            .map(String::as_str)
+            .collect();
+        if own.is_empty() {
+            "-".to_string()
+        } else {
+            own.join(", ")
+        }
+    }
+
+    /// The muted line under the column headers, cut to `width`; `None` when nothing is shared.
+    pub fn line(&self, width: usize) -> Option<Line<'static>> {
+        if self.epic.is_none() && self.labels.is_empty() {
+            return None;
+        }
+        let mut text = "  all rows".to_string();
+        if let Some(epic) = &self.epic {
+            text.push_str(" · epic ");
+            text.push_str(epic);
+        }
+        if !self.labels.is_empty() {
+            text.push_str(" · ");
+            text.push_str(&self.labels.join(", "));
+        }
+        Some(Line::from(Span::styled(
+            truncate(&text, width),
+            Style::default().fg(Color::DarkGray),
+        )))
+    }
+}
+
+/// Width of the Updated column: its heading's.
+pub const UPDATED_WIDTH: usize = 7;
+
+/// A row's Updated cell: how long before `now` (Unix seconds, read once per render) Jira last
+/// updated the ticket, right-aligned, or "-" when the read didn't say.
+pub fn updated_cell(now: i64, ticket: &Ticket) -> String {
+    let age = ticket
+        .updated_secs()
+        .map_or_else(|| "-".to_string(), |at| age(at, now));
+    format!("{age:>UPDATED_WIDTH$}")
+}
+
+/// How long ago `updated` was at `now` (both Unix seconds), in its largest whole unit: "59m",
+/// "23h", "6d", "3w". A time ahead of `now` (clocks disagree) is "0m".
+pub fn age(updated: i64, now: i64) -> String {
+    let minutes = (now - updated).max(0) / 60;
+    match minutes {
+        m if m < 60 => format!("{m}m"),
+        m if m < 60 * 24 => format!("{}h", m / 60),
+        m if m < 60 * 24 * 7 => format!("{}d", m / (60 * 24)),
+        m => format!("{}w", m / (60 * 24 * 7)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_selection_mark_is_one_column_wide() {
+        for mark in MARKS {
+            assert_eq!(
+                unicode_width::UnicodeWidthChar::width(mark),
+                Some(1),
+                "{mark}"
+            );
+        }
+    }
+
+    #[test]
+    fn age_uses_the_largest_whole_unit() {
+        const MIN: i64 = 60;
+        const HOUR: i64 = 60 * MIN;
+        const DAY: i64 = 24 * HOUR;
+        let now = 1_790_763_800;
+        for (ago, expected) in [
+            (-5 * MIN, "0m"), // a clock running behind Jira's
+            (0, "0m"),
+            (59, "0m"),
+            (59 * MIN, "59m"),
+            (HOUR - 1, "59m"),
+            (HOUR, "1h"),
+            (23 * HOUR, "23h"),
+            (DAY - 1, "23h"),
+            (DAY, "1d"),
+            (6 * DAY, "6d"),
+            (7 * DAY - 1, "6d"),
+            (7 * DAY, "1w"),
+            (20 * DAY, "2w"),
+            (400 * DAY, "57w"),
+        ] {
+            assert_eq!(age(now - ago, now), expected, "{ago}s ago");
+        }
+    }
 }

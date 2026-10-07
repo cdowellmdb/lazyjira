@@ -5,8 +5,8 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, FilterFocus};
 use crate::views::common::{
-    fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells, truncate,
-    KEY_WIDTH,
+    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
+    ticket_marker, truncate, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -97,6 +97,7 @@ fn render_sidebar(
 
 fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let results_focused = app.filter_focus == FilterFocus::Results;
+    let now = crate::local_cache::now_unix_secs() as i64;
     let border_style = if results_focused {
         Style::default().fg(Color::Yellow)
     } else {
@@ -121,29 +122,34 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let key_w = KEY_WIDTH;
         let status_w = 14usize;
         let inner = panel().inner(area).width as usize;
-        let fixed = 2 + key_w + 3 + status_w + 3 + 3;
+        // Key, status and Updated, their separators, and the 3-cell margin the results keep.
+        let fixed = 2 + key_w + status_w + 3 * SEPARATOR_WIDTH + UPDATED_WIDTH + 3;
         let summary_w = inner.saturating_sub(fixed).max(12);
 
         let heading_style = Style::default()
             .fg(Color::Reset)
             .add_modifier(Modifier::BOLD);
 
-        lines.push(Line::from(vec![
+        let groups = app.filters_visible_by_status();
+        let shared = Shared::of(&groups, Columns::Neither);
+        let mut header = Line::from(vec![
             Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
-        ]));
-
-        let header_w = 2 + key_w + 3 + status_w + 3 + summary_w;
+        ]);
+        shared.push_trailing_headings(&mut header, heading_style, 0, 0);
+        let header_w = header.width();
+        lines.push(header);
+        lines.extend(shared.line(header_w));
         lines.push(Line::from(Span::styled(
             "─".repeat(header_w),
             Style::default().fg(Color::DarkGray),
         )));
         lines.push(Line::from(""));
 
-        for group in app.filters_visible_by_status() {
+        for group in groups {
             let status = &group.header;
             mouse_rows.push((lines.len(), group.index, true));
             let is_header_selected = results_focused && group.index == app.selected_index;
@@ -187,19 +193,20 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     selected_visual_line = Some(lines.len());
                 }
 
-                let marker = if app.is_ticket_selected(&ticket.key) {
-                    "[x]"
-                } else {
-                    "[ ]"
-                };
-                let (key_cell, summary) =
-                    ticket_cells(app, group.family.get(index).copied(), ticket, marker);
-
+                let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let base = if is_selected {
                     Style::default().bg(Color::DarkGray)
                 } else {
                     Style::default()
                 };
+                let (key_cell, summary) = ticket_cells(
+                    app,
+                    group.family.get(index).copied(),
+                    ticket,
+                    marker,
+                    summary_w,
+                    base,
+                );
 
                 let status_style = if is_selected {
                     Style::default()
@@ -209,7 +216,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Style::default().fg(status_color(&ticket.status, app.status_rules()))
                 };
 
-                lines.push(Line::from(vec![
+                let mut row = Line::from(vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
@@ -217,11 +224,10 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         status_style,
                     ),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<summary_w$}", truncate(&summary, summary_w)),
-                        base,
-                    ),
-                ]));
+                ]);
+                row.spans.extend(summary);
+                shared.push_trailing_cells(now, &mut row, ticket, base, 0, 0);
+                lines.push(row);
             }
 
             lines.push(Line::from(""));
@@ -229,6 +235,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);
+    color_marks(&mut lines);
 
     // Scroll to keep selected row visible
     let visible = area.height.saturating_sub(2) as usize;

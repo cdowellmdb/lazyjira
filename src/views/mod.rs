@@ -14,7 +14,6 @@ mod tests {
 
     #[test]
     fn rendered_selection_matches_navigation_across_tabs_and_collapsed_groups() {
-        let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
         for &tab in Tab::all() {
             for search in [None, Some("needle")] {
                 for collapse in [false, true] {
@@ -65,18 +64,7 @@ mod tests {
                         app.selected_index = index;
                         let selected = app.selected_item().unwrap();
                         let mut terminal = Terminal::new(TestBackend::new(160, 60)).unwrap();
-                        terminal
-                            .draw(|frame| {
-                                let area = frame.area();
-                                match tab {
-                                    Tab::MyWork => my_work::render(frame, area, &app),
-                                    Tab::Team => team::render(frame, area, &app),
-                                    Tab::Epics => epics::render(frame, area, &app),
-                                    Tab::Unassigned => unassigned::render(frame, area, &app),
-                                    Tab::Filters => filters::render(frame, area, &app, &config),
-                                }
-                            })
-                            .unwrap();
+                        terminal.draw(|frame| render_tab(frame, &app, tab)).unwrap();
                         let buffer = terminal.backend().buffer();
                         assert_eq!(buffer[(0, 0)].symbol(), "╭");
                         let mut highlighted = Vec::new();
@@ -128,6 +116,391 @@ mod tests {
             }
         }
     }
+    /// Renders `tab` over the whole frame, with a config that has no saved filters.
+    fn render_tab(frame: &mut ratatui::Frame, app: &App, tab: Tab) {
+        let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let area = frame.area();
+        match tab {
+            Tab::MyWork => my_work::render(frame, area, app),
+            Tab::Team => team::render(frame, area, app),
+            Tab::Epics => epics::render(frame, area, app),
+            Tab::Unassigned => unassigned::render(frame, area, app),
+            Tab::Filters => filters::render(frame, area, app, &config),
+        }
+    }
+
+    /// Draws `tab` and returns each row's text and the foreground color of its first glyph.
+    fn draw(app: &App, tab: Tab, width: u16) -> Vec<(String, Color)> {
+        let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        terminal.draw(|frame| render_tab(frame, app, tab)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..30)
+            .map(|y| {
+                let text: String = (0..width).map(|x| buffer[(x, y)].symbol()).collect();
+                let fg = (0..width)
+                    .map(|x| &buffer[(x, y)])
+                    .find(|cell| !matches!(cell.symbol(), " " | "│" | "╭" | "╰" | "─"))
+                    .map_or(Color::Reset, |cell| cell.fg);
+                (text, fg)
+            })
+            .collect()
+    }
+
+    fn line_with<'a>(rows: &'a [(String, Color)], text: &str) -> Option<&'a (String, Color)> {
+        rows.iter().find(|(row, _)| row.contains(text))
+    }
+
+    /// A ticket in `epic` carrying `labels`.
+    fn labelled(key: &str, epic: Option<&str>, labels: &[&str]) -> Ticket {
+        let mut ticket = Ticket::for_test(key, "In Progress");
+        ticket.epic_name = epic.map(String::from);
+        ticket.labels = labels.iter().map(|l| l.to_string()).collect();
+        ticket
+    }
+
+    #[test]
+    fn shared_epic_and_labels_show_once_under_the_column_headers() {
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![
+            labelled("DEMO-1", Some("Grading"), &["DSCI", "FY27Q3", "tech-debt"]),
+            labelled("DEMO-2", Some("Grading"), &["DSCI", "FY27Q3"]),
+            // No epic: doesn't stop the epic being shared.
+            labelled("DEMO-3", None, &["FY27Q3", "DSCI"]),
+        ];
+        let rows = draw(&app, Tab::MyWork, 120);
+        let header_y = rows
+            .iter()
+            .position(|(r, _)| r.contains("SEL KEY"))
+            .unwrap();
+        let header = &rows[header_y].0;
+        assert!(
+            !header.contains("EPIC") && header.contains("LABELS"),
+            "{header}"
+        );
+        let (shared, color) = &rows[header_y + 1];
+        assert!(
+            shared.contains("all rows · epic Grading · DSCI, FY27Q3"),
+            "{shared}"
+        );
+        assert_eq!(*color, Color::DarkGray);
+        // Rows keep only the labels that tell them apart.
+        let row = &line_with(&rows, "DEMO-1").unwrap().0;
+        assert!(row.contains("tech-debt") && !row.contains("DSCI"), "{row}");
+        assert!(!line_with(&rows, "DEMO-2").unwrap().0.contains("Grading"));
+
+        // A different epic brings the Epic column back, and with every label shared the Labels
+        // column goes.
+        app.cache.my_tickets = vec![
+            labelled("DEMO-1", Some("Grading"), &["DSCI"]),
+            labelled("DEMO-2", Some("Runner"), &["DSCI"]),
+        ];
+        app.mark_cache_changed();
+        let rows = draw(&app, Tab::MyWork, 120);
+        let header = &line_with(&rows, "SEL KEY").unwrap().0;
+        assert!(
+            header.contains("EPIC") && !header.contains("LABELS"),
+            "{header}"
+        );
+        assert!(line_with(&rows, "all rows · DSCI").is_some());
+        assert!(line_with(&rows, "DEMO-2").unwrap().0.contains("Runner"));
+
+        // Nothing shared: no line, and both columns.
+        app.cache.my_tickets = vec![
+            labelled("DEMO-1", Some("Grading"), &["DSCI"]),
+            labelled("DEMO-2", Some("Runner"), &[]),
+        ];
+        app.mark_cache_changed();
+        let rows = draw(&app, Tab::MyWork, 120);
+        assert!(line_with(&rows, "all rows").is_none());
+        let header = &line_with(&rows, "SEL KEY").unwrap().0;
+        assert!(
+            header.contains("EPIC") && header.contains("LABELS"),
+            "{header}"
+        );
+    }
+
+    #[test]
+    fn a_hidden_column_gives_its_width_to_the_summary() {
+        let summary = format!("{}END", "s".repeat(67));
+        let mut first = labelled("DEMO-1", Some("Grading"), &[]);
+        first.summary = summary.clone();
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![first.clone(), labelled("DEMO-2", Some("Grading"), &[])];
+        let rows = draw(&app, Tab::MyWork, 110);
+        assert!(line_with(&rows, "DEMO-1").unwrap().0.contains(&summary));
+
+        app.cache.my_tickets = vec![first, labelled("DEMO-2", Some("Runner"), &[])];
+        app.mark_cache_changed();
+        let rows = draw(&app, Tab::MyWork, 110);
+        assert!(!line_with(&rows, "DEMO-1").unwrap().0.contains("END"));
+    }
+
+    #[test]
+    fn shared_values_follow_search_status_focus_and_folding() {
+        let epic_column = |app: &App| {
+            line_with(&draw(app, Tab::MyWork, 120), "SEL KEY")
+                .unwrap()
+                .0
+                .contains("EPIC")
+        };
+        let mut app = App::new();
+        app.loading = false;
+        let mut other = labelled("DEMO-2", Some("Runner"), &["x"]);
+        other.status = "To Do".into();
+        app.cache.my_tickets = vec![labelled("DEMO-1", Some("Grading"), &["x"]), other];
+        assert!(epic_column(&app));
+
+        app.search = Some("DEMO-1".into());
+        app.mark_cache_changed();
+        assert!(!epic_column(&app));
+        app.search = None;
+
+        app.status_focus = Some("In Progress".into());
+        app.mark_cache_changed();
+        assert!(!epic_column(&app));
+        app.status_focus = None;
+
+        app.toggle_group_collapse("To Do");
+        assert!(!epic_column(&app));
+        app.toggle_group_collapse("To Do");
+        assert!(epic_column(&app));
+
+        // A folded parent's sub-tasks still count: their missing label isn't shared.
+        let mut subtask = labelled("DEMO-3", None, &[]);
+        subtask.parent_key = Some("DEMO-1".into());
+        app.cache.my_tickets = vec![labelled("DEMO-1", None, &["x"]), subtask];
+        app.collapsed_parents.insert("DEMO-1".into());
+        app.mark_cache_changed();
+        let rows = draw(&app, Tab::MyWork, 120);
+        assert!(line_with(&rows, "all rows").is_none());
+        assert!(line_with(&rows, "SEL KEY").unwrap().0.contains("LABELS"));
+    }
+
+    #[test]
+    fn team_unassigned_and_filters_show_shared_values_once() {
+        let assigned = |key: &str, epic: &str, email: &str| {
+            let mut ticket = labelled(key, Some(epic), &["DSCI"]);
+            ticket.assignee_email = Some(email.into());
+            ticket
+        };
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.team_members = vec![TeamMember {
+            name: "Alex".into(),
+            email: "alex@example.com".into(),
+        }];
+        app.cache.team_tickets = vec![
+            assigned("DEMO-1", "Grading", "alex@example.com"),
+            assigned("DEMO-2", "Grading", "alex@example.com"),
+            assigned("DEMO-3", "Grading", "__unassigned__"),
+            assigned("DEMO-4", "Grading", "__unassigned__"),
+        ];
+        app.filter_results = app.cache.team_tickets.clone();
+        for tab in [Tab::Team, Tab::Unassigned, Tab::Filters] {
+            app.active_tab = tab;
+            app.mark_cache_changed();
+            let rows = draw(&app, tab, 160);
+            let header_y = rows
+                .iter()
+                .position(|(r, _)| r.contains("SEL KEY"))
+                .unwrap();
+            let header = &rows[header_y].0;
+            assert!(
+                !header.contains("EPIC") && !header.contains("LABELS"),
+                "{header}"
+            );
+            let (shared, color) = &rows[header_y + 1];
+            // Unassigned's groups are its epics, so its line leaves the epic out.
+            let expected = if tab == Tab::Unassigned {
+                "all rows · DSCI"
+            } else {
+                "all rows · epic Grading · DSCI"
+            };
+            assert!(shared.contains(expected), "{tab:?}: {shared}");
+            assert_eq!(*color, Color::DarkGray);
+        }
+
+        // A second epic in Team brings its Epic column back.
+        app.active_tab = Tab::Team;
+        app.cache.team_tickets[1].epic_name = Some("Runner".into());
+        app.mark_cache_changed();
+        let rows = draw(&app, Tab::Team, 160);
+        assert!(line_with(&rows, "SEL KEY").unwrap().0.contains("EPIC"));
+        assert!(line_with(&rows, "all rows · DSCI").is_some());
+        assert!(line_with(&rows, "DEMO-2").unwrap().0.contains("Runner"));
+
+        // Filters and Unassigned have no Epic or Labels column to bring back.
+        app.cache.team_tickets[3].epic_name = Some("Runner".into());
+        app.cache.team_tickets[3].labels.push("tech-debt".into());
+        app.filter_results = app.cache.team_tickets.clone();
+        for tab in [Tab::Unassigned, Tab::Filters] {
+            app.active_tab = tab;
+            app.mark_cache_changed();
+            let rows = draw(&app, tab, 160);
+            let header = &line_with(&rows, "SEL KEY").unwrap().0;
+            assert!(
+                !header.contains("EPIC") && !header.contains("LABELS"),
+                "{tab:?}: {header}"
+            );
+        }
+    }
+
+    #[test]
+    fn team_draws_the_shared_line_once_under_the_first_column_headers() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Team;
+        app.cache.team_members = ["alex", "sam"]
+            .map(|name| TeamMember {
+                name: name.into(),
+                email: format!("{name}@example.com"),
+            })
+            .to_vec();
+        app.cache.team_tickets = ["alex", "sam"]
+            .iter()
+            .enumerate()
+            .map(|(n, name)| {
+                let mut ticket = labelled(&format!("DEMO-{n}"), Some("Grading"), &["DSCI"]);
+                ticket.assignee_email = Some(format!("{name}@example.com"));
+                ticket
+            })
+            .collect();
+        let rows = draw(&app, Tab::Team, 160);
+        let shared: Vec<usize> = (0..rows.len())
+            .filter(|&y| rows[y].0.contains("all rows"))
+            .collect();
+        let first_header = rows.iter().position(|(r, _)| r.contains("SEL KEY"));
+        assert_eq!(shared, [first_header.unwrap() + 1], "{rows:?}");
+    }
+
+    #[test]
+    fn unassigned_shared_line_leaves_the_epic_to_its_groups() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Unassigned;
+        app.cache.team_tickets = ["DEMO-1", "DEMO-2"]
+            .map(|key| {
+                let mut ticket = labelled(key, Some("Grading"), &["DSCI"]);
+                ticket.epic_key = Some("EPIC-1".into());
+                ticket.assignee_email = Some("__unassigned__".into());
+                ticket
+            })
+            .to_vec();
+        let rows = draw(&app, Tab::Unassigned, 160);
+        let (line, _) = line_with(&rows, "all rows").expect("labels are shared");
+        assert!(line.contains("all rows · DSCI"), "{line}");
+        assert!(!line.contains("epic"), "{line}");
+    }
+
+    #[test]
+    fn done_groups_start_folded_and_stay_unfolded_across_refreshes() {
+        let screen = |app: &App, tab: Tab| -> String {
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal.draw(|frame| render_tab(frame, app, tab)).unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..30)
+                .map(|y| {
+                    (0..120)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                        + "\n"
+                })
+                .collect()
+        };
+        let tickets = vec![
+            Ticket::for_test("DEMO-1", "In Progress"),
+            Ticket::for_test("DEMO-2", "Closed"),
+            Ticket::for_test("DEMO-3", "Closed"),
+            Ticket::for_test("DEMO-4", "Resolved"),
+        ];
+        let mut cache = crate::cache::Cache::empty();
+        cache.my_tickets = tickets.clone();
+
+        let mut app = App::new();
+        app.loading = false;
+        app.replace_cache_full_scope(cache.clone(), app.moves.now());
+        let text = screen(&app, Tab::MyWork);
+        assert!(text.contains("▼ IN PROGRESS (1)"), "{text}");
+        assert!(text.contains("DEMO-1"), "{text}");
+        // Folded, each done group keeps its header and count but draws no rows.
+        assert!(text.contains("▶ CLOSED (2)"), "{text}");
+        assert!(text.contains("▶ RESOLVED (1)"), "{text}");
+        for key in ["DEMO-2", "DEMO-3", "DEMO-4"] {
+            assert!(!text.contains(key), "{key} is folded away: {text}");
+        }
+
+        // Unfolded by the user, Closed stays open through a background refresh.
+        app.toggle_group_collapse("Closed");
+        app.replace_cache(cache.clone(), app.moves.now());
+        let text = screen(&app, Tab::MyWork);
+        assert!(text.contains("▼ CLOSED (2)"), "{text}");
+        assert!(text.contains("DEMO-2") && text.contains("DEMO-3"), "{text}");
+        assert!(text.contains("▶ RESOLVED (1)"), "{text}");
+
+        // `d` still hides done tickets, headers included, and shows them again.
+        app.toggle_show_done();
+        let text = screen(&app, Tab::MyWork);
+        assert!(
+            !text.contains("CLOSED") && !text.contains("RESOLVED"),
+            "{text}"
+        );
+        app.toggle_show_done();
+        assert!(screen(&app, Tab::MyWork).contains("▼ CLOSED (2)"));
+
+        // A filter's results start with their done groups folded too.
+        app.active_tab = Tab::Filters;
+        app.filter_focus = FilterFocus::Results;
+        app.show_filter_results(tickets, app.moves.now());
+        let text = screen(&app, Tab::Filters);
+        assert!(text.contains("DEMO-1"), "{text}");
+        assert!(
+            !text.contains("DEMO-2") && !text.contains("DEMO-4"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn done_groups_fold_until_the_first_full_read_and_never_after() {
+        let mut cache = crate::cache::Cache::empty();
+        cache.my_tickets = vec![Ticket::for_test("DEMO-1", "In Progress")];
+        let mut app = App::new();
+        app.loading = false;
+        // No snapshot: the first read is active-only, so it has no done groups to fold.
+        app.replace_cache(cache.clone(), app.moves.now());
+        // The full read then fails: nothing is applied, so folding goes on.
+
+        // A manual refresh is the first full read to land: its done groups start folded.
+        cache.my_tickets.push(Ticket::for_test("DEMO-2", "Closed"));
+        app.replace_cache_full_scope(cache.clone(), app.moves.now());
+        let rows = draw(&app, Tab::MyWork, 120);
+        assert!(line_with(&rows, "▶ CLOSED (1)").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "DEMO-2").is_none(), "{rows:?}");
+
+        // Resolved mid-session: a done group that first appears after the full read shows open.
+        cache.my_tickets[0].status = "Resolved".into();
+        app.replace_cache_full_scope(cache, app.moves.now());
+        let rows = draw(&app, Tab::MyWork, 120);
+        assert!(line_with(&rows, "▼ RESOLVED (1)").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "DEMO-1").is_some(), "{rows:?}");
+    }
+
+    #[test]
+    fn a_done_group_opened_during_startup_is_not_folded_again() {
+        let mut cache = crate::cache::Cache::empty();
+        cache.my_tickets = vec![Ticket::for_test("DEMO-1", "Closed")];
+        let mut app = App::new();
+        app.loading = false;
+        // The snapshot folds Closed; the user opens it before the full read lands.
+        app.replace_cache(cache.clone(), app.moves.now());
+        assert!(line_with(&draw(&app, Tab::MyWork, 120), "▶ CLOSED (1)").is_some());
+        app.toggle_group_collapse("Closed");
+        app.replace_cache_full_scope(cache, app.moves.now());
+        let rows = draw(&app, Tab::MyWork, 120);
+        assert!(line_with(&rows, "▼ CLOSED (1)").is_some(), "{rows:?}");
+    }
+
     #[test]
     fn sub_tasks_sit_under_their_parent_or_name_it() {
         let rows_of = |app: &App, tab: Tab| -> Vec<String> {
@@ -190,5 +563,313 @@ mod tests {
         let rows = rows_of(&app, Tab::MyWork);
         assert_eq!(column(&rows, "DEMO-3"), column(&rows, "DEMO-1"));
         assert!(rows[row(&rows, "DEMO-3")].contains("DEMO-1 › DEMO-3"));
+    }
+
+    /// Jira's `updated` for `secs` (Unix seconds), in UTC: Howard Hinnant's civil_from_days.
+    fn jira_time(secs: i64) -> String {
+        let (days, time) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = yoe + era * 400 + i64::from(m <= 2);
+        let (h, min, sec) = (time / 3600, time / 60 % 60, time % 60);
+        format!("{y:04}-{m:02}-{d:02}T{h:02}:{min:02}:{sec:02}.000+0000")
+    }
+
+    #[test]
+    fn jira_time_round_trips_through_updated_secs() {
+        for secs in [0, 1_709_251_199, 1_790_763_800] {
+            let mut ticket = Ticket::for_test("DEMO-1", "Closed");
+            ticket.updated = Some(jira_time(secs));
+            assert_eq!(ticket.updated_secs(), Some(secs), "{:?}", ticket.updated);
+        }
+    }
+
+    #[test]
+    fn updated_column_shows_ages_and_done_groups_list_the_newest_first() {
+        const MIN: i64 = 60;
+        const HOUR: i64 = 60 * MIN;
+        const DAY: i64 = 24 * HOUR;
+        // Ages sit mid-unit, so the clock moving on while the test runs can't change them.
+        let now = crate::local_cache::now_unix_secs() as i64;
+        let ticket = |key: &str, status: &str, ago: i64, labels: &[&str]| {
+            let mut ticket = labelled(key, None, labels);
+            ticket.status = status.into();
+            ticket.updated = Some(jira_time(now - ago));
+            ticket.assignee_email = Some("alex@example.com".into());
+            ticket
+        };
+        let mut subtask = ticket("DEMO-6", "Closed", 10 * MIN + 30, &[]);
+        subtask.parent_key = Some("DEMO-3".into());
+        let tickets = vec![
+            ticket("DEMO-1", "In Progress", 23 * MIN + 30, &["a"]), // 23m
+            ticket("DEMO-2", "In Progress", 3 * DAY + 12 * HOUR, &[]), // 3d
+            ticket("DEMO-3", "Closed", 31 * DAY, &[]),              // 4w
+            ticket("DEMO-4", "Closed", 5 * HOUR + 30 * MIN, &[]),   // 5h
+            ticket("DEMO-5", "Closed", 10 * DAY + 12 * HOUR, &[]),  // 1w
+            subtask, // newest, but follows its parent
+        ];
+        let mut app = App::new();
+        app.loading = false;
+        app.show_done = true;
+        app.cache.team_members = vec![TeamMember {
+            name: "Alex".into(),
+            email: "alex@example.com".into(),
+        }];
+        app.cache.my_tickets = tickets.clone();
+        app.cache.team_tickets = tickets.clone();
+        app.filter_focus = FilterFocus::Results;
+        app.filter_results = tickets.clone();
+
+        for tab in [Tab::MyWork, Tab::Team, Tab::Filters, Tab::Unassigned] {
+            if tab == Tab::Unassigned {
+                for ticket in &mut app.cache.team_tickets {
+                    ticket.assignee_email = Some("__unassigned__".into());
+                }
+            }
+            app.active_tab = tab;
+            app.mark_cache_changed();
+            let rows = draw(&app, tab, 160);
+            let header = &line_with(&rows, "SEL KEY").unwrap().0;
+            let column = |title: &str| header.split('│').position(|cell| cell.contains(title));
+            let updated = column("UPDATED").expect(header);
+            if let Some(labels) = column("LABELS") {
+                assert_eq!(updated + 1, labels, "{tab:?}: {header}");
+            }
+            let age_of = |key: &str| {
+                let row = &line_with(&rows, key).unwrap().0;
+                row.split('│').nth(updated).unwrap().trim().to_string()
+            };
+            for (key, age) in [("DEMO-1", "23m"), ("DEMO-2", "3d"), ("DEMO-4", "5h")] {
+                assert_eq!(age_of(key), age, "{tab:?}: {key}");
+            }
+            if tab == Tab::Unassigned {
+                continue; // grouped by epic, not status
+            }
+            // Done rows newest first, the sub-task right under its parent; active rows keep
+            // their order.
+            let order = vec!["DEMO-1", "DEMO-2", "DEMO-4", "DEMO-5", "DEMO-3", "DEMO-6"];
+            let mut drawn = order.clone();
+            drawn.sort_by_key(|key| rows.iter().position(|(r, _)| r.contains(key)).unwrap());
+            assert_eq!(drawn, order, "{tab:?}");
+        }
+    }
+
+    #[test]
+    fn a_sub_tasks_parent_key_prefix_is_muted_and_readable_when_selected() {
+        let parent = Ticket::for_test("DEMO-1", "In Progress");
+        let mut subtask = Ticket::for_test("DEMO-3", "Closed");
+        subtask.summary = "Write the docs".into();
+        subtask.parent_key = Some("DEMO-1".into());
+        let mut app = App::new();
+        app.loading = false;
+        app.show_done = true;
+        app.active_tab = Tab::MyWork;
+        app.cache.my_tickets = vec![parent, subtask];
+
+        // The prefix's and the summary's (foreground, background), from the drawn buffer.
+        let colors = |app: &App| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|frame| my_work::render(frame, frame.area(), app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let rows: Vec<String> = (0..30)
+                .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            let y = rows
+                .iter()
+                .position(|r| r.contains("Write the docs"))
+                .unwrap();
+            let x_of = |text: &str| rows[y][..rows[y].find(text).unwrap()].chars().count();
+            let cell = |x: usize| {
+                let cell = &buffer[(x as u16, y as u16)];
+                (cell.fg, cell.bg)
+            };
+            (cell(x_of("DEMO-1 ›")), cell(x_of("Write the docs")))
+        };
+
+        let (prefix, summary) = colors(&app);
+        assert_eq!(prefix.0, Color::DarkGray);
+        assert_ne!(prefix.0, summary.0);
+
+        app.selected_index = (0..app.item_count())
+            .find(|&index| {
+                app.selected_index = index;
+                app.selected_ticket_key().as_deref() == Some("DEMO-3")
+            })
+            .unwrap();
+        let (prefix, summary) = colors(&app);
+        assert_ne!(
+            prefix.0, prefix.1,
+            "the prefix must not vanish into the highlight"
+        );
+        assert_ne!(prefix.0, summary.0);
+    }
+
+    /// The mark under each mark target: (symbol, color, on the highlighted row, row text).
+    /// Also checks that each fold target sits on an arrow.
+    fn marks_drawn(
+        terminal: &Terminal<TestBackend>,
+        app: &App,
+    ) -> Vec<(String, Color, bool, String)> {
+        use crate::mouse::Target;
+        let buffer = terminal.backend().buffer();
+        let row_text = |y: u16| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        };
+        let mut marks = Vec::new();
+        for &(rect, target) in app.mouse_targets.borrow().iter() {
+            let cell = &buffer[(rect.x, rect.y)];
+            match target {
+                Target::Mark(_) => {
+                    // The target reaches a cell either side of the mark; report the mark's cell.
+                    let cell = (rect.x..rect.right())
+                        .map(|x| &buffer[(x, rect.y)])
+                        .find(|cell| cell.symbol().starts_with(common::MARKS))
+                        .unwrap_or_else(|| panic!("no mark under {rect:?}: {}", row_text(rect.y)));
+                    let highlighted = cell.bg == Color::DarkGray;
+                    marks.push((
+                        cell.symbol().to_string(),
+                        cell.fg,
+                        highlighted,
+                        row_text(rect.y),
+                    ));
+                }
+                Target::Fold(_) => {
+                    assert!(["▼", "▶"].contains(&cell.symbol()), "{}", row_text(rect.y))
+                }
+                _ => {}
+            }
+        }
+        marks
+    }
+
+    #[test]
+    fn selection_marks_show_unselected_selected_and_partial_in_their_colors() {
+        let mut picked = Ticket::for_test("DEMO-1", "In Progress");
+        picked.assignee = Some("Alex".into());
+        picked.assignee_email = Some("alex@example.com".into());
+        let mut unpicked = picked.clone();
+        unpicked.key = "DEMO-2".into();
+        let mut picked_unassigned = picked.clone();
+        picked_unassigned.key = "DEMO-3".into();
+        picked_unassigned.assignee = Some("Unassigned".into());
+        picked_unassigned.assignee_email = Some("__unassigned__".into());
+        let mut unpicked_unassigned = picked_unassigned.clone();
+        unpicked_unassigned.key = "DEMO-4".into();
+        let draw = |terminal: &mut Terminal<TestBackend>, app: &App, tab: Tab| {
+            terminal.draw(|frame| render_tab(frame, app, tab)).unwrap();
+        };
+        let cursor_on = |app: &mut App, keys: &[&str]| {
+            app.selected_index = (0..app.item_count())
+                .find(|&index| {
+                    app.selected_index = index;
+                    matches!(app.selected_item(), Some(VisibleItem::Ticket(key)) if keys.contains(&key.as_str()))
+                })
+                .unwrap();
+        };
+
+        for &tab in Tab::all() {
+            let mut app = App::new();
+            app.active_tab = tab;
+            app.loading = false;
+            app.filter_focus = FilterFocus::Results;
+            app.cache.my_tickets = vec![picked.clone(), unpicked.clone()];
+            app.filter_results = app.cache.my_tickets.clone();
+            app.cache.team_tickets = vec![
+                picked.clone(),
+                unpicked.clone(),
+                picked_unassigned.clone(),
+                unpicked_unassigned.clone(),
+            ];
+            app.cache.team_members = vec![TeamMember {
+                name: "Alex".into(),
+                email: "alex@example.com".into(),
+            }];
+            app.cache.epics = vec![Epic {
+                key: "EPIC-9".into(),
+                summary: "Epic".into(),
+                children: vec![picked.clone(), unpicked.clone()],
+            }];
+            let (picked_key, unpicked_key) = if tab == Tab::Unassigned {
+                ("DEMO-3", "DEMO-4")
+            } else {
+                ("DEMO-1", "DEMO-2")
+            };
+            cursor_on(&mut app, &[picked_key]);
+            app.toggle_selection_at_cursor();
+            // The cursor sits on the unselected row, so its mark must show against the highlight.
+            cursor_on(&mut app, &[unpicked_key]);
+
+            let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+            draw(&mut terminal, &app, tab);
+            let marks = marks_drawn(&terminal, &app);
+            let mark_of = |needle: &str| {
+                marks
+                    .iter()
+                    .find(|mark| mark.3.contains(needle))
+                    .unwrap_or_else(|| panic!("{tab:?}: no mark on a row with {needle}: {marks:?}"))
+                    .clone()
+            };
+            let header = match tab {
+                Tab::MyWork | Tab::Filters => "IN PROGRESS",
+                Tab::Team => "Alex",
+                Tab::Epics => "EPIC-9",
+                Tab::Unassigned => "No Epic",
+            };
+            let (mark, fg, _, _) = mark_of(picked_key);
+            assert_eq!((mark.as_str(), fg), ("☒", Color::Cyan), "{tab:?}");
+            let (mark, fg, highlighted, _) = mark_of(unpicked_key);
+            assert!(highlighted, "{tab:?}");
+            // Muted, but lighter than the highlight behind it.
+            assert_eq!((mark.as_str(), fg), ("☐", Color::Gray), "{tab:?}");
+            let (mark, fg, _, _) = mark_of(header);
+            assert_eq!((mark.as_str(), fg), ("⊟", Color::Cyan), "{tab:?}");
+
+            // The mark takes one column, so the columns stay where the headings put them.
+            let buffer = terminal.backend().buffer();
+            let row_text = |y: u16| {
+                (0..160)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            };
+            let bars = |y: u16| {
+                (0..160)
+                    .filter(|&x| buffer[(x, y)].symbol() == "│")
+                    .collect::<Vec<_>>()
+            };
+            let heading = (0..40).find(|&y| row_text(y).contains("SEL KEY")).unwrap();
+            for y in (0..40).filter(|&y| row_text(y).contains(unpicked_key)) {
+                assert_eq!(bars(y), bars(heading), "{tab:?}: {}", row_text(y));
+            }
+
+            // Everything selected: the group is selected too.
+            app.toggle_selection_at_cursor();
+            draw(&mut terminal, &app, tab);
+            let marks = marks_drawn(&terminal, &app);
+            let header_mark = marks.iter().find(|mark| mark.3.contains(header)).unwrap();
+            assert_eq!((header_mark.0.as_str(), header_mark.1), ("☒", Color::Cyan));
+
+            // Nothing selected: every mark away from the cursor is unselected and muted.
+            app.clear_selected_tickets();
+            draw(&mut terminal, &app, tab);
+            let unhighlighted: Vec<_> = marks_drawn(&terminal, &app)
+                .into_iter()
+                .filter(|mark| !mark.2)
+                .map(|mark| (mark.0, mark.1))
+                .collect();
+            assert!(unhighlighted.len() > 1, "{tab:?}");
+            for mark in unhighlighted {
+                assert_eq!(mark, ("☐".to_string(), Color::DarkGray), "{tab:?}");
+            }
+        }
     }
 }
