@@ -47,6 +47,7 @@ fn ticket_column_widths(area: Rect) -> (usize, usize, usize) {
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.unassigned_visible_by_epic();
+    let now = crate::local_cache::now_unix_secs() as i64;
     let (key_w, status_w, summary_w) = ticket_column_widths(area);
     let heading_style = Style::default()
         .fg(Color::Reset)
@@ -154,7 +155,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             ];
             row.extend(summary);
             row.push(Span::styled(" │ ", base.fg(Color::DarkGray)));
-            row.push(Span::styled(updated_cell(app, ticket), muted(base)));
+            row.push(Span::styled(updated_cell(now, ticket), muted(base)));
             lines.push(Line::from(row));
         }
 

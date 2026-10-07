@@ -550,30 +550,58 @@ mod tests {
         assert!(rows[row(&rows, "DEMO-3")].contains("DEMO-1 › DEMO-3"));
     }
 
+    /// Jira's `updated` for `secs` (Unix seconds), in UTC: Howard Hinnant's civil_from_days.
+    fn jira_time(secs: i64) -> String {
+        let (days, time) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = yoe + era * 400 + i64::from(m <= 2);
+        let (h, min, sec) = (time / 3600, time / 60 % 60, time % 60);
+        format!("{y:04}-{m:02}-{d:02}T{h:02}:{min:02}:{sec:02}.000+0000")
+    }
+
+    #[test]
+    fn jira_time_round_trips_through_updated_secs() {
+        for secs in [0, 1_709_251_199, 1_790_763_800] {
+            let mut ticket = Ticket::for_test("DEMO-1", "Closed");
+            ticket.updated = Some(jira_time(secs));
+            assert_eq!(ticket.updated_secs(), Some(secs), "{:?}", ticket.updated);
+        }
+    }
+
     #[test]
     fn updated_column_shows_ages_and_done_groups_list_the_newest_first() {
-        const NOW: i64 = 1_790_763_800; // 2026-09-30T10:23:20Z
-        let ticket = |key: &str, status: &str, updated: &str, labels: &[&str]| {
+        const MIN: i64 = 60;
+        const HOUR: i64 = 60 * MIN;
+        const DAY: i64 = 24 * HOUR;
+        // Ages sit mid-unit, so the clock moving on while the test runs can't change them.
+        let now = crate::local_cache::now_unix_secs() as i64;
+        let ticket = |key: &str, status: &str, ago: i64, labels: &[&str]| {
             let mut ticket = labelled(key, None, labels);
             ticket.status = status.into();
-            ticket.updated = Some(format!("{updated}.000+0000"));
+            ticket.updated = Some(jira_time(now - ago));
             ticket.assignee_email = Some("alex@example.com".into());
             ticket
         };
-        let mut subtask = ticket("DEMO-6", "Closed", "2026-09-30T10:23:20", &[]);
+        let mut subtask = ticket("DEMO-6", "Closed", 10 * MIN + 30, &[]);
         subtask.parent_key = Some("DEMO-3".into());
         let tickets = vec![
-            ticket("DEMO-1", "In Progress", "2026-09-30T10:00:00", &["a"]), // 23m
-            ticket("DEMO-2", "In Progress", "2026-09-27T09:00:00", &[]),    // 3d
-            ticket("DEMO-3", "Closed", "2026-09-01T00:00:00", &[]),         // 4w
-            ticket("DEMO-4", "Closed", "2026-09-30T05:00:00", &[]),         // 5h
-            ticket("DEMO-5", "Closed", "2026-09-20T00:00:00", &[]),         // 1w
+            ticket("DEMO-1", "In Progress", 23 * MIN + 30, &["a"]), // 23m
+            ticket("DEMO-2", "In Progress", 3 * DAY + 12 * HOUR, &[]), // 3d
+            ticket("DEMO-3", "Closed", 31 * DAY, &[]),              // 4w
+            ticket("DEMO-4", "Closed", 5 * HOUR + 30 * MIN, &[]),   // 5h
+            ticket("DEMO-5", "Closed", 10 * DAY + 12 * HOUR, &[]),  // 1w
             subtask, // newest, but follows its parent
         ];
         let mut app = App::new();
         app.loading = false;
         app.show_done = true;
-        app.clock = || NOW;
         app.cache.team_members = vec![TeamMember {
             name: "Alex".into(),
             email: "alex@example.com".into(),

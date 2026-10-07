@@ -47,6 +47,7 @@ fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let members = app.team_visible_tickets_by_member();
+    let now = crate::local_cache::now_unix_secs() as i64;
     let shared = Shared::of(&members);
     let (key_w, status_w, summary_w, epic_w, labels_w) = team_column_widths(area);
     let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
@@ -160,7 +161,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
-                shared.push_trailing_cells(app, &mut row, ticket, base, epic_w, labels_w);
+                shared.push_trailing_cells(now, &mut row, ticket, base, epic_w, labels_w);
                 lines.push(row);
             }
 
@@ -209,7 +210,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
-                shared.push_trailing_cells(app, &mut row, ticket, base, epic_w, labels_w);
+                shared.push_trailing_cells(now, &mut row, ticket, base, epic_w, labels_w);
                 lines.push(row);
             }
 

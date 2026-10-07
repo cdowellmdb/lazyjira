@@ -97,6 +97,7 @@ fn render_sidebar(
 
 fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let results_focused = app.filter_focus == FilterFocus::Results;
+    let now = crate::local_cache::now_unix_secs() as i64;
     let border_style = if results_focused {
         Style::default().fg(Color::Yellow)
     } else {
@@ -225,7 +226,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 ];
                 row.extend(summary);
                 row.push(Span::styled(" │ ", base.fg(Color::DarkGray)));
-                row.push(Span::styled(updated_cell(app, ticket), muted(base)));
+                row.push(Span::styled(updated_cell(now, ticket), muted(base)));
                 lines.push(Line::from(row));
             }
 

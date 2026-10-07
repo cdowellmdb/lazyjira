@@ -257,12 +257,12 @@ impl Shared {
         }
     }
 
-    /// Pushes a row's trailing cells: Epic (when shown), Updated, and Labels (when shown), muted
-    /// in `base`, the row's style (with its background on the selected row, where labels are
+    /// Pushes a row's trailing cells: Epic (when shown), Updated (its age at `now`), and Labels
+    /// (when shown), muted in `base`, the row's style (with its background on the selected row, where labels are
     /// yellow).
     pub fn push_trailing_cells(
         &self,
-        app: &App,
+        now: i64,
         row: &mut Line<'static>,
         ticket: &Ticket,
         base: Style,
@@ -279,7 +279,7 @@ impl Shared {
             ));
         }
         row.push_span(separator.clone());
-        row.push_span(Span::styled(updated_cell(app, ticket), muted(base)));
+        row.push_span(Span::styled(updated_cell(now, ticket), muted(base)));
         if self.labels_column {
             let labels = truncate(&self.row_labels(ticket), labels_w);
             row.push_span(separator);
@@ -333,12 +333,12 @@ impl Shared {
 /// Width of the Updated column: its heading's.
 pub const UPDATED_WIDTH: usize = 7;
 
-/// A row's Updated cell: how long ago Jira last updated the ticket, right-aligned, or "-" when
-/// the read didn't say.
-pub fn updated_cell(app: &App, ticket: &Ticket) -> String {
+/// A row's Updated cell: how long before `now` (Unix seconds, read once per render) Jira last
+/// updated the ticket, right-aligned, or "-" when the read didn't say.
+pub fn updated_cell(now: i64, ticket: &Ticket) -> String {
     let age = ticket
         .updated_secs()
-        .map_or_else(|| "-".to_string(), |at| age(at, (app.clock)()));
+        .map_or_else(|| "-".to_string(), |at| age(at, now));
     format!("{age:>UPDATED_WIDTH$}")
 }
 

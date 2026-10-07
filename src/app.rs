@@ -303,8 +303,6 @@ pub struct App {
     detail_fetch_errors: HashMap<String, String>,
     /// Single-ticket moves waiting on Jira, confirmed, or rejected.
     pub moves: crate::moves::MoveTracker,
-    /// The time now in Unix seconds, which ticket ages are measured to. Tests set their own.
-    pub clock: fn() -> i64,
     /// Last id handed out by `next_request_id`.
     last_request_id: u64,
     /// Monotonic generation used to invalidate derived visibility caches.
@@ -390,7 +388,6 @@ impl App {
             details: crate::local_cache::DetailCache::in_memory(),
             detail_fetch_errors: HashMap::new(),
             moves: crate::moves::MoveTracker::default(),
-            clock: || crate::local_cache::now_unix_secs() as i64,
             last_request_id: 0,
             view_generation: 0,
             visible_keys_cache: RefCell::new(VisibleKeysCache::default()),
