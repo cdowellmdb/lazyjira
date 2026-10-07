@@ -4,6 +4,7 @@ mod bulk_actions;
 mod bulk_plan;
 mod bulk_upload;
 mod cache;
+mod cache_refresh;
 mod config;
 mod jira_client;
 mod jira_issue;
@@ -49,13 +50,7 @@ use app::{
     App, BulkUploadPreview, BulkUploadState, BulkUploadSummary, DetailMode, FilterFocus, Tab,
     TicketSyncStage,
 };
-
-#[derive(Debug, Clone, Copy)]
-enum CacheRefreshPhase {
-    ActiveOnly,
-    Full,
-    Manual,
-}
+use cache_refresh::CacheRefreshPhase;
 
 /// Results of background work. `requested_at` is `app.moves.now()` when a Jira read was
 /// requested, so a read that predates a confirmed move can't undo it.
@@ -117,6 +112,7 @@ fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, c
     let requested_at = app.moves.now();
     let request = app.next_request_id();
     app.epic_refresh_request = request;
+    app.epics_refreshing = true;
     let tx = tx.clone();
     let config = config.clone();
     tokio::spawn(async move {
@@ -138,8 +134,7 @@ fn spawn_cache_refresh(
     config: &AppConfig,
 ) {
     let requested_at = app.moves.now();
-    let request = app.next_request_id();
-    app.cache_refresh_request = request;
+    let request = app.begin_cache_refresh();
     let tx = tx.clone();
     let config = config.clone();
     let details = app.details.clone();
@@ -479,7 +474,6 @@ async fn main() -> Result<()> {
     }
 
     spawn_epics_refresh(&mut app, &bg_tx, &config);
-    app.epics_refreshing = true;
     queue_detail_prefetch(&mut app, &bg_tx);
 
     let mut draw_needed = true;
@@ -515,82 +509,21 @@ async fn main() -> Result<()> {
                     requested_at,
                     result,
                 } => {
-                    if request != app.cache_refresh_request {
-                        continue;
+                    let follow_up = app.apply_cache_refresh(phase, request, requested_at, result);
+                    if follow_up.prefetch_details {
+                        queue_detail_prefetch(&mut app, &bg_tx);
                     }
-                    match (phase, result) {
-                        (CacheRefreshPhase::ActiveOnly, Ok(cache))
-                            if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
-                        {
-                            app.replace_cache(cache, requested_at);
-                            app.cache_stale_age_secs = None;
-                            app.ticket_sync_stage = Some(TicketSyncStage::Full);
-                            app.clamp_selection();
-                            queue_detail_prefetch(&mut app, &bg_tx);
-                            app.flash = Some(
-                                "Active tickets refreshed. Syncing recently done...".to_string(),
-                            );
-                            spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::Full, &config);
-                        }
-                        (CacheRefreshPhase::ActiveOnly, Err(e))
-                            if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
-                        {
-                            app.ticket_sync_stage = Some(TicketSyncStage::Full);
-                            app.flash = Some(format!(
-                                "Active refresh failed ({}). Trying full refresh...",
-                                e
-                            ));
-                            spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::Full, &config);
-                        }
-                        (CacheRefreshPhase::Full, Ok(cache))
-                            if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
-                        {
-                            app.replace_cache_full_scope(cache, requested_at);
-                            app.cache_stale_age_secs = None;
-                            app.ticket_sync_stage = None;
-                            app.clamp_selection();
-                            queue_detail_prefetch(&mut app, &bg_tx);
-                            if let Err(e) = local_cache::save_full_cache_snapshot(
-                                &config.jira.project,
-                                &app.cache,
-                            ) {
-                                app.flash = Some(format!("Cache snapshot write failed: {}", e));
-                            } else {
-                                app.flash = Some("Ticket cache is up to date".to_string());
-                            }
-                        }
-                        (CacheRefreshPhase::Full, Err(e))
-                            if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
-                        {
-                            app.ticket_sync_stage = None;
-                            app.flash = Some(format!("Full refresh failed: {}", e));
-                        }
-                        (CacheRefreshPhase::Manual, Ok(cache)) => {
-                            app.loading = false;
-                            app.replace_cache_full_scope(cache, requested_at);
-                            app.cache_stale_age_secs = None;
-                            app.ticket_sync_stage = None;
-                            app.clamp_selection();
-                            queue_detail_prefetch(&mut app, &bg_tx);
-                            if let Err(e) = local_cache::save_full_cache_snapshot(
-                                &config.jira.project,
-                                &app.cache,
-                            ) {
-                                app.flash = Some(format!("Refreshed (cache save failed: {})", e));
-                            } else {
-                                app.flash =
-                                    Some("Refreshed! Syncing epic relationships...".to_string());
-                            }
-                            if !app.epics_refreshing {
-                                app.epics_refreshing = true;
-                                spawn_epics_refresh(&mut app, &bg_tx, &config);
-                            }
-                        }
-                        (CacheRefreshPhase::Manual, Err(e)) => {
-                            app.loading = false;
-                            app.flash = Some(format!("Refresh failed: {}", e));
-                        }
-                        _ => {}
+                    if follow_up.save_snapshot {
+                        let saved =
+                            local_cache::save_full_cache_snapshot(&config.jira.project, &app.cache)
+                                .map_err(|e| e.to_string());
+                        app.snapshot_saved(phase, saved);
+                    }
+                    if let Some(next) = follow_up.next_phase {
+                        spawn_cache_refresh(&mut app, &bg_tx, next, &config);
+                    }
+                    if follow_up.refresh_epics {
+                        spawn_epics_refresh(&mut app, &bg_tx, &config);
                     }
                 }
                 BackgroundMessage::TicketDetailFetched {
@@ -831,7 +764,6 @@ async fn handle_key(
             app.loading = true;
             app.ticket_sync_stage = None;
             spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
-            app.epics_refreshing = true;
             spawn_epics_refresh(app, bg_tx, config);
         }
     } else if app.is_filter_edit_open() {
