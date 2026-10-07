@@ -422,8 +422,7 @@ mod tests {
 
         let mut app = App::new();
         app.loading = false;
-        app.replace_cache(cache.clone(), app.moves.now());
-        app.finish_folding_done_groups();
+        app.replace_cache_full_scope(cache.clone(), app.moves.now());
         let text = screen(&app, Tab::MyWork);
         assert!(text.contains("▼ IN PROGRESS (1)"), "{text}");
         assert!(text.contains("DEMO-1"), "{text}");
@@ -472,21 +471,36 @@ mod tests {
         app.loading = false;
         // No snapshot: the first read is active-only, so it has no done groups to fold.
         app.replace_cache(cache.clone(), app.moves.now());
+        // The full read then fails: nothing is applied, so folding goes on.
 
-        // The first full read brings the done tickets: their groups start folded.
+        // A manual refresh is the first full read to land: its done groups start folded.
         cache.my_tickets.push(Ticket::for_test("DEMO-2", "Closed"));
-        app.replace_cache(cache.clone(), app.moves.now());
-        app.finish_folding_done_groups();
+        app.replace_cache_full_scope(cache.clone(), app.moves.now());
         let rows = draw(&app, Tab::MyWork, 120);
         assert!(line_with(&rows, "▶ CLOSED (1)").is_some(), "{rows:?}");
         assert!(line_with(&rows, "DEMO-2").is_none(), "{rows:?}");
 
         // Resolved mid-session: a done group that first appears after the full read shows open.
         cache.my_tickets[0].status = "Resolved".into();
-        app.replace_cache(cache, app.moves.now());
+        app.replace_cache_full_scope(cache, app.moves.now());
         let rows = draw(&app, Tab::MyWork, 120);
         assert!(line_with(&rows, "▼ RESOLVED (1)").is_some(), "{rows:?}");
         assert!(line_with(&rows, "DEMO-1").is_some(), "{rows:?}");
+    }
+
+    #[test]
+    fn a_done_group_opened_during_startup_is_not_folded_again() {
+        let mut cache = crate::cache::Cache::empty();
+        cache.my_tickets = vec![Ticket::for_test("DEMO-1", "Closed")];
+        let mut app = App::new();
+        app.loading = false;
+        // The snapshot folds Closed; the user opens it before the full read lands.
+        app.replace_cache(cache.clone(), app.moves.now());
+        assert!(line_with(&draw(&app, Tab::MyWork, 120), "▶ CLOSED (1)").is_some());
+        app.toggle_group_collapse("Closed");
+        app.replace_cache_full_scope(cache, app.moves.now());
+        let rows = draw(&app, Tab::MyWork, 120);
+        assert!(line_with(&rows, "▼ CLOSED (1)").is_some(), "{rows:?}");
     }
 
     #[test]

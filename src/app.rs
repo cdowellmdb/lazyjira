@@ -349,7 +349,7 @@ pub struct App {
     pub collapsed_unassigned: HashSet<String>,
     pub collapsed_filters: HashSet<String>,
     /// The done statuses My Work has folded, until its first full-scope read is applied; `None`
-    /// after, when no read folds anything.
+    /// after, when no read folds anything. A failed read changes nothing.
     my_work_done_folded: Option<HashSet<String>>,
     /// Optional epic focus order used by the Epics tab; empty means show all epics.
     epics_i_care_about_rank: HashMap<String, usize>,
@@ -547,9 +547,17 @@ impl App {
         self.mark_cache_changed();
     }
 
-    /// Folds each done group a read brings to My Work the first time it appears, until
-    /// `finish_folding_done_groups`. Startup reads (the snapshot, the active-only read) may lack
-    /// done tickets, so folding lasts until the first full-scope read.
+    /// Replaces the cache with a full-scope read (Full or Manual), which brings done tickets:
+    /// its new done groups fold, and after it no read folds any, so a group that first appears
+    /// later (a ticket just closed) shows open.
+    pub fn replace_cache_full_scope(&mut self, cache: Cache, requested_at: u64) {
+        self.replace_cache(cache, requested_at);
+        self.my_work_done_folded = None;
+    }
+
+    /// Folds each done group a read brings to My Work the first time it appears, until a
+    /// full-scope read is applied (`replace_cache_full_scope`): startup reads (the snapshot, the
+    /// active-only read) may lack done tickets.
     fn fold_new_done_groups(&mut self) {
         let Some(folded) = &mut self.my_work_done_folded else {
             return;
@@ -559,12 +567,6 @@ impl App {
                 self.collapsed_my_work.insert(ticket.status.clone());
             }
         }
-    }
-
-    /// Stops folding My Work's done groups: called once the first full-scope read is applied (or
-    /// fails), so a group that first appears after it (a ticket just closed) shows open.
-    pub fn finish_folding_done_groups(&mut self) {
-        self.my_work_done_folded = None;
     }
 
     /// Shows a filter query's results (requested at `requested_at`), with their done groups folded.
