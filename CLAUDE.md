@@ -35,7 +35,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/local_cache.rs** — The files kept between runs in `~/.cache/lazyjira/` (snapshot, epics, details, the current user's email) and `DetailCache`, the in-memory copy of the details that list reads hydrate from
 - **src/bounded.rs** — Runs tasks a few at a time (`for_each_bounded`): the reads' searches and the bulk actions' Jira calls share it
 - **src/jira_rest.rs** — Jira REST client using jira-cli's config and `JIRA_API_TOKEN`: the paginated `search` (JQL + fields in, tickets out), `issue` (one issue, read itself rather than through the search index), moves (list a ticket's transitions, send one by id), and a ticket's browser URL
-- **src/jql.rs** — Building JQL safely: `quote` for a value, `key_list` and `is_key` so only ticket-key-shaped text reaches a list, and `KEYS_PER_SEARCH`
+- **src/jql.rs** — Building JQL safely: `quote` for a value, `key_chunks` and `is_key` so only ticket-key-shaped text reaches a list, and `KEYS_PER_SEARCH`
 - **src/jira_issue.rs** — Pure parser from Jira's issue JSON (`{key, fields}`: a search result or a single issue) to a `Ticket`, including comments as activity
 - **src/subtasks.rs** — Sub-task hierarchy: `nest` orders rows so a sub-task follows its parent, `is_nested` tells renderers which rows are drawn under one, and `add_to_epics` adds the sub-tasks under an epic's children to that epic
 - **src/transitions.rs** — Transition model and parsing, and the rules for matching shortcuts and resolutions

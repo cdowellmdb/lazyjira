@@ -18,7 +18,7 @@ use crate::cache::{
 use crate::config::AppConfig;
 use crate::jira_client::fetch_my_email;
 use crate::jira_rest::describe;
-use crate::jql::{self, is_key, key_list, KEYS_PER_SEARCH};
+use crate::jql::{self, is_key, key_chunks};
 use crate::local_cache::{
     load_epics_cache, load_my_email, remember_my_email, save_epics_cache, DetailCache,
 };
@@ -90,14 +90,15 @@ async fn search_all(jqls: Vec<String>, fields: &'static [&'static str]) -> Resul
 }
 
 /// The searches that find the sub-tasks among `keys` and under them, `KEYS_PER_SEARCH` keys to a
-/// search, each key once. A chunk with no usable key sends no search.
+/// search, each key once. A key that isn't shaped like a ticket key is left out.
 fn subtasks_jqls(keys: &[String]) -> Vec<String> {
     let mut keys = keys.to_vec();
     keys.sort();
     keys.dedup();
-    keys.chunks(KEYS_PER_SEARCH)
-        .filter_map(key_list)
-        .map(|list| {
+    key_chunks(&keys)
+        .into_iter()
+        .map(|chunk| {
+            let list = chunk.join(",");
             format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
         })
         .collect()
@@ -164,14 +165,11 @@ async fn read_details<S, F>(
     S: Fn(String) -> F,
     F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
 {
-    let (valid, malformed): (Vec<String>, Vec<String>) =
-        keys.iter().cloned().partition(|key| is_key(key));
-    for key in malformed {
-        let error = format!("{key:?} isn't a ticket key");
-        deliver(key, Err(error));
+    for key in keys.iter().filter(|key| !is_key(key)) {
+        deliver(key.clone(), Err(format!("{key:?} isn't a ticket key")));
     }
 
-    let chunks: Vec<&[String]> = valid.chunks(KEYS_PER_SEARCH).collect();
+    let chunks = key_chunks(keys);
     let jqls = chunks
         .iter()
         .map(|chunk| format!("key in ({})", chunk.join(",")))
@@ -183,18 +181,18 @@ async fn read_details<S, F>(
                     .into_iter()
                     .map(|ticket| (ticket.key.clone(), ticket))
                     .collect();
-                for key in chunks[at] {
+                for key in &chunks[at] {
                     let result = found
-                        .remove(key)
+                        .remove(*key)
                         .map(as_detail)
                         .ok_or_else(|| "Jira didn't return this ticket".to_string());
-                    deliver(key.clone(), result);
+                    deliver(key.to_string(), result);
                 }
             }
             Err(e) => {
                 let error = describe(&e);
-                for key in chunks[at] {
-                    deliver(key.clone(), Err(error.clone()));
+                for key in &chunks[at] {
+                    deliver(key.to_string(), Err(error.clone()));
                 }
             }
         }
@@ -322,13 +320,13 @@ fn key_order(a: &str, b: &str) -> std::cmp::Ordering {
 
 /// The searches that find the children of `epic_keys`, `KEYS_PER_SEARCH` epics to a search. A
 /// child names its epic through the Epic Link field (company-managed projects, when jira-cli's
-/// config knows the field) or `parent` (team-managed). A chunk with no usable key sends no
-/// search. The order keeps pages stable while tickets change underneath them.
+/// config knows the field) or `parent` (team-managed). A key that isn't shaped like a ticket
+/// key is left out. The order keeps pages stable while tickets change underneath them.
 fn epic_children_jqls(project: &str, epic_keys: &[String], has_epic_link: bool) -> Vec<String> {
-    epic_keys
-        .chunks(KEYS_PER_SEARCH)
-        .filter_map(key_list)
-        .map(|list| {
+    key_chunks(epic_keys)
+        .into_iter()
+        .map(|chunk| {
+            let list = chunk.join(",");
             let link = if has_epic_link {
                 format!("\"Epic Link\" in ({list}) OR ")
             } else {
