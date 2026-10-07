@@ -423,6 +423,7 @@ mod tests {
         let mut app = App::new();
         app.loading = false;
         app.replace_cache(cache.clone(), app.moves.now());
+        app.finish_folding_done_groups();
         let text = screen(&app, Tab::MyWork);
         assert!(text.contains("▼ IN PROGRESS (1)"), "{text}");
         assert!(text.contains("DEMO-1"), "{text}");
@@ -464,18 +465,27 @@ mod tests {
     }
 
     #[test]
-    fn a_done_group_that_first_appears_on_a_refresh_starts_unfolded() {
+    fn done_groups_fold_until_the_first_full_read_and_never_after() {
         let mut cache = crate::cache::Cache::empty();
         cache.my_tickets = vec![Ticket::for_test("DEMO-1", "In Progress")];
         let mut app = App::new();
         app.loading = false;
+        // No snapshot: the first read is active-only, so it has no done groups to fold.
         app.replace_cache(cache.clone(), app.moves.now());
 
-        // Closed mid-session: the refresh brings a Closed group My Work hasn't shown before.
-        cache.my_tickets[0].status = "Closed".into();
+        // The first full read brings the done tickets: their groups start folded.
+        cache.my_tickets.push(Ticket::for_test("DEMO-2", "Closed"));
+        app.replace_cache(cache.clone(), app.moves.now());
+        app.finish_folding_done_groups();
+        let rows = draw(&app, Tab::MyWork, 120);
+        assert!(line_with(&rows, "▶ CLOSED (1)").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "DEMO-2").is_none(), "{rows:?}");
+
+        // Resolved mid-session: a done group that first appears after the full read shows open.
+        cache.my_tickets[0].status = "Resolved".into();
         app.replace_cache(cache, app.moves.now());
         let rows = draw(&app, Tab::MyWork, 120);
-        assert!(line_with(&rows, "▼ CLOSED (1)").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "▼ RESOLVED (1)").is_some(), "{rows:?}");
         assert!(line_with(&rows, "DEMO-1").is_some(), "{rows:?}");
     }
 

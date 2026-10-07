@@ -348,8 +348,9 @@ pub struct App {
     pub collapsed_parents: HashSet<String>,
     pub collapsed_unassigned: HashSet<String>,
     pub collapsed_filters: HashSet<String>,
-    /// My Work has had its first data, and with it its done groups folded.
-    my_work_loaded: bool,
+    /// The done statuses My Work has folded, until its first full-scope read is applied; `None`
+    /// after, when no read folds anything.
+    my_work_done_folded: Option<HashSet<String>>,
     /// Optional epic focus order used by the Epics tab; empty means show all epics.
     epics_i_care_about_rank: HashMap<String, usize>,
     /// Status order and done/active, from the `[statuses]` config.
@@ -416,7 +417,7 @@ impl App {
             collapsed_parents: HashSet::new(),
             collapsed_unassigned: HashSet::new(),
             collapsed_filters: HashSet::new(),
-            my_work_loaded: false,
+            my_work_done_folded: Some(HashSet::new()),
             epics_i_care_about_rank: HashMap::new(),
             status_rules: crate::cache::StatusRules::default(),
         }
@@ -541,31 +542,38 @@ impl App {
     pub fn replace_cache(&mut self, cache: Cache, requested_at: u64) {
         self.ensure_visible_keys_cache();
         self.cache = cache;
-        self.fold_done_groups_on_first_data();
+        self.fold_new_done_groups();
         self.reapply_moves_since(requested_at);
         self.mark_cache_changed();
     }
 
-    /// Folds My Work's done groups when it first gets data. Later refreshes leave the folds to the
-    /// user, so a done group that first appears mid-session (a ticket just closed) shows open.
-    fn fold_done_groups_on_first_data(&mut self) {
-        if !std::mem::replace(&mut self.my_work_loaded, true) {
-            let done = self.done_statuses(&self.cache.my_tickets);
-            self.collapsed_my_work.extend(done);
+    /// Folds each done group a read brings to My Work the first time it appears, until
+    /// `finish_folding_done_groups`. Startup reads (the snapshot, the active-only read) may lack
+    /// done tickets, so folding lasts until the first full-scope read.
+    fn fold_new_done_groups(&mut self) {
+        let Some(folded) = &mut self.my_work_done_folded else {
+            return;
+        };
+        for ticket in &self.cache.my_tickets {
+            if self.status_rules.is_done(&ticket.status) && folded.insert(ticket.status.clone()) {
+                self.collapsed_my_work.insert(ticket.status.clone());
+            }
         }
     }
 
-    fn done_statuses(&self, tickets: &[crate::cache::Ticket]) -> HashSet<String> {
-        tickets
-            .iter()
-            .filter(|ticket| self.status_rules.is_done(&ticket.status))
-            .map(|ticket| ticket.status.clone())
-            .collect()
+    /// Stops folding My Work's done groups: called once the first full-scope read is applied (or
+    /// fails), so a group that first appears after it (a ticket just closed) shows open.
+    pub fn finish_folding_done_groups(&mut self) {
+        self.my_work_done_folded = None;
     }
 
     /// Shows a filter query's results (requested at `requested_at`), with their done groups folded.
     pub fn show_filter_results(&mut self, tickets: Vec<crate::cache::Ticket>, requested_at: u64) {
-        self.collapsed_filters = self.done_statuses(&tickets);
+        self.collapsed_filters = tickets
+            .iter()
+            .filter(|ticket| self.status_rules.is_done(&ticket.status))
+            .map(|ticket| ticket.status.clone())
+            .collect();
         self.filter_results = tickets;
         self.reapply_moves_since(requested_at);
         self.mark_cache_changed();

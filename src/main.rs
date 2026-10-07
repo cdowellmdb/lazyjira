@@ -518,6 +518,7 @@ async fn main() -> Result<()> {
                     if request != app.cache_refresh_request {
                         continue;
                     }
+                    let full_scope = !matches!(phase, CacheRefreshPhase::ActiveOnly);
                     match (phase, result) {
                         (CacheRefreshPhase::ActiveOnly, Ok(cache))
                             if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
@@ -591,6 +592,10 @@ async fn main() -> Result<()> {
                             app.flash = Some(format!("Refresh failed: {}", e));
                         }
                         _ => {}
+                    }
+                    if full_scope {
+                        // Done groups fold until the first full-scope read, applied or failed.
+                        app.finish_folding_done_groups();
                     }
                 }
                 BackgroundMessage::TicketDetailFetched {
