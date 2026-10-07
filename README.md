@@ -13,9 +13,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 **Triage fast**
 - Step through tickets in the detail view with `←`/`→`, and press `z` for full screen
 - Fold status groups and a parent's sub-tasks; `f` focuses one status, `d` hides Done
-- Done groups in My Work and Filters start folded, and list the most recently updated tickets first
-- An Updated column shows each ticket's age (`12m`, `5h`, `2d`, `3w`)
-- An epic or labels every row shares show once under the column headers, not on every row
+- Lists show what differs: each ticket's age, shared epics and labels named once, done groups folded
 - Sub-tasks nest under their parent, or lead with its key when the parent is elsewhere
 - Opens instantly from a local cache, then refreshes from Jira without losing your place
 - Ticket detail renders Jira markup and shows comments; `h` lists them newest first
@@ -190,7 +188,7 @@ To make your own, add a `[themes.<name>]` table and pick it in preferences. Each
 
 Each tab remembers its selection, search, status focus, and folded groups during the session. Folded parents are one set shared by every tab: a parent folded in My Work is folded in Epics too. A folded parent shows `▶` and how many sub-tasks are hidden, and a sub-task whose parent is in another group leads with the parent's key, muted. Done groups start folded in My Work and each time a filter runs, and list the most recently updated tickets first.
 
-Rows are marked `☐`, or `☒` when selected; a group header shows `⊟` when only some of its tickets are selected. My Work, Team, Unassigned and Filters show an Updated column with how long ago Jira last changed each ticket (`12m`, `5h`, `2d`, `3w`). When every row shares an epic or labels, a muted line under the column headers names them once, like `all rows · epic PAY: Payments Platform Revamp · DEMO, Q3`. My Work and Team then drop the Epic column, and their Labels column keeps only the labels that differ.
+Rows are marked `☐`, or `☒` when selected; a group header shows `⊟` when only some of its tickets are selected. My Work, Team, Unassigned and Filters show an Updated column with how long ago Jira last changed each ticket (`12m`, `5h`, `2d`, `3w`). When every row with an epic shares it, or every row carries the same labels, a muted line under the column headers names them once, like `all rows · epic Payments Platform Revamp · DEMO, Q3` (Unassigned, already grouped by epic, names only labels). My Work and Team then drop the Epic column, and their Labels column keeps only the labels that differ.
 
 Refresh keeps the loaded list visible and follows the selected ticket even when other rows are added or reordered.
 
