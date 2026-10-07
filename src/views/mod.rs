@@ -576,7 +576,12 @@ mod tests {
         app.filter_focus = FilterFocus::Results;
         app.filter_results = tickets.clone();
 
-        for tab in [Tab::MyWork, Tab::Team, Tab::Filters] {
+        for tab in [Tab::MyWork, Tab::Team, Tab::Filters, Tab::Unassigned] {
+            if tab == Tab::Unassigned {
+                for ticket in &mut app.cache.team_tickets {
+                    ticket.assignee_email = Some("__unassigned__".into());
+                }
+            }
             app.active_tab = tab;
             app.mark_cache_changed();
             let rows = draw(&app, tab, 160);
@@ -593,6 +598,9 @@ mod tests {
             for (key, age) in [("DEMO-1", "23m"), ("DEMO-2", "3d"), ("DEMO-4", "5h")] {
                 assert_eq!(age_of(key), age, "{tab:?}: {key}");
             }
+            if tab == Tab::Unassigned {
+                continue; // grouped by epic, not status
+            }
             // Done rows newest first, the sub-task right under its parent; active rows keep
             // their order.
             let order = vec!["DEMO-1", "DEMO-2", "DEMO-4", "DEMO-5", "DEMO-3", "DEMO-6"];
@@ -600,16 +608,6 @@ mod tests {
             drawn.sort_by_key(|key| rows.iter().position(|(r, _)| r.contains(key)).unwrap());
             assert_eq!(drawn, order, "{tab:?}");
         }
-
-        // Unassigned has no Labels column; Updated comes last.
-        let mut unassigned = ticket("DEMO-7", "To Do", "2026-09-30T09:23:20", &[]);
-        unassigned.assignee_email = Some("__unassigned__".into());
-        app.cache.team_tickets = vec![unassigned];
-        app.active_tab = Tab::Unassigned;
-        app.mark_cache_changed();
-        let rows = draw(&app, Tab::Unassigned, 160);
-        assert!(line_with(&rows, "SEL KEY").unwrap().0.contains("UPDATED"));
-        assert!(line_with(&rows, "DEMO-7").unwrap().0.contains(" 1h"));
     }
 
     #[test]

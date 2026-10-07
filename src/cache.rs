@@ -439,7 +439,7 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_email, StatusRules, Ticket};
+    use super::{newest_first, normalize_email, StatusRules, Ticket};
 
     #[test]
     fn a_name_is_made_from_the_local_part_of_an_email() {
@@ -588,6 +588,26 @@ mod tests {
         rules.sort_tickets(&mut refs);
         let keys: Vec<&str> = refs.iter().map(|t| t.key.as_str()).collect();
         assert_eq!(keys, ["DSCI-1", "DSCI-2", "DSCI-9", "DSCI-3"]);
+    }
+
+    #[test]
+    fn newest_first_puts_missing_updates_last_and_keeps_ties_in_order() {
+        let at = |key: &str, updated: Option<&str>| {
+            let mut ticket = Ticket::for_test(key, "Closed");
+            ticket.updated = updated.map(|time| format!("2026-09-{time}.000+0000"));
+            ticket
+        };
+        let tickets = [
+            at("DEMO-1", None),
+            at("DEMO-2", Some("01T00:00:00")),
+            at("DEMO-3", Some("30T10:00:00")),
+            at("DEMO-4", Some("01T00:00:00")),
+            at("DEMO-5", None),
+        ];
+        let mut refs: Vec<&Ticket> = tickets.iter().collect();
+        newest_first(&mut refs);
+        let keys: Vec<&str> = refs.iter().map(|t| t.key.as_str()).collect();
+        assert_eq!(keys, ["DEMO-3", "DEMO-2", "DEMO-4", "DEMO-1", "DEMO-5"]);
     }
 
     #[test]
