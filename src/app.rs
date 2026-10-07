@@ -28,7 +28,7 @@ pub(crate) struct VisibleGroup<'a, H> {
     /// The sub-tasks of a folded parent have no row, but `total` still counts them.
     pub family: HashMap<usize, Family>,
     /// The sub-tasks of folded parents in an expanded group: no row, but still in the list.
-    pub folded: Vec<&'a crate::cache::Ticket>,
+    pub folded_subtasks: Vec<&'a crate::cache::Ticket>,
 }
 
 #[derive(Debug, Clone)]
@@ -775,7 +775,7 @@ impl App {
                 next_index += 1;
                 let total = rows.len();
                 let mut family = HashMap::new();
-                let mut folded = Vec::new();
+                let mut folded_subtasks = Vec::new();
                 let tickets = (!self.is_collapsed(tab, &id)).then(|| {
                     rows.into_iter()
                         .filter_map(|(ticket, role)| {
@@ -785,7 +785,7 @@ impl App {
                                     .as_ref()
                                     .is_some_and(|parent| self.collapsed_parents.contains(parent))
                             {
-                                folded.push(ticket);
+                                folded_subtasks.push(ticket);
                                 return None;
                             }
                             let index = next_index;
@@ -804,7 +804,7 @@ impl App {
                     total,
                     tickets,
                     family,
-                    folded,
+                    folded_subtasks,
                 }
             })
             .collect()

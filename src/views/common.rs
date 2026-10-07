@@ -67,24 +67,36 @@ pub fn truncate(s: &str, max: usize) -> String {
 }
 
 const UNSELECTED: char = '☐';
+const SELECTED: char = '☒';
+const PARTIAL: char = '⊟';
 /// The selection marks, each one column wide (East Asian Width "N"): unselected, selected, and a
 /// group with some of its tickets selected.
-pub const MARKS: [char; 3] = [UNSELECTED, '☒', '⊟'];
+pub const MARKS: [char; 3] = [UNSELECTED, SELECTED, PARTIAL];
 
-pub fn ticket_marker(selected: bool) -> &'static str {
+pub fn ticket_marker(selected: bool) -> char {
     if selected {
-        "☒"
+        SELECTED
     } else {
-        "☐"
+        UNSELECTED
     }
 }
 
-pub fn group_marker(state: GroupSelectionState) -> &'static str {
+pub fn group_marker(state: GroupSelectionState) -> char {
     match state {
-        GroupSelectionState::None => "☐",
-        GroupSelectionState::Partial => "⊟",
-        GroupSelectionState::All => "☒",
+        GroupSelectionState::None => UNSELECTED,
+        GroupSelectionState::Partial => PARTIAL,
+        GroupSelectionState::All => SELECTED,
     }
+}
+
+/// `base` in the muted color: gray on the selected row (`base` has its background), so it shows
+/// against the highlight, and dark gray elsewhere.
+pub fn muted(base: Style) -> Style {
+    base.fg(if base.bg.is_some() {
+        Color::Gray
+    } else {
+        Color::DarkGray
+    })
 }
 
 /// Colors each line's selection mark: muted when unselected (gray on the highlighted row, so it
@@ -133,7 +145,7 @@ pub fn ticket_cells(
     app: &App,
     family: Option<Family>,
     ticket: &Ticket,
-    marker: &str,
+    marker: char,
     width: usize,
     base: Style,
 ) -> (String, Vec<Span<'static>>) {
@@ -164,15 +176,10 @@ pub fn ticket_cells(
         .nth(prefix.chars().count())
         .map_or(cell.len(), |(i, _)| i);
     let (prefix, summary) = cell.split_at(split);
-    let muted = base.fg(if base.bg.is_some() {
-        Color::Gray
-    } else {
-        Color::DarkGray
-    });
     (
         key,
         vec![
-            Span::styled(prefix.to_string(), muted),
+            Span::styled(prefix.to_string(), muted(base)),
             Span::styled(summary.to_string(), base),
         ],
     )
@@ -197,7 +204,7 @@ impl Shared {
             .iter()
             .flat_map(|group| {
                 let drawn = group.tickets.iter().flatten().map(|(_, ticket)| *ticket);
-                drawn.chain(group.folded.iter().copied())
+                drawn.chain(group.folded_subtasks.iter().copied())
             })
             .collect();
         let mut epics: Vec<&str> = rows.iter().filter_map(|t| t.epic_name.as_deref()).collect();
@@ -218,6 +225,72 @@ impl Shared {
                 .iter()
                 .any(|t| t.labels.iter().any(|label| !labels.contains(label))),
             labels,
+        }
+    }
+
+    /// The summary's width once the hidden Epic and Labels columns, and their separators, give
+    /// it theirs.
+    pub fn summary_width(&self, summary_w: usize, epic_w: usize, labels_w: usize) -> usize {
+        [(self.epic_column, epic_w), (self.labels_column, labels_w)]
+            .into_iter()
+            .filter(|(shown, _)| !shown)
+            .fold(summary_w, |w, (_, hidden)| w + hidden + 3)
+    }
+
+    /// Pushes the headings, in `style`, of the cells `push_trailing_cells` draws.
+    pub fn push_trailing_headings(
+        &self,
+        header: &mut Line<'static>,
+        style: Style,
+        epic_w: usize,
+        labels_w: usize,
+    ) {
+        for (shown, title, width) in [
+            (self.epic_column, "EPIC", epic_w),
+            (true, "UPDATED", UPDATED_WIDTH),
+            (self.labels_column, "LABELS", labels_w),
+        ] {
+            if shown {
+                header.push_span(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+                header.push_span(Span::styled(format!("{title:<width$}"), style));
+            }
+        }
+    }
+
+    /// Pushes a row's trailing cells: Epic (when shown), Updated, and Labels (when shown), muted
+    /// in `base`, the row's style (with its background on the selected row, where labels are
+    /// yellow).
+    pub fn push_trailing_cells(
+        &self,
+        app: &App,
+        row: &mut Line<'static>,
+        ticket: &Ticket,
+        base: Style,
+        epic_w: usize,
+        labels_w: usize,
+    ) {
+        let separator = Span::styled(" │ ", base.fg(Color::DarkGray));
+        if self.epic_column {
+            let epic = ticket.epic_name.as_deref().unwrap_or("-");
+            row.push_span(separator.clone());
+            row.push_span(Span::styled(
+                format!("{:<epic_w$}", truncate(epic, epic_w)),
+                muted(base),
+            ));
+        }
+        row.push_span(separator.clone());
+        row.push_span(Span::styled(updated_cell(app, ticket), muted(base)));
+        if self.labels_column {
+            let labels = truncate(&self.row_labels(ticket), labels_w);
+            row.push_span(separator);
+            row.push_span(Span::styled(
+                format!("{labels:<labels_w$}"),
+                if base.bg.is_some() {
+                    base.fg(Color::Yellow)
+                } else {
+                    muted(base)
+                },
+            ));
         }
     }
 

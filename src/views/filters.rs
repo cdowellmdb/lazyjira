@@ -5,8 +5,8 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, FilterFocus};
 use crate::views::common::{
-    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, truncate, updated_cell, Shared, KEY_WIDTH, UPDATED_WIDTH,
+    color_marks, fold_indicator, group_marker, highlight_row, muted, panel, status_color,
+    ticket_cells, ticket_marker, truncate, updated_cell, Shared, KEY_WIDTH, UPDATED_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -128,7 +128,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             .fg(Color::Reset)
             .add_modifier(Modifier::BOLD);
 
-        lines.push(Line::from(vec![
+        let header = Line::from(vec![
             Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
@@ -136,9 +136,9 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled("UPDATED", heading_style),
-        ]));
-
-        let header_w = 2 + key_w + 3 + status_w + 3 + summary_w + 3 + UPDATED_WIDTH;
+        ]);
+        let header_w = header.width();
+        lines.push(header);
         let groups = app.filters_visible_by_status();
         lines.extend(Shared::of(&groups).line(header_w));
         lines.push(Line::from(Span::styled(
@@ -225,14 +225,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 ];
                 row.extend(summary);
                 row.push(Span::styled(" │ ", base.fg(Color::DarkGray)));
-                row.push(Span::styled(
-                    updated_cell(app, ticket),
-                    base.fg(if is_selected {
-                        Color::Gray
-                    } else {
-                        Color::DarkGray
-                    }),
-                ));
+                row.push(Span::styled(updated_cell(app, ticket), muted(base)));
                 lines.push(Line::from(row));
             }
 

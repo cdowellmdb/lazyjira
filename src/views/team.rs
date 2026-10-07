@@ -4,10 +4,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::App;
-use crate::cache::Ticket;
 use crate::views::common::{
-    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, truncate, updated_cell, Shared, KEY_WIDTH, UPDATED_WIDTH,
+    color_marks, fold_indicator, group_marker, highlight_row, muted, panel, status_color,
+    ticket_cells, ticket_marker, Shared, KEY_WIDTH, UPDATED_WIDTH,
 };
 
 fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
@@ -49,53 +48,11 @@ fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let members = app.team_visible_tickets_by_member();
     let shared = Shared::of(&members);
-    let (key_w, status_w, mut summary_w, epic_w, labels_w) = team_column_widths(area);
-    // A hidden column's width, and its separator's, go to the summary.
-    for (shown, width) in [
-        (shared.epic_column, epic_w),
-        (shared.labels_column, labels_w),
-    ] {
-        if !shown {
-            summary_w += width + 3;
-        }
-    }
+    let (key_w, status_w, summary_w, epic_w, labels_w) = team_column_widths(area);
+    let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
     let heading_style = Style::default()
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
-    // The Epic and Labels cells that `shared` leaves on a row, with the Updated cell between;
-    // `muted` styles them unselected.
-    let push_trailing_cells =
-        |row: &mut Line<'_>, ticket: &Ticket, base: Style, is_selected: bool, muted: Style| {
-            let gray = if is_selected {
-                Style::default().fg(Color::Gray).bg(Color::DarkGray)
-            } else {
-                muted
-            };
-            if shared.epic_column {
-                let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
-                row.push_span(Span::styled(" │ ", base.fg(Color::DarkGray)));
-                row.push_span(Span::styled(
-                    format!("{:<epic_w$}", truncate(epic_str, epic_w)),
-                    gray,
-                ));
-            }
-            row.push_span(Span::styled(" │ ", base.fg(Color::DarkGray)));
-            row.push_span(Span::styled(updated_cell(app, ticket), gray));
-            if shared.labels_column {
-                row.push_span(Span::styled(" │ ", base.fg(Color::DarkGray)));
-                row.push_span(Span::styled(
-                    format!(
-                        "{:<labels_w$}",
-                        truncate(&shared.row_labels(ticket), labels_w)
-                    ),
-                    if is_selected {
-                        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
-                    } else {
-                        muted
-                    },
-                ));
-            }
-        };
 
     let mut lines: Vec<Line> = Vec::new();
     // The shared line goes under the first column headers only: it describes every member's rows.
@@ -115,20 +72,15 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         if is_header_selected {
             selected_visual_line = Some(lines.len());
         }
-        let header_style = if is_header_selected {
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .bg(Color::DarkGray)
+        let header_base = if is_header_selected {
+            Style::default().bg(Color::DarkGray)
         } else {
-            Style::default().add_modifier(Modifier::BOLD)
+            Style::default()
         };
+        let header_style = header_base.add_modifier(Modifier::BOLD);
 
         let Some(tickets) = &group.tickets else {
-            let summary_style = if is_header_selected {
-                Style::default().fg(Color::Gray).bg(Color::DarkGray)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
+            let summary_style = muted(header_base);
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("{} {} {}", marker, indicator, member.name),
@@ -165,16 +117,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
             ]);
-            for (shown, title, width) in [
-                (shared.epic_column, "EPIC", epic_w),
-                (true, "UPDATED", UPDATED_WIDTH),
-                (shared.labels_column, "LABELS", labels_w),
-            ] {
-                if shown {
-                    header.push_span(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
-                    header.push_span(Span::styled(format!("{title:<width$}"), heading_style));
-                }
-            }
+            shared.push_trailing_headings(&mut header, heading_style, epic_w, labels_w);
             let header_w = header.width();
             lines.push(header);
             if !std::mem::replace(&mut shared_line_drawn, true) {
@@ -217,13 +160,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
-                push_trailing_cells(
-                    &mut row,
-                    ticket,
-                    base,
-                    is_selected,
-                    Style::default().fg(Color::DarkGray),
-                );
+                shared.push_trailing_cells(app, &mut row, ticket, base, epic_w, labels_w);
                 lines.push(row);
             }
 
@@ -272,15 +209,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
-                push_trailing_cells(
-                    &mut row,
-                    ticket,
-                    base,
-                    is_selected,
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
-                );
+                shared.push_trailing_cells(app, &mut row, ticket, base, epic_w, labels_w);
                 lines.push(row);
             }
 

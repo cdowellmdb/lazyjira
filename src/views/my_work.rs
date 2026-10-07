@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::App;
 use crate::views::common::{
     color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, truncate, updated_cell, Shared, KEY_WIDTH, UPDATED_WIDTH,
+    ticket_marker, Shared, KEY_WIDTH, UPDATED_WIDTH,
 };
 
 fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
@@ -52,16 +52,8 @@ fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.my_work_visible_by_status();
     let shared = Shared::of(&grouped);
-    let (key_w, mut summary_w, epic_w, labels_w) = my_work_column_widths(area);
-    // A hidden column's width, and its separator's, go to the summary.
-    for (shown, width) in [
-        (shared.epic_column, epic_w),
-        (shared.labels_column, labels_w),
-    ] {
-        if !shown {
-            summary_w += width + 3;
-        }
-    }
+    let (key_w, summary_w, epic_w, labels_w) = my_work_column_widths(area);
+    let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
     let heading_style = Style::default()
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
@@ -80,19 +72,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 separator(Style::default()),
                 Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
             ]);
-            if shared.epic_column {
-                header.push_span(separator(Style::default()));
-                header.push_span(Span::styled(format!("{:<epic_w$}", "EPIC"), heading_style));
-            }
-            header.push_span(separator(Style::default()));
-            header.push_span(Span::styled("UPDATED", heading_style));
-            if shared.labels_column {
-                header.push_span(separator(Style::default()));
-                header.push_span(Span::styled(
-                    format!("{:<labels_w$}", "LABELS"),
-                    heading_style,
-                ));
-            }
+            shared.push_trailing_headings(&mut header, heading_style, epic_w, labels_w);
             let header_w = header.width();
             lines.push(header);
             lines.extend(shared.line(header_w));
@@ -167,35 +147,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 separator(base),
             ]);
             row.spans.extend(summary);
-            let muted = if is_selected {
-                Style::default().fg(Color::Gray).bg(Color::DarkGray)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            if shared.epic_column {
-                let epic_str = ticket.epic_name.as_deref().unwrap_or("-");
-                row.push_span(separator(base));
-                row.push_span(Span::styled(
-                    format!("{:<epic_w$}", truncate(epic_str, epic_w)),
-                    muted,
-                ));
-            }
-            row.push_span(separator(base));
-            row.push_span(Span::styled(updated_cell(app, ticket), muted));
-            if shared.labels_column {
-                row.push_span(separator(base));
-                row.push_span(Span::styled(
-                    format!(
-                        "{:<labels_w$}",
-                        truncate(&shared.row_labels(ticket), labels_w)
-                    ),
-                    if is_selected {
-                        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    },
-                ));
-            }
+            shared.push_trailing_cells(app, &mut row, ticket, base, epic_w, labels_w);
             lines.push(row);
         }
 
