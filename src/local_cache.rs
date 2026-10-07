@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -45,8 +46,11 @@ fn cache_dir_in(home: Option<std::ffi::OsString>) -> PathBuf {
 fn cache_dir() -> PathBuf {
     if cfg!(test) {
         // Tests keep off the real ~/.cache. Test runs share this directory and leave it behind,
-        // empty: the files in it carry the process id (`project`), so runs don't meet.
-        return std::env::temp_dir().join("lazyjira-test");
+        // empty: the files in it carry the process id (`project`), so runs don't meet. It is per
+        // user, since a directory this code makes is 0700 and on a shared temp dir another
+        // user's runs couldn't write to the first one's.
+        let user = std::env::var("USER").unwrap_or_default();
+        return std::env::temp_dir().join(format!("lazyjira-test-{user}"));
     }
     cache_dir_in(std::env::var_os("HOME"))
 }
@@ -71,9 +75,12 @@ fn write_cache_file(path: &Path, value: &impl serde::Serialize) -> Result<()> {
 }
 
 /// Writes a cache file that only this user can read: descriptions and comments are in it. The
-/// directory is made private too, and a file or directory an earlier build made readable is
-/// tightened.
+/// directory is made private too, and one an earlier build made readable is tightened. The text
+/// goes to a file of its own beside `path` and is renamed over it, so a reader, a second writer
+/// (the quit-time save and the writer task, or another lazyjira) or a crash never leaves `path`
+/// holding a part of it. That file is new, so it is private whatever `path` was.
 fn write_cache_text(path: &Path, json: &str) -> Result<()> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     if let Some(dir) = path.parent() {
         // The mode on create covers a new directory; it leaves an existing one as it was.
         std::fs::DirBuilder::new()
@@ -83,17 +90,25 @@ fn write_cache_text(path: &Path, json: &str) -> Result<()> {
             .and_then(|()| std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)))
             .with_context(|| format!("Failed to create cache directory: {}", dir.display()))?;
     }
+    // Unique per call, not per process: two saves in this process must not share a file.
+    let temp = path.with_extension(format!(
+        "{}.{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     let write = || -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o600)
-            .open(path)?;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        file.write_all(json.as_bytes())
+            .open(&temp)?;
+        file.write_all(json.as_bytes())?;
+        std::fs::rename(&temp, path)
     };
-    write().with_context(|| format!("Failed to write cache file: {}", path.display()))
+    write().map_err(|error| {
+        let _ = std::fs::remove_file(&temp);
+        anyhow::Error::new(error).context(format!("Failed to write cache file: {}", path.display()))
+    })
 }
 
 fn now_unix_secs() -> u64 {
@@ -120,14 +135,16 @@ pub fn save_full_cache_snapshot(project: &str, cache: &Cache) -> Result<()> {
     write_cache_file(&cache_path(FULL_CACHE_PREFIX, project), &snapshot)
 }
 
-/// Deletes the `prefix` cache an earlier build left straight in the system temp dir. It is
-/// ignored from here on, and on a shared temp dir it is readable by everyone.
-fn remove_temp_dir_cache(prefix: &str, project: &str) {
-    let _ = std::fs::remove_file(cache_file(&std::env::temp_dir(), prefix, project));
+/// Deletes the epics and details caches 0.9.0 left for `project` straight in the system temp
+/// dir, and nothing else there. They are ignored from here on, and on a shared temp dir they are
+/// readable by everyone. Called once at startup.
+pub fn remove_old_temp_dir_caches(project: &str) {
+    for prefix in [EPICS_CACHE_PREFIX, DETAILS_CACHE_PREFIX] {
+        let _ = std::fs::remove_file(cache_file(&std::env::temp_dir(), prefix, project));
+    }
 }
 
 pub fn load_epics_cache(project: &str) -> Vec<Epic> {
-    remove_temp_dir_cache(EPICS_CACHE_PREFIX, project);
     read_cache_file(&cache_path(EPICS_CACHE_PREFIX, project)).unwrap_or_default()
 }
 
@@ -136,7 +153,6 @@ pub fn save_epics_cache(project: &str, epics: &[Epic]) -> Result<()> {
 }
 
 fn load_details_cache(project: &str) -> HashMap<String, Ticket> {
-    remove_temp_dir_cache(DETAILS_CACHE_PREFIX, project);
     read_cache_file(&cache_path(DETAILS_CACHE_PREFIX, project)).unwrap_or_default()
 }
 
@@ -220,17 +236,18 @@ impl DetailCache {
         (details, rx)
     }
 
-    /// Keep a freshly fetched detail. False when the writer has stopped, so it won't reach disk.
-    pub fn record(&self, detail: Ticket) -> bool {
+    /// Keep a freshly fetched detail. The writer saves it once details stop arriving; if the
+    /// writer has stopped, `close` still saves it at quit.
+    pub fn record(&self, detail: Ticket) {
         lock_details(&self.by_key).insert(detail.key.clone(), detail);
-        self.changed.send(()).is_ok()
+        let _ = self.changed.send(());
     }
 
     /// Saves the details, for when the app quits: details recorded in the last moments are still
     /// inside the writer's quiet period then. It writes the file itself rather than asking the
     /// writer, so a refresh still holding the writer's channel open, or a stalled writer, can't
-    /// hold up quitting. If the writer happens to be saving at that moment too, the file may
-    /// come out torn; a file that doesn't parse is ignored and refetched, as any cache is.
+    /// hold up quitting. If the writer is saving at that moment too, each write replaces the
+    /// file whole (`write_cache_text`), and the later one stands.
     pub fn close(&self) {
         if let Some(path) = &self.path {
             save_details(path, &self.by_key);
@@ -291,13 +308,14 @@ mod tests {
         Ticket::for_test(key, status)
     }
 
-    /// Removes the cache files a test wrote, even when it fails.
+    /// Removes the cache files and directories a test wrote, even when it fails. A directory
+    /// goes once it is empty, so list the files in it first.
     struct Remove(Vec<PathBuf>);
 
     impl Drop for Remove {
         fn drop(&mut self) {
             for path in &self.0 {
-                let _ = std::fs::remove_file(path);
+                let _ = std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path));
             }
         }
     }
@@ -454,19 +472,23 @@ mod tests {
         );
     }
 
+    /// Where the epics and details caches lived in 0.9.0: straight in the system temp dir,
+    /// readable by everyone on a shared one.
+    fn old_temp_dir_cache(prefix: &str, project: &str) -> PathBuf {
+        cache_file(&std::env::temp_dir(), prefix, project)
+    }
+
     #[test]
-    fn old_temp_dir_caches_are_ignored_and_removed() {
+    fn caches_in_the_system_temp_dir_are_not_read_and_reading_leaves_them() {
         let project = project("OLDTMP");
         let epics = vec![Epic {
             key: "OLDTMP-1".into(),
             summary: "Old".into(),
             children: vec![],
         }];
-        // Where the epics and details caches lived before they moved: straight in the system
-        // temp dir, readable by everyone on a shared one.
-        let old = |prefix| std::env::temp_dir().join(format!("{prefix}_{project}.json"));
-        let (old_epics, old_details) = (old(EPICS_CACHE_PREFIX), old(DETAILS_CACHE_PREFIX));
         let details = HashMap::from([("OLDTMP-1".to_string(), test_ticket("OLDTMP-1", "To Do"))]);
+        let old_epics = old_temp_dir_cache(EPICS_CACHE_PREFIX, &project);
+        let old_details = old_temp_dir_cache(DETAILS_CACHE_PREFIX, &project);
         let _remove = Remove(vec![
             old_epics.clone(),
             old_details.clone(),
@@ -477,10 +499,46 @@ mod tests {
 
         assert!(load_epics_cache(&project).is_empty());
         assert!(load_details_cache(&project).is_empty());
-        assert!(!old_epics.exists() && !old_details.exists());
+        // A load reads; deleting is `remove_old_temp_dir_caches`'s job, once at startup.
+        assert!(old_epics.exists() && old_details.exists());
 
         save_epics_cache(&project, &epics).unwrap();
         assert_eq!(load_epics_cache(&project)[0].key, "OLDTMP-1");
+    }
+
+    #[test]
+    fn startup_removes_the_two_caches_0_9_0_left_for_the_project_and_nothing_else() {
+        let (project, other) = (project("OLDGONE"), project("OLDKEPT"));
+        let temp = std::env::temp_dir();
+        let old = [
+            old_temp_dir_cache(EPICS_CACHE_PREFIX, &project),
+            old_temp_dir_cache(DETAILS_CACHE_PREFIX, &project),
+        ];
+        // What stays: another project's old caches, other lazyjira files in the temp dir (one
+        // named after this project's, one a different cache), and the caches where they live now.
+        let kept = [
+            old_temp_dir_cache(EPICS_CACHE_PREFIX, &other),
+            old_temp_dir_cache(DETAILS_CACHE_PREFIX, &other),
+            temp.join(format!("lazyjira_bulk_upload_{project}.csv")),
+            old_temp_dir_cache(FULL_CACHE_PREFIX, &project),
+            temp.join(format!("{EPICS_CACHE_PREFIX}_{project}.json.bak")),
+            cache_path(EPICS_CACHE_PREFIX, &project),
+            cache_path(DETAILS_CACHE_PREFIX, &project),
+        ];
+        let _remove = Remove(old.iter().chain(&kept).cloned().collect());
+        for path in old.iter().chain(&kept) {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "{}").unwrap();
+        }
+
+        remove_old_temp_dir_caches(&project);
+
+        assert!(old.iter().all(|path| !path.exists()));
+        for path in &kept {
+            assert!(path.exists(), "removed {}", path.display());
+        }
+        // Nothing left to remove is not an error.
+        remove_old_temp_dir_caches(&project);
     }
 
     #[test]
@@ -590,6 +648,80 @@ mod tests {
     }
 
     #[test]
+    fn rewriting_a_cache_file_replaces_it_instead_of_changing_it_in_place() {
+        let path = cache_path(MY_EMAIL_PREFIX, &project("REPLACE"));
+        let kept = path.with_extension("kept");
+        let _remove = Remove(vec![path.clone(), kept.clone()]);
+        write_cache_text(&path, "old").unwrap();
+        // A second name for the old file: whoever has it open still holds it. A write in place
+        // would show through it; a replacement leaves it as it was.
+        std::fs::hard_link(&path, &kept).unwrap();
+
+        write_cache_text(&path, "new").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "old");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+        let leftovers = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(&stem) && name.ends_with(".tmp"))
+            .collect::<Vec<_>>();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+    }
+
+    #[test]
+    fn writes_that_overlap_each_land_whole_and_a_reader_never_sees_a_part() {
+        // The quit-time save and the writer task can write one file at once, and so can two
+        // lazyjira processes on the same project; the payloads differ in length, as a tear
+        // between two such writes needs.
+        let path = cache_path(DETAILS_CACHE_PREFIX, &project("OVERLAP"));
+        let _remove = Remove(vec![path.clone()]);
+        let payloads: Vec<String> = (1..=8).map(|n| "x".repeat(n * 400_000)).collect();
+        write_cache_text(&path, &payloads[0]).unwrap();
+        let start = std::sync::Barrier::new(payloads.len());
+        let writing = std::sync::atomic::AtomicBool::new(true);
+
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                while writing.load(std::sync::atomic::Ordering::SeqCst) {
+                    let seen = std::fs::read_to_string(&path).unwrap();
+                    assert!(payloads.contains(&seen), "read {} bytes", seen.len());
+                }
+            });
+            let writers: Vec<_> = payloads
+                .iter()
+                .map(|payload| {
+                    scope.spawn(|| {
+                        start.wait();
+                        write_cache_text(&path, payload).unwrap();
+                    })
+                })
+                .collect();
+            // The reader stops once every writer is done, however they ended.
+            let written: Vec<_> = writers.into_iter().map(|writer| writer.join()).collect();
+            writing.store(false, std::sync::atomic::Ordering::SeqCst);
+            reader.join().unwrap();
+            assert!(written.iter().all(Result::is_ok), "a write failed");
+        });
+
+        assert!(payloads.contains(&std::fs::read_to_string(&path).unwrap()));
+    }
+
+    #[test]
+    fn details_recorded_after_the_writer_stopped_are_still_saved_at_quit() {
+        let path = cache_path(DETAILS_CACHE_PREFIX, &project("STOPPED"));
+        let _remove = Remove(vec![path.clone()]);
+        let (details, changed) = DetailCache::new(HashMap::new(), Some(path.clone()));
+        drop(changed);
+
+        details.record(test_ticket("DEMO-1", "To Do"));
+        details.close();
+
+        assert_eq!(saved_keys(&path), ["DEMO-1"]);
+    }
+
+    #[test]
     fn cache_files_and_their_directory_are_private_to_the_user() {
         use std::os::unix::fs::PermissionsExt;
         let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
@@ -607,19 +739,18 @@ mod tests {
         // made readable by everyone.
         for (name, before) in [("new", None), ("old", Some(0o755))] {
             let dir = cache_dir().join(format!("{name}-{}", std::process::id()));
+            let made = dir.join("x.json");
+            let _remove = Remove(vec![made.clone(), dir.clone()]);
             if let Some(before) = before {
                 std::fs::create_dir_all(&dir).unwrap();
                 std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(before)).unwrap();
             }
-            let made = dir.join("x.json");
             write_cache_text(&made, "{}").unwrap();
             assert_eq!(
                 (mode(&dir), mode(&made)),
                 (0o700, 0o600),
                 "{name} directory"
             );
-            std::fs::remove_file(&made).unwrap();
-            std::fs::remove_dir(&dir).unwrap();
         }
     }
 }

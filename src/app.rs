@@ -1751,7 +1751,8 @@ impl App {
         if self.moves.is_stale(key, requested_at) {
             return false;
         }
-        let members = self.cache.team_members.clone();
+        let roster_email =
+            roster_member(&self.cache.team_members, detail).map(|member| member.email.clone());
         self.update_ticket(key, |ticket| {
             if detail.status != crate::cache::UNKNOWN_STATUS {
                 ticket.status = detail.status.clone();
@@ -1766,8 +1767,8 @@ impl App {
                 ticket.assignee = detail.assignee.clone();
             }
             if reassigned || ticket.assignee_email.is_none() {
-                ticket.assignee_email = roster_member(&members, detail)
-                    .map(|member| member.email.clone())
+                ticket.assignee_email = roster_email
+                    .clone()
                     .or_else(|| detail.assignee_email.clone());
             }
             if detail.reporter.is_some() {
@@ -2951,7 +2952,7 @@ mod tests {
         assert_eq!(app.team_visible_tickets_by_member()[0].total, 1);
     }
 
-    fn roster_member(name: &str, email: &str) -> crate::cache::TeamMember {
+    fn member(name: &str, email: &str) -> crate::cache::TeamMember {
         crate::cache::TeamMember {
             name: name.to_string(),
             email: email.to_string(),
@@ -2962,9 +2963,9 @@ mod tests {
     fn a_ticket_taken_by_a_roster_member_goes_under_the_rosters_email_for_them() {
         let mut app = App::new();
         app.cache.team_members = vec![
-            roster_member("Sam Chen", "sam.chen@example.com"),
-            roster_member("Alex Rivera", "alex.rivera@example.com"),
-            roster_member(
+            member("Sam Chen", "sam.chen@example.com"),
+            member("Alex Rivera", "alex.rivera@example.com"),
+            member(
                 crate::cache::UNASSIGNED_TEAM_NAME,
                 crate::cache::UNASSIGNED_TEAM_EMAIL,
             ),
@@ -2996,8 +2997,8 @@ mod tests {
     fn a_reassignment_to_someone_whose_email_jira_hides_never_keeps_the_previous_owners() {
         let mut app = App::new();
         app.cache.team_members = vec![
-            roster_member("Sam Chen", "sam.chen@example.com"),
-            roster_member("Alex Rivera", "alex.rivera@example.com"),
+            member("Sam Chen", "sam.chen@example.com"),
+            member("Alex Rivera", "alex.rivera@example.com"),
         ];
         app.cache.team_tickets = vec![assigned_to("AMP-1", "Sam Chen", "sam.chen@example.com")];
         app.cache

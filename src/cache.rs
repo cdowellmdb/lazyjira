@@ -236,7 +236,9 @@ pub enum ActivityKind {
 /// The roster member `ticket` is assigned to: the one with the assignee's email, else the one
 /// with their display name, for when Jira hides the email (or the roster has another address).
 /// The list search only finds tickets assigned to a roster email, so an email the roster lacks
-/// is another address of someone on it, and the name is how to tell who.
+/// is another address of someone on it, and the name is how to tell who. A detail read can show
+/// anyone, so a stranger who shares a display name with a roster member is taken for them until
+/// the next list read; that is accepted over a duplicate row for the same person.
 pub fn roster_member<'a>(members: &'a [TeamMember], ticket: &Ticket) -> Option<&'a TeamMember> {
     let by_email = ticket
         .assignee_email
