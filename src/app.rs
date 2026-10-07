@@ -1188,7 +1188,7 @@ impl App {
                 continue;
             }
 
-            crate::cache::newest_first(&mut done);
+            self.status_rules.order_done(&mut done);
             visible.push((member, active, done));
         }
 

@@ -174,8 +174,8 @@ impl StatusRules {
         self.place(name).done
     }
 
-    /// Groups tickets by status name in display order. Done groups list the most recently
-    /// updated first (`newest_first`); other groups keep their tickets' order, and unlisted
+    /// Groups tickets by status name in display order. Done groups are in `order_done`'s order;
+    /// other groups keep their tickets' order, and unlisted
     /// statuses keep their first-seen order.
     pub fn group<'a>(
         &self,
@@ -195,7 +195,7 @@ impl StatusRules {
         groups.sort_by_key(|(status, _)| self.rank(status));
         for (status, tickets) in &mut groups {
             if self.is_done(status) {
-                newest_first(tickets);
+                self.order_done(tickets);
             }
         }
         groups
@@ -209,12 +209,12 @@ impl StatusRules {
                 .then_with(|| a.key.cmp(&b.key))
         });
     }
-}
 
-/// Sorts tickets most recently updated first, those without an `updated` last; ties keep their
-/// order.
-pub fn newest_first(tickets: &mut [&Ticket]) {
-    tickets.sort_by_cached_key(|ticket| std::cmp::Reverse(ticket.updated_secs()));
+    /// Orders done tickets for display: most recently updated first, those without an `updated`
+    /// last; ties keep their order. Every list of done tickets goes through it.
+    pub fn order_done(&self, done: &mut [&Ticket]) {
+        done.sort_by_cached_key(|ticket| std::cmp::Reverse(ticket.updated_secs()));
+    }
 }
 
 impl Default for StatusRules {
@@ -439,7 +439,7 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::{newest_first, normalize_email, StatusRules, Ticket};
+    use super::{normalize_email, StatusRules, Ticket};
 
     #[test]
     fn a_name_is_made_from_the_local_part_of_an_email() {
@@ -591,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn newest_first_puts_missing_updates_last_and_keeps_ties_in_order() {
+    fn done_tickets_list_newest_first_with_missing_updates_last_and_ties_in_order() {
         let at = |key: &str, updated: Option<&str>| {
             let mut ticket = Ticket::for_test(key, "Closed");
             ticket.updated = updated.map(|time| format!("2026-09-{time}.000+0000"));
@@ -605,7 +605,7 @@ mod tests {
             at("DEMO-5", None),
         ];
         let mut refs: Vec<&Ticket> = tickets.iter().collect();
-        newest_first(&mut refs);
+        StatusRules::default().order_done(&mut refs);
         let keys: Vec<&str> = refs.iter().map(|t| t.key.as_str()).collect();
         assert_eq!(keys, ["DEMO-3", "DEMO-2", "DEMO-4", "DEMO-1", "DEMO-5"]);
     }
