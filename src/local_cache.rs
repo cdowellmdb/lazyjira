@@ -71,13 +71,16 @@ fn write_cache_file(path: &Path, value: &impl serde::Serialize) -> Result<()> {
 }
 
 /// Writes a cache file that only this user can read: descriptions and comments are in it. The
-/// directory is made private too, and a file an earlier build made readable is tightened.
+/// directory is made private too, and a file or directory an earlier build made readable is
+/// tightened.
 fn write_cache_text(path: &Path, json: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
+        // The mode on create covers a new directory; it leaves an existing one as it was.
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(dir)
+            .and_then(|()| std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)))
             .with_context(|| format!("Failed to create cache directory: {}", dir.display()))?;
     }
     let write = || -> std::io::Result<()> {
@@ -582,12 +585,23 @@ mod tests {
         write_cache_file(&existing, &"new").unwrap();
         assert_eq!(mode(&existing), 0o600);
 
-        // A directory made for the caches is closed to others too.
-        let dir = cache_dir().join(format!("private-{}", std::process::id()));
-        let made = dir.join("x.json");
-        write_cache_text(&made, "{}").unwrap();
-        assert_eq!((mode(&dir), mode(&made)), (0o700, 0o600));
-        std::fs::remove_file(&made).unwrap();
-        std::fs::remove_dir(&dir).unwrap();
+        // A directory made for the caches is closed to others, and so is one an earlier build
+        // made readable by everyone.
+        for (name, before) in [("new", None), ("old", Some(0o755))] {
+            let dir = cache_dir().join(format!("{name}-{}", std::process::id()));
+            if let Some(before) = before {
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(before)).unwrap();
+            }
+            let made = dir.join("x.json");
+            write_cache_text(&made, "{}").unwrap();
+            assert_eq!(
+                (mode(&dir), mode(&made)),
+                (0o700, 0o600),
+                "{name} directory"
+            );
+            std::fs::remove_file(&made).unwrap();
+            std::fs::remove_dir(&dir).unwrap();
+        }
     }
 }
