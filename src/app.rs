@@ -212,6 +212,26 @@ pub enum TicketSyncStage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheRefreshPhase {
+    ActiveOnly,
+    Full,
+    Manual,
+}
+
+/// The work `main.rs` starts after a cache refresh lands (`App::apply_cache_refresh`).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RefreshFollowUp {
+    /// The read to send next.
+    pub next_phase: Option<CacheRefreshPhase>,
+    /// Prefetch the details the new lists lack.
+    pub prefetch_details: bool,
+    /// Save the cache as the snapshot, then report it with `App::snapshot_saved`.
+    pub save_snapshot: bool,
+    /// Send an epics refresh (`epics_refreshing` is already set).
+    pub refresh_epics: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupSelectionState {
     None,
     Partial,
@@ -550,6 +570,100 @@ impl App {
     pub fn replace_cache_full_scope(&mut self, cache: Cache, requested_at: u64) {
         self.replace_cache(cache, requested_at);
         self.my_work_done_folded = None;
+    }
+
+    /// Applies a cache refresh's answer (`request` is the id it was sent with) and returns the
+    /// work it leads to. An answer to a superseded request, or for a stage that has passed,
+    /// changes nothing.
+    pub fn apply_cache_refresh(
+        &mut self,
+        phase: CacheRefreshPhase,
+        request: u64,
+        requested_at: u64,
+        result: Result<Cache, String>,
+    ) -> RefreshFollowUp {
+        if request != self.cache_refresh_request {
+            return RefreshFollowUp::default();
+        }
+        let stage = self.ticket_sync_stage;
+        match (phase, result) {
+            (CacheRefreshPhase::ActiveOnly, Ok(cache))
+                if stage == Some(TicketSyncStage::ActiveOnly) =>
+            {
+                self.replace_cache(cache, requested_at);
+                self.cache_stale_age_secs = None;
+                self.ticket_sync_stage = Some(TicketSyncStage::Full);
+                self.clamp_selection();
+                self.flash = Some("Active tickets refreshed. Syncing recently done...".to_string());
+                RefreshFollowUp {
+                    next_phase: Some(CacheRefreshPhase::Full),
+                    prefetch_details: true,
+                    ..RefreshFollowUp::default()
+                }
+            }
+            (CacheRefreshPhase::ActiveOnly, Err(e))
+                if stage == Some(TicketSyncStage::ActiveOnly) =>
+            {
+                self.ticket_sync_stage = Some(TicketSyncStage::Full);
+                self.flash = Some(format!(
+                    "Active refresh failed ({}). Trying full refresh...",
+                    e
+                ));
+                RefreshFollowUp {
+                    next_phase: Some(CacheRefreshPhase::Full),
+                    ..RefreshFollowUp::default()
+                }
+            }
+            (CacheRefreshPhase::Full, Ok(cache)) if stage == Some(TicketSyncStage::Full) => {
+                self.replace_cache_full_scope(cache, requested_at);
+                self.cache_stale_age_secs = None;
+                self.ticket_sync_stage = None;
+                self.clamp_selection();
+                RefreshFollowUp {
+                    prefetch_details: true,
+                    save_snapshot: true,
+                    ..RefreshFollowUp::default()
+                }
+            }
+            (CacheRefreshPhase::Full, Err(e)) if stage == Some(TicketSyncStage::Full) => {
+                self.ticket_sync_stage = None;
+                self.flash = Some(format!("Full refresh failed: {}", e));
+                RefreshFollowUp::default()
+            }
+            (CacheRefreshPhase::Manual, Ok(cache)) => {
+                self.loading = false;
+                self.replace_cache_full_scope(cache, requested_at);
+                self.cache_stale_age_secs = None;
+                self.ticket_sync_stage = None;
+                self.clamp_selection();
+                let refresh_epics = !self.epics_refreshing;
+                self.epics_refreshing = true;
+                RefreshFollowUp {
+                    prefetch_details: true,
+                    save_snapshot: true,
+                    refresh_epics,
+                    ..RefreshFollowUp::default()
+                }
+            }
+            (CacheRefreshPhase::Manual, Err(e)) => {
+                self.loading = false;
+                self.flash = Some(format!("Refresh failed: {}", e));
+                RefreshFollowUp::default()
+            }
+            _ => RefreshFollowUp::default(),
+        }
+    }
+
+    /// Reports saving the snapshot that a `phase` read's `save_snapshot` asked for.
+    pub fn snapshot_saved(&mut self, phase: CacheRefreshPhase, saved: Result<(), String>) {
+        self.flash = Some(match (phase, saved) {
+            (CacheRefreshPhase::Manual, Ok(())) => {
+                "Refreshed! Syncing epic relationships...".to_string()
+            }
+            (CacheRefreshPhase::Manual, Err(e)) => format!("Refreshed (cache save failed: {})", e),
+            (_, Ok(())) => "Ticket cache is up to date".to_string(),
+            (_, Err(e)) => format!("Cache snapshot write failed: {}", e),
+        });
     }
 
     /// Folds each done group a read brings to My Work the first time it appears, until a
@@ -1883,7 +1997,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, GroupSelectionState, Tab};
+    use super::{
+        App, CacheRefreshPhase, GroupSelectionState, RefreshFollowUp, Tab, TicketSyncStage,
+    };
     use crate::cache::{Epic, Ticket};
 
     #[test]
@@ -3133,5 +3249,377 @@ mod tests {
         assert!(app.enrich_ticket("DEMO-1", app.moves.now(), &detail));
 
         assert_eq!(app.cache.my_tickets[0].status, "In Progress");
+    }
+
+    fn my_work_cache(tickets: &[(&str, &str)]) -> crate::cache::Cache {
+        let mut cache = crate::cache::Cache::empty();
+        cache.my_tickets = tickets_with_statuses(tickets);
+        cache
+    }
+
+    /// What `main.rs`'s `spawn_cache_refresh` does to the app before it sends the read.
+    fn send_refresh(app: &mut App) -> u64 {
+        app.cache_refresh_request = app.next_request_id();
+        app.cache_refresh_request
+    }
+
+    fn my_work_keys(app: &App) -> Vec<&str> {
+        app.cache
+            .my_tickets
+            .iter()
+            .map(|t| t.key.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_superseded_refresh_changes_nothing() {
+        for phase in [
+            CacheRefreshPhase::ActiveOnly,
+            CacheRefreshPhase::Full,
+            CacheRefreshPhase::Manual,
+        ] {
+            for result in [
+                Ok(my_work_cache(&[("DEMO-2", "To Do")])),
+                Err("boom".into()),
+            ] {
+                let mut app = my_work_app(&[("DEMO-1", "In Progress")]);
+                app.loading = true;
+                app.cache_stale_age_secs = Some(180);
+                let stage = Some(match phase {
+                    CacheRefreshPhase::ActiveOnly => TicketSyncStage::ActiveOnly,
+                    _ => TicketSyncStage::Full,
+                });
+                app.ticket_sync_stage = stage;
+                let superseded = send_refresh(&mut app);
+                send_refresh(&mut app);
+
+                let follow_up = app.apply_cache_refresh(phase, superseded, app.moves.now(), result);
+
+                assert_eq!(follow_up, RefreshFollowUp::default(), "{phase:?}");
+                assert_eq!(my_work_keys(&app), ["DEMO-1"], "{phase:?}");
+                assert!(app.loading, "{phase:?}");
+                assert_eq!(app.flash, None, "{phase:?}");
+                assert_eq!(app.cache_stale_age_secs, Some(180), "{phase:?}");
+                assert_eq!(app.ticket_sync_stage, stage, "{phase:?}");
+            }
+        }
+    }
+
+    /// The app as startup leaves it after showing the snapshot and sending the active-only read.
+    fn app_refreshing_a_snapshot() -> (App, u64) {
+        let mut app = App::new();
+        app.loading = false;
+        app.replace_cache(my_work_cache(&[("DEMO-1", "In Progress")]), app.moves.now());
+        app.cache_stale_age_secs = Some(180);
+        app.ticket_sync_stage = Some(TicketSyncStage::ActiveOnly);
+        let request = send_refresh(&mut app);
+        (app, request)
+    }
+
+    #[test]
+    fn an_active_only_read_is_applied_and_the_full_read_follows() {
+        let (mut app, request) = app_refreshing_a_snapshot();
+
+        let follow_up = app.apply_cache_refresh(
+            CacheRefreshPhase::ActiveOnly,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[("DEMO-2", "To Do")])),
+        );
+
+        assert_eq!(
+            follow_up,
+            RefreshFollowUp {
+                next_phase: Some(CacheRefreshPhase::Full),
+                prefetch_details: true,
+                ..RefreshFollowUp::default()
+            }
+        );
+        assert_eq!(my_work_keys(&app), ["DEMO-2"]);
+        assert_eq!(app.cache_stale_age_secs, None);
+        assert_eq!(app.ticket_sync_stage, Some(TicketSyncStage::Full));
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("Active tickets refreshed. Syncing recently done...")
+        );
+    }
+
+    #[test]
+    fn a_failed_active_only_read_keeps_the_snapshot_and_tries_the_full_read() {
+        let (mut app, request) = app_refreshing_a_snapshot();
+
+        let follow_up = app.apply_cache_refresh(
+            CacheRefreshPhase::ActiveOnly,
+            request,
+            app.moves.now(),
+            Err("boom".into()),
+        );
+
+        assert_eq!(
+            follow_up,
+            RefreshFollowUp {
+                next_phase: Some(CacheRefreshPhase::Full),
+                ..RefreshFollowUp::default()
+            }
+        );
+        assert_eq!(my_work_keys(&app), ["DEMO-1"]);
+        assert_eq!(app.cache_stale_age_secs, Some(180));
+        assert_eq!(app.ticket_sync_stage, Some(TicketSyncStage::Full));
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("Active refresh failed (boom). Trying full refresh...")
+        );
+    }
+
+    /// The app once the active-only read has landed and the full read is sent.
+    fn app_syncing_done_tickets() -> (App, u64) {
+        let (mut app, request) = app_refreshing_a_snapshot();
+        app.apply_cache_refresh(
+            CacheRefreshPhase::ActiveOnly,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[("DEMO-1", "In Progress")])),
+        );
+        let request = send_refresh(&mut app);
+        (app, request)
+    }
+
+    #[test]
+    fn a_full_read_is_applied_and_saved_as_the_snapshot() {
+        let (mut app, request) = app_syncing_done_tickets();
+
+        let follow_up = app.apply_cache_refresh(
+            CacheRefreshPhase::Full,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[
+                ("DEMO-1", "In Progress"),
+                ("DEMO-2", "Closed"),
+            ])),
+        );
+
+        assert_eq!(
+            follow_up,
+            RefreshFollowUp {
+                prefetch_details: true,
+                save_snapshot: true,
+                ..RefreshFollowUp::default()
+            }
+        );
+        assert_eq!(my_work_keys(&app), ["DEMO-1", "DEMO-2"]);
+        assert!(app.is_collapsed(Tab::MyWork, "Closed"));
+        assert_eq!(app.cache_stale_age_secs, None);
+        assert_eq!(app.ticket_sync_stage, None);
+        app.snapshot_saved(CacheRefreshPhase::Full, Ok(()));
+        assert_eq!(app.flash.as_deref(), Some("Ticket cache is up to date"));
+        app.snapshot_saved(CacheRefreshPhase::Full, Err("disk full".into()));
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("Cache snapshot write failed: disk full")
+        );
+    }
+
+    #[test]
+    fn a_failed_full_read_ends_the_sync_and_keeps_the_lists() {
+        let (mut app, request) = app_syncing_done_tickets();
+
+        let follow_up = app.apply_cache_refresh(
+            CacheRefreshPhase::Full,
+            request,
+            app.moves.now(),
+            Err("boom".into()),
+        );
+
+        assert_eq!(follow_up, RefreshFollowUp::default());
+        assert_eq!(my_work_keys(&app), ["DEMO-1"]);
+        assert_eq!(app.ticket_sync_stage, None);
+        assert_eq!(app.flash.as_deref(), Some("Full refresh failed: boom"));
+    }
+
+    #[test]
+    fn a_startup_read_for_a_stage_that_has_passed_changes_nothing() {
+        for (phase, stage) in [
+            (CacheRefreshPhase::ActiveOnly, Some(TicketSyncStage::Full)),
+            (CacheRefreshPhase::ActiveOnly, None),
+            (CacheRefreshPhase::Full, Some(TicketSyncStage::ActiveOnly)),
+            (CacheRefreshPhase::Full, None),
+        ] {
+            for result in [
+                Ok(my_work_cache(&[("DEMO-2", "To Do")])),
+                Err("boom".into()),
+            ] {
+                let mut app = my_work_app(&[("DEMO-1", "In Progress")]);
+                app.cache_stale_age_secs = Some(180);
+                app.ticket_sync_stage = stage;
+                let request = send_refresh(&mut app);
+
+                let follow_up = app.apply_cache_refresh(phase, request, app.moves.now(), result);
+
+                assert_eq!(follow_up, RefreshFollowUp::default(), "{phase:?} {stage:?}");
+                assert_eq!(my_work_keys(&app), ["DEMO-1"], "{phase:?} {stage:?}");
+                assert_eq!(app.flash, None, "{phase:?} {stage:?}");
+                assert_eq!(app.cache_stale_age_secs, Some(180), "{phase:?} {stage:?}");
+                assert_eq!(app.ticket_sync_stage, stage, "{phase:?} {stage:?}");
+            }
+        }
+    }
+
+    /// The app as a manual refresh (`r`, or after creating tickets) leaves it.
+    fn app_refreshing_by_hand(epics_refreshing: bool) -> (App, u64) {
+        let mut app = my_work_app(&[("DEMO-1", "In Progress")]);
+        app.cache_stale_age_secs = Some(180);
+        app.epics_refreshing = epics_refreshing;
+        app.loading = true;
+        app.ticket_sync_stage = None;
+        let request = send_refresh(&mut app);
+        (app, request)
+    }
+
+    #[test]
+    fn a_manual_read_is_applied_saved_and_refreshes_the_epics_unless_already_refreshing() {
+        for epics_refreshing in [false, true] {
+            let (mut app, request) = app_refreshing_by_hand(epics_refreshing);
+
+            let follow_up = app.apply_cache_refresh(
+                CacheRefreshPhase::Manual,
+                request,
+                app.moves.now(),
+                Ok(my_work_cache(&[("DEMO-2", "To Do")])),
+            );
+
+            assert_eq!(
+                follow_up,
+                RefreshFollowUp {
+                    prefetch_details: true,
+                    save_snapshot: true,
+                    refresh_epics: !epics_refreshing,
+                    ..RefreshFollowUp::default()
+                }
+            );
+            assert!(app.epics_refreshing);
+            assert!(!app.loading);
+            assert_eq!(my_work_keys(&app), ["DEMO-2"]);
+            assert_eq!(app.cache_stale_age_secs, None);
+            assert_eq!(app.ticket_sync_stage, None);
+        }
+        let (mut app, _) = app_refreshing_by_hand(false);
+        app.snapshot_saved(CacheRefreshPhase::Manual, Ok(()));
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("Refreshed! Syncing epic relationships...")
+        );
+        app.snapshot_saved(CacheRefreshPhase::Manual, Err("disk full".into()));
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("Refreshed (cache save failed: disk full)")
+        );
+    }
+
+    #[test]
+    fn a_failed_manual_read_stops_loading_and_keeps_the_lists() {
+        let (mut app, request) = app_refreshing_by_hand(false);
+
+        let follow_up = app.apply_cache_refresh(
+            CacheRefreshPhase::Manual,
+            request,
+            app.moves.now(),
+            Err("boom".into()),
+        );
+
+        assert_eq!(follow_up, RefreshFollowUp::default());
+        assert!(!app.loading);
+        assert!(!app.epics_refreshing);
+        assert_eq!(my_work_keys(&app), ["DEMO-1"]);
+        assert_eq!(app.cache_stale_age_secs, Some(180));
+        assert_eq!(app.flash.as_deref(), Some("Refresh failed: boom"));
+    }
+
+    #[test]
+    fn startup_from_a_snapshot_reads_active_then_full_then_stops_folding() {
+        let (mut app, request) = app_refreshing_a_snapshot();
+        let active = app.apply_cache_refresh(
+            CacheRefreshPhase::ActiveOnly,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[("DEMO-1", "In Progress")])),
+        );
+        assert_eq!(active.next_phase, Some(CacheRefreshPhase::Full));
+
+        let request = send_refresh(&mut app);
+        let full = app.apply_cache_refresh(
+            CacheRefreshPhase::Full,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[
+                ("DEMO-1", "In Progress"),
+                ("DEMO-2", "Closed"),
+            ])),
+        );
+        assert_eq!(full.next_phase, None);
+        assert!(full.save_snapshot);
+        assert!(app.is_collapsed(Tab::MyWork, "Closed"));
+        assert_eq!(app.ticket_sync_stage, None);
+        assert_eq!(app.cache_stale_age_secs, None);
+
+        // Resolved mid-session: a done group that first appears after the full read shows open.
+        let request = send_refresh(&mut app);
+        app.apply_cache_refresh(
+            CacheRefreshPhase::Manual,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[
+                ("DEMO-1", "Resolved"),
+                ("DEMO-2", "Closed"),
+            ])),
+        );
+        assert!(!app.is_collapsed(Tab::MyWork, "Resolved"));
+        assert!(app.is_collapsed(Tab::MyWork, "Closed"));
+    }
+
+    #[test]
+    fn first_run_folds_the_done_groups_of_a_manual_read_after_the_full_read_fails() {
+        // No snapshot: startup applies the active-only read itself, then sends the full read.
+        let mut app = App::new();
+        app.replace_cache(my_work_cache(&[("DEMO-1", "In Progress")]), app.moves.now());
+        app.loading = false;
+        app.ticket_sync_stage = Some(TicketSyncStage::Full);
+        let request = send_refresh(&mut app);
+
+        let full = app.apply_cache_refresh(
+            CacheRefreshPhase::Full,
+            request,
+            app.moves.now(),
+            Err("boom".into()),
+        );
+        assert_eq!(full, RefreshFollowUp::default());
+        assert_eq!(app.ticket_sync_stage, None);
+
+        app.loading = true;
+        let request = send_refresh(&mut app);
+        let manual = app.apply_cache_refresh(
+            CacheRefreshPhase::Manual,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[
+                ("DEMO-1", "In Progress"),
+                ("DEMO-2", "Closed"),
+            ])),
+        );
+        assert!(manual.save_snapshot);
+        assert!(!app.loading);
+        assert!(app.is_collapsed(Tab::MyWork, "Closed"));
+
+        let request = send_refresh(&mut app);
+        app.apply_cache_refresh(
+            CacheRefreshPhase::Manual,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[
+                ("DEMO-1", "Resolved"),
+                ("DEMO-2", "Closed"),
+            ])),
+        );
+        assert!(!app.is_collapsed(Tab::MyWork, "Resolved"));
+        assert!(app.is_collapsed(Tab::MyWork, "Closed"));
     }
 }

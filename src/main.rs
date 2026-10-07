@@ -46,16 +46,9 @@ use crate::config::AppConfig;
 use crate::jira_rest::describe;
 use crate::move_picker::JiraCall;
 use app::{
-    App, BulkUploadPreview, BulkUploadState, BulkUploadSummary, DetailMode, FilterFocus, Tab,
-    TicketSyncStage,
+    App, BulkUploadPreview, BulkUploadState, BulkUploadSummary, CacheRefreshPhase, DetailMode,
+    FilterFocus, Tab, TicketSyncStage,
 };
-
-#[derive(Debug, Clone, Copy)]
-enum CacheRefreshPhase {
-    ActiveOnly,
-    Full,
-    Manual,
-}
 
 /// Results of background work. `requested_at` is `app.moves.now()` when a Jira read was
 /// requested, so a read that predates a confirmed move can't undo it.
@@ -515,82 +508,21 @@ async fn main() -> Result<()> {
                     requested_at,
                     result,
                 } => {
-                    if request != app.cache_refresh_request {
-                        continue;
+                    let follow_up = app.apply_cache_refresh(phase, request, requested_at, result);
+                    if follow_up.prefetch_details {
+                        queue_detail_prefetch(&mut app, &bg_tx);
                     }
-                    match (phase, result) {
-                        (CacheRefreshPhase::ActiveOnly, Ok(cache))
-                            if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
-                        {
-                            app.replace_cache(cache, requested_at);
-                            app.cache_stale_age_secs = None;
-                            app.ticket_sync_stage = Some(TicketSyncStage::Full);
-                            app.clamp_selection();
-                            queue_detail_prefetch(&mut app, &bg_tx);
-                            app.flash = Some(
-                                "Active tickets refreshed. Syncing recently done...".to_string(),
-                            );
-                            spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::Full, &config);
-                        }
-                        (CacheRefreshPhase::ActiveOnly, Err(e))
-                            if app.ticket_sync_stage == Some(TicketSyncStage::ActiveOnly) =>
-                        {
-                            app.ticket_sync_stage = Some(TicketSyncStage::Full);
-                            app.flash = Some(format!(
-                                "Active refresh failed ({}). Trying full refresh...",
-                                e
-                            ));
-                            spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::Full, &config);
-                        }
-                        (CacheRefreshPhase::Full, Ok(cache))
-                            if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
-                        {
-                            app.replace_cache_full_scope(cache, requested_at);
-                            app.cache_stale_age_secs = None;
-                            app.ticket_sync_stage = None;
-                            app.clamp_selection();
-                            queue_detail_prefetch(&mut app, &bg_tx);
-                            if let Err(e) = local_cache::save_full_cache_snapshot(
-                                &config.jira.project,
-                                &app.cache,
-                            ) {
-                                app.flash = Some(format!("Cache snapshot write failed: {}", e));
-                            } else {
-                                app.flash = Some("Ticket cache is up to date".to_string());
-                            }
-                        }
-                        (CacheRefreshPhase::Full, Err(e))
-                            if app.ticket_sync_stage == Some(TicketSyncStage::Full) =>
-                        {
-                            app.ticket_sync_stage = None;
-                            app.flash = Some(format!("Full refresh failed: {}", e));
-                        }
-                        (CacheRefreshPhase::Manual, Ok(cache)) => {
-                            app.loading = false;
-                            app.replace_cache_full_scope(cache, requested_at);
-                            app.cache_stale_age_secs = None;
-                            app.ticket_sync_stage = None;
-                            app.clamp_selection();
-                            queue_detail_prefetch(&mut app, &bg_tx);
-                            if let Err(e) = local_cache::save_full_cache_snapshot(
-                                &config.jira.project,
-                                &app.cache,
-                            ) {
-                                app.flash = Some(format!("Refreshed (cache save failed: {})", e));
-                            } else {
-                                app.flash =
-                                    Some("Refreshed! Syncing epic relationships...".to_string());
-                            }
-                            if !app.epics_refreshing {
-                                app.epics_refreshing = true;
-                                spawn_epics_refresh(&mut app, &bg_tx, &config);
-                            }
-                        }
-                        (CacheRefreshPhase::Manual, Err(e)) => {
-                            app.loading = false;
-                            app.flash = Some(format!("Refresh failed: {}", e));
-                        }
-                        _ => {}
+                    if follow_up.save_snapshot {
+                        let saved =
+                            local_cache::save_full_cache_snapshot(&config.jira.project, &app.cache)
+                                .map_err(|e| e.to_string());
+                        app.snapshot_saved(phase, saved);
+                    }
+                    if let Some(next) = follow_up.next_phase {
+                        spawn_cache_refresh(&mut app, &bg_tx, next, &config);
+                    }
+                    if follow_up.refresh_epics {
+                        spawn_epics_refresh(&mut app, &bg_tx, &config);
                     }
                 }
                 BackgroundMessage::TicketDetailFetched {
