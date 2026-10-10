@@ -7,6 +7,7 @@ use ratatui::widgets::{Clear, Paragraph, Wrap};
 use crate::app::App;
 use crate::bulk_actions::{BulkAction, BulkState, BulkSummary, BulkTarget};
 use crate::bulk_plan;
+use crate::cache::Status;
 use crate::mouse::Target;
 use crate::views::common::{panel, status_color};
 
@@ -154,6 +155,12 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             ("Enter", "next"),
             ("Esc", "cancel"),
         ],
+        BulkState::MoveStatusPicker { .. } => &[
+            ("j/k", "choose"),
+            ("Enter", "next"),
+            ("p/w/n/t/v/b/c", "pick by status"),
+            ("Esc", "cancel"),
+        ],
         BulkState::MoveLoading { .. } => &[("Esc", "cancel")],
         BulkState::Confirm { .. } => &[("Enter", "run"), ("y", "run"), ("Esc", "cancel")],
         BulkState::Running { .. } => &[("Esc", "close")],
@@ -189,7 +196,17 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                 lines.push(hint("Jira offers no transitions for these tickets."));
             }
             for (i, (destination, count)) in destinations.iter().enumerate() {
-                let label = format!("{} ({} of {} tickets)", destination, count, targets.len());
+                let shortcut = match Status::from_str(destination) {
+                    Status::Other(_) => "    ".to_string(),
+                    status => format!("[{}] ", status.move_shortcut()),
+                };
+                let label = format!(
+                    "{}{} ({} of {} tickets)",
+                    shortcut,
+                    destination,
+                    count,
+                    targets.len()
+                );
                 choices.push((lines.len(), i));
                 render_option(
                     &mut lines,

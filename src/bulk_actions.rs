@@ -3,6 +3,7 @@
 
 use crate::app::App;
 use crate::bulk_plan::{self, BulkPlan, FetchedTransitions};
+use crate::cache::Status;
 use crossterm::event::KeyCode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +209,34 @@ pub fn receive_transitions(app: &mut App, request: u64, fetched: FetchedTransiti
     }
 }
 
+/// Moves on from the status picker with `destination`: to the resolution picker when the move
+/// has resolutions to choose from, else to the confirmation.
+fn choose_destination(
+    app: &mut App,
+    targets: Vec<String>,
+    fetched: &FetchedTransitions,
+    destination: String,
+) {
+    let plan = bulk_plan::plan_move(app, fetched, &destination);
+    app.bulk_state = Some(if plan.resolution_choices().iter().any(Option::is_some) {
+        BulkState::MoveResolutionPicker {
+            targets,
+            destination,
+            plan,
+            selected: 0,
+        }
+    } else {
+        BulkState::Confirm {
+            targets,
+            target: BulkTarget::Move {
+                destination,
+                resolution: None,
+            },
+            plan: plan.with_resolution(None),
+        }
+    });
+}
+
 pub fn handle_key(app: &mut App, key: KeyCode) -> Option<BulkCall> {
     let state = app.bulk_state.clone()?;
     match state {
@@ -258,25 +287,38 @@ pub fn handle_key(app: &mut App, key: KeyCode) -> Option<BulkCall> {
                 KeyCode::Esc => app.bulk_state = None,
                 KeyCode::Enter => {
                     let (destination, _) = destinations.into_iter().nth(selected)?;
-                    let plan = bulk_plan::plan_move(app, &fetched, &destination);
-                    app.bulk_state =
-                        Some(if plan.resolution_choices().iter().any(Option::is_some) {
-                            BulkState::MoveResolutionPicker {
+                    choose_destination(app, targets, &fetched, destination);
+                }
+                KeyCode::Char(c) if Status::from_move_shortcut(c).is_some() => {
+                    let status = Status::from_move_shortcut(c)?;
+                    let matching: Vec<usize> = (0..destinations.len())
+                        .filter(|&i| Status::from_str(&destinations[i].0) == status)
+                        .collect();
+                    match matching.as_slice() {
+                        [] => {
+                            app.flash = Some(format!("No ticket can move to {}", status.as_str()))
+                        }
+                        [only] => {
+                            let destination = destinations[*only].0.clone();
+                            choose_destination(app, targets, &fetched, destination);
+                        }
+                        // Several statuses read as this one: each press selects the next.
+                        _ => {
+                            let next = matching
+                                .iter()
+                                .find(|&&i| i > selected)
+                                .unwrap_or(&matching[0]);
+                            app.flash = Some(format!(
+                                "Several statuses match {}. Press Enter to pick one.",
+                                status.as_str()
+                            ));
+                            app.bulk_state = Some(BulkState::MoveStatusPicker {
                                 targets,
-                                destination,
-                                plan,
-                                selected: 0,
-                            }
-                        } else {
-                            BulkState::Confirm {
-                                targets,
-                                target: BulkTarget::Move {
-                                    destination,
-                                    resolution: None,
-                                },
-                                plan: plan.with_resolution(None),
-                            }
-                        });
+                                fetched,
+                                selected: *next,
+                            });
+                        }
+                    }
                 }
                 _ => {
                     app.bulk_state = Some(BulkState::MoveStatusPicker {
@@ -598,6 +640,54 @@ mod tests {
         assert_eq!(app.find_ticket("DEMO-1").unwrap().status, "Done");
         assert_eq!(app.find_ticket("DEMO-2").unwrap().status, "In Progress");
         assert!(matches!(app.bulk_state, Some(BulkState::Result { .. })));
+    }
+
+    #[test]
+    fn bulk_move_status_shortcuts_pick_a_destination() {
+        use crate::transitions::tests::transition;
+
+        let mut app = App::new();
+        app.cache.my_tickets = vec![ticket("DEMO-1", "A", "In Progress")];
+        app.select_all_visible_tickets();
+        open(&mut app);
+        let Some(BulkCall::FetchTransitions { request, .. }) = handle_key(&mut app, KeyCode::Enter)
+        else {
+            panic!("opening a bulk move should request transitions");
+        };
+        receive_transitions(
+            &mut app,
+            request,
+            vec![(
+                "DEMO-1".to_string(),
+                Ok(vec![
+                    transition("1", "Closed", "Closed"),
+                    transition("2", "Done", "Done"),
+                    transition("3", "Stop Progress", "Open"),
+                ]),
+            )],
+        );
+        let selected = |app: &App| match &app.bulk_state {
+            Some(BulkState::MoveStatusPicker { selected, .. }) => Some(*selected),
+            _ => None,
+        };
+
+        handle_key(&mut app, KeyCode::Char('v'));
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("No ticket can move to In Review")
+        );
+        // Closed and Done both read as Closed: each press selects the next.
+        handle_key(&mut app, KeyCode::Char('c'));
+        assert_eq!(selected(&app), Some(1));
+        handle_key(&mut app, KeyCode::Char('c'));
+        assert_eq!(selected(&app), Some(0));
+        // Only Open reads as To Do, so t goes straight to the confirmation.
+        handle_key(&mut app, KeyCode::Char('t'));
+        assert!(matches!(
+            app.bulk_state,
+            Some(BulkState::Confirm { target: BulkTarget::Move { ref destination, .. }, .. })
+                if destination == "Open"
+        ));
     }
 
     #[test]
