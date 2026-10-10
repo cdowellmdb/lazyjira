@@ -2196,7 +2196,7 @@ mod tests {
         use ratatui::{backend::TestBackend, Terminal};
         let config = sample_config();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        for (width, height) in [(160, 55), (80, 24), (40, 18), (8, 4)] {
+        for (width, height) in [(160, 55), (80, 24), (80, 20), (40, 18), (8, 4)] {
             let mut app = App::new();
             app.loading = false;
             handle_main_keys(
@@ -2207,14 +2207,14 @@ mod tests {
                 &config,
             )
             .await;
-            for modal in ["Create", "Comment", "Preferences"] {
+            for modal in ["Create", "Comment", "Settings"] {
                 if modal == "Comment" {
                     app.create_ticket = None;
                     app.comment_state = Some(app::CommentState {
                         ticket_key: "DEMO-1".into(),
                         body: widgets::form::editor("First line\nSecond line"),
                     });
-                } else if modal == "Preferences" {
+                } else if modal == "Settings" {
                     app.comment_state = None;
                     app.settings = Some(settings::Settings::new(&config));
                 }
@@ -2229,11 +2229,11 @@ mod tests {
                         .map(|cell| cell.symbol())
                         .collect();
                     assert!(
-                        text.contains("[Cancel]"),
+                        text.contains(" Cancel "),
                         "{modal} at {width}x{height}: {text}"
                     );
                     assert!(
-                        text.contains("[Editor]"),
+                        text.contains(" Editor "),
                         "{modal} at {width}x{height}: {text}"
                     );
                 }

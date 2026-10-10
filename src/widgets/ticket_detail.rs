@@ -686,11 +686,7 @@ fn render_move_picker(
     }
     for (i, transition) in rows.iter().enumerate() {
         choices.push((lines.len(), i));
-        let destination = Status::from_str(&transition.to_name);
-        let shortcut = match destination {
-            Status::Other(_) => "    ".to_string(),
-            ref status => format!("[{}] ", status.move_shortcut()),
-        };
+        let shortcut = Status::move_shortcut_prefix(&transition.to_name);
         let prefix = if i == picker.selected { "› " } else { "  " };
         lines.push(Line::from(Span::styled(
             format!(
@@ -733,7 +729,7 @@ fn render_move_picker(
                     "select"
                 },
             ),
-            ("p/w/n/t/v/b/c", "pick by status"),
+            (crate::cache::MOVE_SHORTCUTS, "pick by status"),
             ("Shift+key", "move now"),
             ("Esc", "cancel"),
         ],
@@ -859,7 +855,7 @@ mod tests {
                 let y = row(&lines, "[×]");
                 let x = lines[y].split_once("[×]").unwrap().0.chars().count();
                 assert!(x < width as usize / 4 && y < height as usize / 4);
-                assert!(!lines.iter().any(|line| line.contains("[Close]")));
+                assert!(!lines.iter().any(|line| line.contains(" Close ")));
                 for kind in [
                     crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
                     crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),

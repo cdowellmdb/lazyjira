@@ -127,7 +127,7 @@ pub fn handle_key(
                     app.theme = theme::resolve(&config.preferences.theme, &config.themes);
                     app.set_epics_i_care_about(config.epics_i_care_about_ordered());
                     app.settings = None;
-                    app.flash = Some("Preferences saved. Refreshing team...".into());
+                    app.flash = Some("Settings saved. Refreshing team...".into());
                     return true;
                 }
                 Err(error) => app.flash = Some(error.to_string()),
@@ -165,12 +165,13 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let Some(state) = &app.settings else {
         return;
     };
-    let inner = form::render_modal_frame(f, app, "Preferences", 85, 90);
+    let inner = form::render_modal_frame(f, app, "Settings", 85, 90);
     let areas = Layout::vertical([
         Constraint::Min(5),
         Constraint::Length(3),
         Constraint::Length(5),
         Constraint::Length(4),
+        Constraint::Length(1),
         Constraint::Length(1),
     ])
     .split(inner);
@@ -217,10 +218,16 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         "",
     );
     form::render_choices(f, app, theme, (4, "Theme"), &state.themes, state.theme, "");
+    f.render_widget(
+        ratatui::widgets::Paragraph::new(
+            "Tab: next field · ↑↓: choose · Ctrl+J: newline · Enter: save",
+        ),
+        areas[4],
+    );
     form::buttons(
         f,
         app,
-        areas[4],
+        areas[5],
         &[
             ("Save", KeyCode::Enter),
             ("Cancel", KeyCode::Esc),
@@ -274,7 +281,7 @@ mod tests {
             }
             let buffer = draw(&app, &config);
             let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
-            for shown in ["Hide", "Show", "› My Work", "› mine", "[Save]"] {
+            for shown in ["Hide", "Show", "› My Work", "› mine", " Save "] {
                 assert!(text.contains(shown), "{shown} isn't shown at 80x24");
             }
             assert!(buffer.content.iter().any(|cell| cell.fg == Color::Red));

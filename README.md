@@ -4,7 +4,7 @@ A fast terminal UI for Jira, with keyboard and mouse controls for daily triage a
 
 lazyjira reads tickets and moves them through Jira's REST API, using the [`jira` CLI](https://github.com/ankitpokhrel/jira-cli)'s config and your `JIRA_API_TOKEN`; creating tickets, commenting, assigning and editing fields go through the `jira` CLI itself. It opens instantly from a local cache, and refreshes in the background. See [Limitations](#limitations) for workflow and platform requirements.
 
-![lazyjira showing ticket detail with a close control, live preferences, searchable ticket creation, and the five workspace tabs](docs/images/demo.gif)
+![lazyjira showing ticket detail with a close control, live settings, searchable ticket creation, and the five workspace tabs](docs/images/demo.gif)
 
 ## Features
 
@@ -32,7 +32,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 - Click into form fields and buttons; scroll lists and details with the wheel
 - Drag across text to select it, then copy with `Ctrl+C`
 - Edit in `$EDITOR`, paste multiple lines, and filter pickers by typing
-- Preferences (teammates, pinned epics, Done visibility, starting tab, theme) apply without a restart
+- Settings (teammates, pinned epics, Done visibility, starting tab, theme) apply without a restart
 - Built-in color themes, previewed live as you pick, plus your own in `config.toml`
 
 ## Requirements
@@ -90,7 +90,7 @@ Press `S` or click **Settings** to manage teammates, pinned epics, Done visibili
 
 ## Configuration
 
-Config lives at `~/.config/lazyjira/config.toml`. lazyjira reads it at startup, so edit it by hand only while lazyjira isn't running. Changes made in the app (preferences with `S`, saved filters, the `d` toggle) apply right away and are saved to this file. Saving rewrites the whole file, so any comments you added are lost.
+Config lives at `~/.config/lazyjira/config.toml`. lazyjira reads it at startup, so edit it by hand only while lazyjira isn't running. Changes made in the app (settings with `S`, saved filters, the `d` toggle) apply right away and are saved to this file. Saving rewrites the whole file, so any comments you added are lost.
 
 ```toml
 [jira]
@@ -141,18 +141,18 @@ accent = "#4fd1c5"
 
 ### Themes
 
-![Picking a theme in preferences, previewed live, then the Nord theme in My Work, ticket detail, and Team](docs/images/themes.gif)
+![Picking a theme in settings, previewed live, then the Nord theme in My Work, ticket detail, and Team](docs/images/themes.gif)
 
-Pick a theme from the **Theme** list in preferences (`S`), next to **Starting tab**. The app recolors as you move through the list, so you see each theme before choosing it; **Save** keeps it and **Cancel** goes back. The `default` theme uses your terminal's own colors. The other presets set their own background and need a terminal with true color.
+Pick a theme from the **Theme** list in settings (`S`), next to **Starting tab**. The app recolors as you move through the list, so you see each theme before choosing it; **Save** keeps it and **Cancel** goes back. The `default` theme uses your terminal's own colors. The other presets set their own background and need a terminal with true color.
 
-To make your own, add a `[themes.<name>]` table and pick it in preferences. Each role takes a hex color (`"#4fd1c5"`) or a color name (`"red"`, `"light-blue"`). Roles you leave out keep your terminal's color. A misspelled role is an error: lazyjira stops at startup with `Failed to parse config.toml`. A custom theme named after a preset replaces the whole preset, so copy the preset's colors from [`src/theme.rs`](src/theme.rs) if you only want to change a few.
+To make your own, add a `[themes.<name>]` table and pick it in settings. Each role takes a hex color (`"#4fd1c5"`) or a color name (`"red"`, `"light-blue"`). Roles you leave out keep your terminal's color. A misspelled role is an error: lazyjira stops at startup with `Failed to parse config.toml`. A custom theme named after a preset replaces the whole preset, so copy the preset's colors from [`src/theme.rs`](src/theme.rs) if you only want to change a few.
 
 | Role | Used for |
 |------|----------|
-| `background` | Behind everything |
+| `background` | Behind everything, and the text on buttons |
 | `text` | Regular text |
 | `muted` | Borders, separators, hints |
-| `subtle` | Secondary text on the selected row |
+| `subtle` | Secondary text on the selected row, and behind buttons |
 | `selection` | Behind the selected row |
 | `accent` | Keys, focused fields, links, In Review |
 | `highlight` | Headers, the chosen option, In Progress |
@@ -178,7 +178,7 @@ To make your own, add a `[themes.<name>]` table and pick it in preferences. Each
 | `B` | Open bulk action menu (move/assign) |
 | `U` | Open bulk CSV upload |
 | `c` | Create ticket (not on Filters) |
-| `S` | Preferences: teammates, pinned epics, Done visibility, starting tab, theme |
+| `S` | Settings: teammates, pinned epics, Done visibility, starting tab, theme |
 | `z/Z` | Fold the current group, or a parent's sub-tasks when a parent or one of its sub-tasks is selected / fold all groups |
 | `d` | Toggle visibility of done statuses (`statuses.done`); not on Filters |
 | `f/F` | Focus the next / previous status in My Work or Team, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that) |
@@ -206,7 +206,7 @@ Drag across visible text in lists, ticket details, or form fields to select it. 
 
 Create tickets with a type (Task, Bug, or Story), summary, assignee, epic, labels, and description. Edit the summary, labels, and description with `e` in ticket detail. Text fields support arrow keys, Home/End, Delete/Backspace, and paste. Comments and descriptions accept multiline paste; `Shift+Enter` or `Ctrl+J` inserts a newline, and `Enter` submits.
 
-`Ctrl+E`, `F4`, or the **Editor** button opens the focused text field in `$VISUAL`, then `$EDITOR`, then `vi`. Returning from the editor brings the text back into the form for review before submission. In preferences, use one `Name = email` line per teammate and comma-separated epic keys; an empty epic list shows all epics.
+`Ctrl+E`, `F4`, or the **Editor** button opens the focused text field in `$VISUAL`, then `$EDITOR`, then `vi`. Returning from the editor brings the text back into the form for review before submission. In settings, Enter saves, so use `Ctrl+J` for a new line; use one `Name = email` line per teammate and comma-separated epic keys; an empty epic list shows all epics.
 
 ### Detail view
 
@@ -237,7 +237,7 @@ A resolution is asked for only when the chosen transition has a resolution field
 
 The ticket keeps its status until Jira confirms the move; the status bar shows the move as pending in the meantime. If Jira rejects the move, its error stays on screen until you press `Enter` or `Esc`, and `o` opens the ticket in your browser. A ticket can have only one move running at a time.
 
-A bulk move loads every selected ticket's transitions, then offers the statuses they can reach, with how many tickets can reach each. Each ticket uses its own transition to the chosen status. Tickets without one, with several different ones, or already in that status are skipped, and the summary lists each with the reason. If any of the transitions has a resolution field, you pick one resolution for all of them: tickets whose transition allows it get it, tickets where it's optional are moved without it, and tickets that require a different one are skipped.
+A bulk move loads every selected ticket's transitions, then offers the statuses they can reach, with how many tickets can reach each. The same `p/w/n/t/v/b/c` keys pick a status: one match goes straight to the resolution or confirmation step, and when several statuses match, the picker lists just those. Uppercase letters work like lowercase here: a bulk move always asks for confirmation. Each ticket uses its own transition to the chosen status. Tickets without one, with several different ones, or already in that status are skipped, and the summary lists each with the reason. If any of the transitions has a resolution field, you pick one resolution for all of them: tickets whose transition allows it get it, tickets where it's optional are moved without it, and tickets that require a different one are skipped.
 
 ### Filters tab
 

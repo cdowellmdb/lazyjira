@@ -33,7 +33,7 @@ const MAIN: &[(&str, &str)] = &[
     ("f / F", "Next / previous status focus"),
     ("", "Create & refresh"),
     ("c", "Create ticket"),
-    ("S", "Team, epic & startup preferences"),
+    ("S", "Settings: team, epics, startup & theme"),
     ("r", "Refresh tickets"),
 ];
 
@@ -56,7 +56,7 @@ const DETAIL: &[(&str, &str)] = &[
     ("Shift+Enter", "Newline (comments & descriptions)"),
     ("", "Move picker"),
     ("j/k · ↑/↓", "Choose transition"),
-    ("p/w/n/t/v/b/c", "Pick destination by status"),
+    (crate::cache::MOVE_SHORTCUTS, "Pick destination by status"),
     ("Shift+key", "Move immediately"),
     ("Enter / y", "Select / confirm move"),
     ("Esc", "Cancel / go back"),

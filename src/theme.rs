@@ -14,12 +14,12 @@ pub const DEFAULT: &str = "default";
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Theme {
-    /// Behind everything; unset keeps the terminal's background.
+    /// Behind everything, and the text on buttons; unset keeps the terminal's background.
     pub background: Option<Color>,
     pub text: Option<Color>,
     /// Borders, separators, hints.
     pub muted: Option<Color>,
-    /// Secondary text on the selected row.
+    /// Secondary text on the selected row, and behind buttons.
     pub subtle: Option<Color>,
     /// Behind the selected row.
     pub selection: Option<Color>,
@@ -152,7 +152,7 @@ impl Theme {
             Color::Green => self.success,
             Color::Blue | Color::LightBlue => self.info,
             Color::Magenta => self.special,
-            // Text drawn on an accent or info background.
+            // Text drawn on an accent, info or button background.
             Color::Black => self.background,
             _ => None,
         }
