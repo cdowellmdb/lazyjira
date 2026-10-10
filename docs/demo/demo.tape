@@ -45,7 +45,7 @@ Sleep 800ms
 Escape
 Sleep 800ms
 
-# Live preferences, including roster, pinned epics, and starting tab.
+# Live settings, including roster, pinned epics, and starting tab.
 Type "S"
 Sleep 2.5s
 Tab 2

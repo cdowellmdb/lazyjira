@@ -451,7 +451,21 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_email, StatusRules, Ticket};
+    use super::{normalize_email, Status, StatusRules, Ticket, MOVE_SHORTCUTS};
+
+    #[test]
+    fn the_move_shortcut_hint_lists_exactly_the_shortcut_keys() {
+        let listed: Vec<char> = MOVE_SHORTCUTS.split('/').flat_map(str::chars).collect();
+        let readable: Vec<char> = ('a'..='z')
+            .filter(|&c| Status::from_move_shortcut(c).is_some())
+            .collect();
+        let mut sorted = listed.clone();
+        sorted.sort();
+        assert_eq!(sorted, readable);
+        for c in listed {
+            assert_eq!(Status::from_move_shortcut(c).unwrap().move_shortcut(), c);
+        }
+    }
 
     #[test]
     fn a_name_is_made_from_the_local_part_of_an_email() {

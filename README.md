@@ -149,10 +149,10 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 
 | Role | Used for |
 |------|----------|
-| `background` | Behind everything |
+| `background` | Behind everything, and the text on buttons |
 | `text` | Regular text |
 | `muted` | Borders, separators, hints |
-| `subtle` | Secondary text on the selected row |
+| `subtle` | Secondary text on the selected row, and behind buttons |
 | `selection` | Behind the selected row |
 | `accent` | Keys, focused fields, links, In Review |
 | `highlight` | Headers, the chosen option, In Progress |

@@ -48,7 +48,7 @@ pub enum BulkState {
     },
     /// Waiting for Jira to list each target's transitions. Only the answer to `request` is used.
     MoveLoading { targets: Vec<String>, request: u64 },
-    /// Choosing a destination from `bulk_plan::destinations(&fetched)`.
+    /// Choosing a destination from `shown_destinations(&fetched, only_to)`.
     MoveStatusPicker {
         targets: Vec<String>,
         fetched: crate::bulk_plan::FetchedTransitions,
@@ -237,7 +237,7 @@ fn status_shortcut(
         1 => choose_destination(app, targets, &fetched, matching.remove(0).0),
         _ => {
             app.flash = Some(format!(
-                "Several statuses lead to {}. Pick one.",
+                "Several statuses match {}. Pick one.",
                 status.as_str()
             ));
             app.bulk_state = Some(BulkState::MoveStatusPicker {
