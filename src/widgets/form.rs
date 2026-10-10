@@ -2,7 +2,7 @@ use crate::mouse::Target;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use tui_textarea::{CursorMove, TextArea};
 
@@ -221,16 +221,35 @@ pub fn buttons(
 ) {
     let mut x = area.x;
     for (label, key) in buttons {
-        let label = format!("[{label}]");
-        let width = (label.len() as u16).min(area.right().saturating_sub(x));
+        let width = (label.chars().count() as u16 + 2).min(area.right().saturating_sub(x));
         if width == 0 || area.height == 0 {
             break;
         }
         let rect = Rect::new(x, area.y, width, 1);
-        f.render_widget(
-            Paragraph::new(label).style(Style::default().fg(Color::Cyan)),
-            rect,
-        );
+        // A filled block, with its shortcut letter underlined when the label has it.
+        let style = Style::default()
+            .fg(Color::Reset)
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD);
+        let accel = match key {
+            KeyCode::Char(c) => label.find(*c),
+            _ => None,
+        };
+        let line = match accel {
+            Some(i) => {
+                let end = i + label[i..].chars().next().map_or(0, char::len_utf8);
+                Line::from(vec![
+                    Span::styled(format!(" {}", &label[..i]), style),
+                    Span::styled(
+                        &label[i..end],
+                        style.fg(Color::Cyan).add_modifier(Modifier::UNDERLINED),
+                    ),
+                    Span::styled(format!("{} ", &label[end..]), style),
+                ])
+            }
+            None => Line::styled(format!(" {label} "), style),
+        };
+        f.render_widget(Paragraph::new(line), rect);
         app.mouse_targets
             .borrow_mut()
             .push((rect, Target::Key(*key)));

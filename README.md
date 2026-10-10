@@ -206,7 +206,7 @@ Drag across visible text in lists, ticket details, or form fields to select it. 
 
 Create tickets with a type (Task, Bug, or Story), summary, assignee, epic, labels, and description. Edit the summary, labels, and description with `e` in ticket detail. Text fields support arrow keys, Home/End, Delete/Backspace, and paste. Comments and descriptions accept multiline paste; `Shift+Enter` or `Ctrl+J` inserts a newline, and `Enter` submits.
 
-`Ctrl+E`, `F4`, or the **Editor** button opens the focused text field in `$VISUAL`, then `$EDITOR`, then `vi`. Returning from the editor brings the text back into the form for review before submission. In preferences, use one `Name = email` line per teammate and comma-separated epic keys; an empty epic list shows all epics.
+`Ctrl+E`, `F4`, or the **Editor** button opens the focused text field in `$VISUAL`, then `$EDITOR`, then `vi`. Returning from the editor brings the text back into the form for review before submission. In settings, Enter saves, so use `Shift+Enter` for a new line; use one `Name = email` line per teammate and comma-separated epic keys; an empty epic list shows all epics.
 
 ### Detail view
 
@@ -237,7 +237,7 @@ A resolution is asked for only when the chosen transition has a resolution field
 
 The ticket keeps its status until Jira confirms the move; the status bar shows the move as pending in the meantime. If Jira rejects the move, its error stays on screen until you press `Enter` or `Esc`, and `o` opens the ticket in your browser. A ticket can have only one move running at a time.
 
-A bulk move loads every selected ticket's transitions, then offers the statuses they can reach, with how many tickets can reach each. Each ticket uses its own transition to the chosen status. Tickets without one, with several different ones, or already in that status are skipped, and the summary lists each with the reason. If any of the transitions has a resolution field, you pick one resolution for all of them: tickets whose transition allows it get it, tickets where it's optional are moved without it, and tickets that require a different one are skipped.
+A bulk move loads every selected ticket's transitions, then offers the statuses they can reach, with how many tickets can reach each. The same `p/w/n/t/v/b/c` keys pick a status: one match goes straight to the resolution or confirmation step, and when several statuses match, each press selects the next. Each ticket uses its own transition to the chosen status. Tickets without one, with several different ones, or already in that status are skipped, and the summary lists each with the reason. If any of the transitions has a resolution field, you pick one resolution for all of them: tickets whose transition allows it get it, tickets where it's optional are moved without it, and tickets that require a different one are skipped.
 
 ### Filters tab
 

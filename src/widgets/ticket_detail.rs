@@ -859,7 +859,7 @@ mod tests {
                 let y = row(&lines, "[×]");
                 let x = lines[y].split_once("[×]").unwrap().0.chars().count();
                 assert!(x < width as usize / 4 && y < height as usize / 4);
-                assert!(!lines.iter().any(|line| line.contains("[Close]")));
+                assert!(!lines.iter().any(|line| line.contains(" Close ")));
                 for kind in [
                     crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
                     crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
