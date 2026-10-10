@@ -127,7 +127,7 @@ pub fn handle_key(
                     app.theme = theme::resolve(&config.preferences.theme, &config.themes);
                     app.set_epics_i_care_about(config.epics_i_care_about_ordered());
                     app.settings = None;
-                    app.flash = Some("Preferences saved. Refreshing team...".into());
+                    app.flash = Some("Settings saved. Refreshing team...".into());
                     return true;
                 }
                 Err(error) => app.flash = Some(error.to_string()),
@@ -220,7 +220,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     form::render_choices(f, app, theme, (4, "Theme"), &state.themes, state.theme, "");
     f.render_widget(
         ratatui::widgets::Paragraph::new(
-            "Tab: field · ↑↓: choose · Shift+Enter: newline · Enter: save",
+            "Tab: next field · ↑↓: choose · Ctrl+J: newline · Enter: save",
         ),
         areas[4],
     );

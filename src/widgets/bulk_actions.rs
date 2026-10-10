@@ -6,8 +6,7 @@ use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 use crate::app::App;
 use crate::bulk_actions::{BulkAction, BulkState, BulkSummary, BulkTarget};
-use crate::bulk_plan;
-use crate::cache::Status;
+use crate::cache::{Status, MOVE_SHORTCUTS};
 use crate::mouse::Target;
 use crate::views::common::{panel, status_color};
 
@@ -158,7 +157,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         BulkState::MoveStatusPicker { .. } => &[
             ("j/k", "choose"),
             ("Enter", "next"),
-            ("p/w/n/t/v/b/c", "pick by status"),
+            (MOVE_SHORTCUTS, "pick by status"),
             ("Esc", "cancel"),
         ],
         BulkState::MoveLoading { .. } => &[("Esc", "cancel")],
@@ -187,24 +186,19 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         BulkState::MoveStatusPicker {
             targets,
             fetched,
+            only_to,
             selected,
         } => {
             lines.push(Line::from(format!("Tickets: {}", targets.len())));
             lines.push(Line::from(""));
-            let destinations = bulk_plan::destinations(fetched);
+            let destinations = crate::bulk_actions::shown_destinations(fetched, only_to.as_ref());
             if destinations.is_empty() {
                 lines.push(hint("Jira offers no transitions for these tickets."));
             }
             for (i, (destination, count)) in destinations.iter().enumerate() {
-                let shortcut = match Status::from_str(destination) {
-                    Status::Other(_) => "    ".to_string(),
-                    status => format!("[{}] ", status.move_shortcut()),
-                };
                 let label = format!(
-                    "{}{} ({} of {} tickets)",
-                    shortcut,
-                    destination,
-                    count,
+                    "{}{destination} ({count} of {} tickets)",
+                    Status::move_shortcut_prefix(destination),
                     targets.len()
                 );
                 choices.push((lines.len(), i));

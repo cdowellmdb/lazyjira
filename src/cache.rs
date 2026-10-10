@@ -17,6 +17,9 @@ pub enum Status {
     Other(String),
 }
 
+/// The keys `Status::from_move_shortcut` reads, as the move pickers' hints list them.
+pub const MOVE_SHORTCUTS: &str = "p/w/n/t/v/b/c";
+
 impl Status {
     pub fn as_str(&self) -> &str {
         match self {
@@ -54,6 +57,15 @@ impl Status {
             Status::Blocked => 'b',
             Status::Closed => 'c',
             Status::Other(_) => '?',
+        }
+    }
+
+    /// The move pickers' "[p] " before a destination called `name`, or as many spaces when no
+    /// shortcut leads there.
+    pub fn move_shortcut_prefix(name: &str) -> String {
+        match Status::from_str(name) {
+            Status::Other(_) => "    ".to_string(),
+            status => format!("[{}] ", status.move_shortcut()),
         }
     }
 

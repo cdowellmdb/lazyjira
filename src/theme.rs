@@ -152,7 +152,7 @@ impl Theme {
             Color::Green => self.success,
             Color::Blue | Color::LightBlue => self.info,
             Color::Magenta => self.special,
-            // Text drawn on an accent or info background.
+            // Text drawn on an accent, info or button background.
             Color::Black => self.background,
             _ => None,
         }

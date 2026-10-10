@@ -2196,7 +2196,7 @@ mod tests {
         use ratatui::{backend::TestBackend, Terminal};
         let config = sample_config();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        for (width, height) in [(160, 55), (80, 24), (40, 18), (8, 4)] {
+        for (width, height) in [(160, 55), (80, 24), (80, 20), (40, 18), (8, 4)] {
             let mut app = App::new();
             app.loading = false;
             handle_main_keys(

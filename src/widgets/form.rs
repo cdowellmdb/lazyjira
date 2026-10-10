@@ -5,6 +5,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use tui_textarea::{CursorMove, TextArea};
+use unicode_width::UnicodeWidthStr;
 
 use crate::views::common::panel;
 
@@ -219,31 +220,30 @@ pub fn buttons(
     area: Rect,
     buttons: &[(&str, KeyCode)],
 ) {
+    // A filled block, with its shortcut letter (in either case) underlined when the label has it.
+    let style = Style::default()
+        .fg(Color::Black)
+        .bg(Color::Gray)
+        .add_modifier(Modifier::BOLD);
     let mut x = area.x;
     for (label, key) in buttons {
-        let width = (label.chars().count() as u16 + 2).min(area.right().saturating_sub(x));
+        let width = (label.width() as u16 + 2).min(area.right().saturating_sub(x));
         if width == 0 || area.height == 0 {
             break;
         }
         let rect = Rect::new(x, area.y, width, 1);
-        // A filled block, with its shortcut letter underlined when the label has it.
-        let style = Style::default()
-            .fg(Color::Reset)
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD);
-        let accel = match key {
-            KeyCode::Char(c) => label.find(*c),
+        let shortcut = match key {
+            KeyCode::Char(c) => label
+                .char_indices()
+                .find(|(_, l)| l.eq_ignore_ascii_case(c)),
             _ => None,
         };
-        let line = match accel {
-            Some(i) => {
-                let end = i + label[i..].chars().next().map_or(0, char::len_utf8);
+        let line = match shortcut {
+            Some((i, letter)) => {
+                let end = i + letter.len_utf8();
                 Line::from(vec![
                     Span::styled(format!(" {}", &label[..i]), style),
-                    Span::styled(
-                        &label[i..end],
-                        style.fg(Color::Cyan).add_modifier(Modifier::UNDERLINED),
-                    ),
+                    Span::styled(&label[i..end], style.add_modifier(Modifier::UNDERLINED)),
                     Span::styled(format!("{} ", &label[end..]), style),
                 ])
             }
@@ -296,6 +296,35 @@ pub fn render_modal_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buttons_are_filled_blocks_sized_by_columns_with_their_letter_underlined() {
+        let app = crate::app::App::new();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(30, 1)).unwrap();
+        terminal
+            .draw(|f| {
+                buttons(
+                    f,
+                    &app,
+                    f.area(),
+                    &[("設定", KeyCode::Enter), ("Reload", KeyCode::Char('r'))],
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // "設定" is 4 columns wide: its button spans 6, then a 2-column gap.
+        assert_eq!(buffer[(5, 0)].bg, Color::Gray);
+        assert_eq!(buffer[(6, 0)].bg, Color::Reset);
+        assert_eq!(buffer[(8, 0)].bg, Color::Gray);
+        assert_eq!(buffer[(9, 0)].symbol(), "R");
+        assert_eq!(buffer[(9, 0)].fg, Color::Black);
+        assert!(buffer[(9, 0)].modifier.contains(Modifier::UNDERLINED));
+        assert!(!buffer[(10, 0)].modifier.contains(Modifier::UNDERLINED));
+        assert!(!buffer[(1, 0)].modifier.contains(Modifier::UNDERLINED));
+        let targets: Vec<Rect> = app.mouse_targets.borrow().iter().map(|(r, _)| *r).collect();
+        assert_eq!(targets, [Rect::new(0, 0, 6, 1), Rect::new(8, 0, 8, 1)]);
+    }
 
     #[test]
     fn editing_and_paste_work_in_the_middle_without_submitting() {

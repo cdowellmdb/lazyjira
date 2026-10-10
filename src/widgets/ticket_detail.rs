@@ -686,11 +686,7 @@ fn render_move_picker(
     }
     for (i, transition) in rows.iter().enumerate() {
         choices.push((lines.len(), i));
-        let destination = Status::from_str(&transition.to_name);
-        let shortcut = match destination {
-            Status::Other(_) => "    ".to_string(),
-            ref status => format!("[{}] ", status.move_shortcut()),
-        };
+        let shortcut = Status::move_shortcut_prefix(&transition.to_name);
         let prefix = if i == picker.selected { "› " } else { "  " };
         lines.push(Line::from(Span::styled(
             format!(
@@ -733,7 +729,7 @@ fn render_move_picker(
                     "select"
                 },
             ),
-            ("p/w/n/t/v/b/c", "pick by status"),
+            (crate::cache::MOVE_SHORTCUTS, "pick by status"),
             ("Shift+key", "move now"),
             ("Esc", "cancel"),
         ],
