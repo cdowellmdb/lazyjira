@@ -67,6 +67,8 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
     let ellipsis = &"..."[..max.min(3)];
     let room = max - ellipsis.len();
+    // ponytail: re-measures each prefix, quadratic in the cut length (a few thousand width
+    // lookups per cut cell); keep a running width if long lists ever redraw slowly.
     let end = s
         .char_indices()
         .map(|(at, c)| at + c.len_utf8())

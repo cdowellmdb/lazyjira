@@ -226,3 +226,23 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let widget = Paragraph::new(lines).block(panel()).scroll((scroll_y, 0));
     f.render_widget(widget, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn narrow_team_cuts_epic_then_labels_then_status_so_summary_keeps_14() {
+        // (status, summary, epic, labels) for a 20-column status.
+        let widths = |width| team_column_widths(Rect::new(0, 0, width, 10), 20);
+        assert_eq!(widths(117), (20, 15, 20, 18));
+        assert_eq!(widths(116), (20, 14, 20, 18));
+        assert_eq!(widths(115), (20, 14, 19, 18));
+        assert_eq!(widths(106), (20, 14, 10, 18));
+        assert_eq!(widths(105), (20, 14, 10, 17));
+        assert_eq!(widths(96), (20, 14, 10, 8));
+        assert_eq!(widths(95), (19, 14, 10, 8));
+        assert_eq!(widths(84), (8, 14, 10, 8));
+        assert_eq!(widths(83), (8, 13, 10, 8));
+    }
+}

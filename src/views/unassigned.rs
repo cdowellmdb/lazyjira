@@ -157,3 +157,18 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let widget = Paragraph::new(lines).block(panel()).scroll((scroll_y, 0));
     f.render_widget(widget, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn narrow_unassigned_cuts_status_to_8_so_summary_keeps_18() {
+        let widths = |width| ticket_column_widths(Rect::new(0, 0, width, 10), 20);
+        assert_eq!(widths(79), (20, 19));
+        assert_eq!(widths(78), (20, 18));
+        assert_eq!(widths(77), (19, 18));
+        assert_eq!(widths(66), (8, 18));
+        assert_eq!(widths(65), (8, 17));
+    }
+}
