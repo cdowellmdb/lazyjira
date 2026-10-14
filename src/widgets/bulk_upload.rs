@@ -3,19 +3,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, BulkUploadState};
+use crate::views::common::truncate;
 
 use super::form;
-
-fn truncate(input: &str, max: usize) -> String {
-    if input.chars().count() <= max {
-        return input.to_string();
-    }
-    input
-        .chars()
-        .take(max.saturating_sub(3))
-        .collect::<String>()
-        + "..."
-}
 
 fn preview_window(total: usize, selected: usize, max_rows: usize) -> (usize, usize) {
     if total <= max_rows {

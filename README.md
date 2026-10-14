@@ -13,11 +13,11 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 **Triage fast**
 - Step through tickets in the detail view with `←`/`→`, and press `z` for full screen
 - Fold status groups and a parent's sub-tasks; `f` focuses one status, `d` hides Done
-- Lists show what differs: each ticket's age, shared epics and labels named once, done groups folded
+- Lists show what differs: each ticket's age, shared epics and labels named once, done groups folded, status columns as wide as the longest status
 - Sub-tasks nest under their parent, or lead with its key when the parent is elsewhere
 - Opens instantly from a local cache, then refreshes from Jira without losing your place
 - Ticket detail renders Jira markup and shows comments; `h` lists them newest first
-- Epic progress bars, with an optional list of the epics you care about
+- Epic progress bars and each child's assignee, with an optional list of the epics you care about
 
 **Change tickets safely**
 - Create, comment on, assign, edit, and move tickets without leaving the terminal

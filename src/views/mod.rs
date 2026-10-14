@@ -130,7 +130,7 @@ mod tests {
     }
 
     /// Draws `tab` and returns each row's text and the foreground color of its first glyph.
-    fn draw(app: &App, tab: Tab, width: u16) -> Vec<(String, Color)> {
+    pub(super) fn draw(app: &App, tab: Tab, width: u16) -> Vec<(String, Color)> {
         let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
         terminal.draw(|frame| render_tab(frame, app, tab)).unwrap();
         let buffer = terminal.backend().buffer();
@@ -146,7 +146,10 @@ mod tests {
             .collect()
     }
 
-    fn line_with<'a>(rows: &'a [(String, Color)], text: &str) -> Option<&'a (String, Color)> {
+    pub(super) fn line_with<'a>(
+        rows: &'a [(String, Color)],
+        text: &str,
+    ) -> Option<&'a (String, Color)> {
         rows.iter().find(|(row, _)| row.contains(text))
     }
 
@@ -589,6 +592,81 @@ mod tests {
         let rows = rows_of(&app, Tab::MyWork);
         assert_eq!(column(&rows, "DEMO-3"), column(&rows, "DEMO-1"));
         assert!(rows[row(&rows, "DEMO-3")].contains("DEMO-1 › DEMO-3"));
+    }
+
+    /// The screen column `text` starts at in `row`, a line from `draw`: one symbol per cell, so a
+    /// wide character is followed by the blank cell it covers.
+    pub(super) fn column_of(row: &str, text: &str) -> usize {
+        let at = row
+            .find(text)
+            .unwrap_or_else(|| panic!("{text} not in {row}"));
+        row[..at].chars().count()
+    }
+
+    #[test]
+    fn a_long_or_wide_status_keeps_summaries_in_line_on_every_tab_with_a_status_column() {
+        let ticket = |key: &str, status: &str, email: &str| {
+            let mut ticket = Ticket::for_test(key, status);
+            ticket.summary = format!("Summary of {key}");
+            ticket.assignee_email = Some(email.into());
+            ticket
+        };
+        let tickets = |email: &str| {
+            vec![
+                ticket("DEMO-1", "Waiting for Approval", email),
+                ticket("DEMO-2", "In Progress", email),
+                ticket("DEMO-3", "承認待ち", email),
+            ]
+        };
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.team_members = vec![TeamMember {
+            name: "Alex".into(),
+            email: "alex@example.com".into(),
+        }];
+        app.cache.team_tickets = tickets("alex@example.com");
+        app.cache.team_tickets.extend(tickets("__unassigned__"));
+        app.filter_results = tickets("alex@example.com");
+        app.cache.epics = vec![Epic {
+            key: "EPIC-9".into(),
+            summary: "Epic".into(),
+            children: tickets("alex@example.com"),
+        }];
+        for tab in [Tab::Team, Tab::Unassigned, Tab::Filters, Tab::Epics] {
+            app.active_tab = tab;
+            app.mark_cache_changed();
+            let rows = draw(&app, tab, 160);
+            let columns: Vec<usize> = ["DEMO-1", "DEMO-2", "DEMO-3"]
+                .iter()
+                .map(|key| {
+                    column_of(
+                        &line_with(&rows, key).unwrap().0,
+                        &format!("Summary of {key}"),
+                    )
+                })
+                .collect();
+            assert!(
+                columns.iter().all(|&c| c == columns[0]),
+                "{tab:?}: {columns:?}"
+            );
+            let row = &line_with(&rows, "DEMO-1").unwrap().0;
+            assert!(row.contains("Waiting for Approval │"), "{tab:?}: {row}");
+        }
+
+        // Narrow, Status gives up columns so the row still ends inside the panel. Team's narrowest
+        // fit is 84 (its Epic and Labels keep their floors even while hidden), and Filters shares
+        // its width with the list of filters.
+        for (tab, width) in [(Tab::Team, 84), (Tab::Unassigned, 60), (Tab::Filters, 84)] {
+            app.active_tab = tab;
+            app.mark_cache_changed();
+            let rows = draw(&app, tab, width);
+            let row = &line_with(&rows, "DEMO-1").unwrap().0;
+            assert!(
+                row.contains("Wait") && !row.contains("Approval"),
+                "{tab:?}: {row}"
+            );
+            assert!(line_with(&rows, "UPDATED").is_some(), "{tab:?}: {rows:#?}");
+        }
     }
 
     /// Jira's `updated` for `secs` (Unix seconds), in UTC: Howard Hinnant's civil_from_days.

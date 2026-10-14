@@ -5,8 +5,9 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, FilterFocus};
 use crate::views::common::{
-    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, truncate, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
+    color_marks, fit, fold_indicator, group_marker, highlight_row, narrow_for_summary, panel,
+    status_color, status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH,
+    SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -95,6 +96,15 @@ fn render_sidebar(
     f.render_widget(widget, area);
 }
 
+/// Summary takes what Status, Key, Updated and the 3-cell margin the results keep leave; on
+/// narrow terminals Status gives up columns, down to 8, so it keeps 12.
+fn results_column_widths(area: Rect, mut status_w: usize) -> (usize, usize) {
+    let inner = panel().inner(area).width as usize;
+    let room = inner.saturating_sub(2 + KEY_WIDTH + 3 * SEPARATOR_WIDTH + UPDATED_WIDTH + 3);
+    let summary_w = narrow_for_summary(room, 12, &mut [(&mut status_w, 8)]);
+    (status_w, summary_w)
+}
+
 fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let results_focused = app.filter_focus == FilterFocus::Results;
     let now = crate::local_cache::now_unix_secs() as i64;
@@ -119,18 +129,14 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray),
         )));
     } else {
+        let groups = app.filters_visible_by_status();
         let key_w = KEY_WIDTH;
-        let status_w = 14usize;
-        let inner = panel().inner(area).width as usize;
-        // Key, status and Updated, their separators, and the 3-cell margin the results keep.
-        let fixed = 2 + key_w + status_w + 3 * SEPARATOR_WIDTH + UPDATED_WIDTH + 3;
-        let summary_w = inner.saturating_sub(fixed).max(12);
+        let (status_w, summary_w) = results_column_widths(area, status_width(&groups));
 
         let heading_style = Style::default()
             .fg(Color::Reset)
             .add_modifier(Modifier::BOLD);
 
-        let groups = app.filters_visible_by_status();
         let shared = Shared::of(&groups, Columns::Neither);
         let mut header = Line::from(vec![
             Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
@@ -219,10 +225,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let mut row = Line::from(vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<status_w$}", truncate(ticket.status.as_str(), status_w)),
-                        status_style,
-                    ),
+                    Span::styled(fit(ticket.status.as_str(), status_w), status_style),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
@@ -254,4 +257,19 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     crate::mouse::register_rows(app, area, &mouse_rows, scroll_y, &lines);
     let widget = Paragraph::new(lines).block(block).scroll((scroll_y, 0));
     f.render_widget(widget, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn narrow_results_cut_status_to_8_so_summary_keeps_12() {
+        let widths = |width| results_column_widths(Rect::new(0, 0, width, 10), 20);
+        assert_eq!(widths(74), (20, 13));
+        assert_eq!(widths(73), (20, 12));
+        assert_eq!(widths(72), (19, 12));
+        assert_eq!(widths(61), (8, 12));
+        assert_eq!(widths(60), (8, 11));
+    }
 }
