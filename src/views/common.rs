@@ -58,37 +58,33 @@ pub fn status_color(status: &str, rules: &StatusRules) -> Color {
     }
 }
 
+/// `s` cut to at most `max` display columns, ending "..." when cut.
 pub fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() > max {
-        let t: String = s.chars().take(max.saturating_sub(3)).collect();
-        format!("{}...", t)
-    } else {
-        s.to_string()
+    if s.width() <= max {
+        return s.to_string();
     }
+    let ellipsis = &"..."[..max.min(3)];
+    let mut room = max - ellipsis.len();
+    let kept: String = s
+        .chars()
+        .take_while(|c| {
+            let w = c.width().unwrap_or(0);
+            let fits = w <= room;
+            if fits {
+                room -= w;
+            }
+            fits
+        })
+        .collect();
+    kept + ellipsis
 }
 
-/// `text` cut to `width` display columns (ending "..." when cut) and padded to exactly `width`,
-/// so a cell holding wide characters keeps the columns after it in line.
+/// `text` cut and padded to exactly `width` display columns, so a cell holding wide characters
+/// keeps the columns after it in line.
 pub fn fit(text: &str, width: usize) -> String {
-    let mut cell = String::new();
-    let mut used = 0;
-    if text.width() <= width {
-        cell.push_str(text);
-        used = text.width();
-    } else {
-        let ellipsis = &"..."[..width.min(3)];
-        for c in text.chars() {
-            let w = c.width().unwrap_or(0);
-            if used + w > width - ellipsis.len() {
-                break;
-            }
-            cell.push(c);
-            used += w;
-        }
-        cell.push_str(ellipsis);
-        used += ellipsis.len();
-    }
-    cell + &" ".repeat(width - used)
+    let cell = truncate(text, width);
+    let pad = width - cell.width();
+    cell + &" ".repeat(pad)
 }
 
 /// The display width of the widest `value` among the rows `groups` draw, or of `heading` when
