@@ -5,9 +5,9 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, FilterFocus};
 use crate::views::common::{
-    color_marks, fit, fold_indicator, group_marker, highlight_row, panel, status_color,
-    status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH,
-    UPDATED_WIDTH,
+    color_marks, fit, fold_indicator, group_marker, highlight_row, narrow_for_summary, panel,
+    status_color, status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH,
+    SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -122,11 +122,12 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     } else {
         let groups = app.filters_visible_by_status();
         let key_w = KEY_WIDTH;
-        let status_w = status_width(&groups);
+        let mut status_w = status_width(&groups);
         let inner = panel().inner(area).width as usize;
-        // Key, status and Updated, their separators, and the 3-cell margin the results keep.
-        let fixed = 2 + key_w + status_w + 3 * SEPARATOR_WIDTH + UPDATED_WIDTH + 3;
-        let summary_w = inner.saturating_sub(fixed).max(12);
+        // Key and Updated, their separators, and the 3-cell margin the results keep. On narrow
+        // terminals Status gives up columns, down to 8, so Summary keeps 12.
+        let room = inner.saturating_sub(2 + key_w + 3 * SEPARATOR_WIDTH + UPDATED_WIDTH + 3);
+        let summary_w = narrow_for_summary(room, 12, &mut [(&mut status_w, 8)]);
 
         let heading_style = Style::default()
             .fg(Color::Reset)

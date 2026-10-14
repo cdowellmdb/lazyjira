@@ -9,7 +9,7 @@ use ratatui::widgets::{
 use crate::app::{App, DetailMode};
 use crate::cache::{ActivityKind, Epic, Status, StatusRules, Ticket};
 use crate::move_picker::MovePicker;
-use crate::views::common::{panel, status_color};
+use crate::views::common::{fit, panel, status_color, truncate};
 use crate::widgets::activity::format_timestamp;
 use crate::widgets::markup;
 
@@ -59,16 +59,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() > max {
-        let mut result: String = s.chars().take(max.saturating_sub(3)).collect();
-        result.push_str("...");
-        result
-    } else {
-        s.to_string()
-    }
 }
 
 fn progress_bar(done: usize, total: usize, width: usize) -> String {
@@ -580,7 +570,7 @@ fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, 
                 Style::default().fg(Color::Reset),
             ),
             Span::styled(
-                format!("{:<15}", truncate(&ticket.status, 14)),
+                fit(&ticket.status, 15),
                 Style::default().fg(status_color(&ticket.status, rules)),
             ),
             Span::raw("  "),

@@ -5,51 +5,28 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    color_marks, fit, fold_indicator, group_marker, highlight_row, panel, status_color,
-    status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH,
-    UPDATED_WIDTH,
+    color_marks, fit, fold_indicator, group_marker, highlight_row, narrow_for_summary, panel,
+    status_color, status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH,
+    SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
 
-fn ticket_column_widths(area: Rect, mut status_w: usize) -> (usize, usize, usize) {
-    let key_w = KEY_WIDTH;
-    let mut summary_w = 48usize;
+/// Summary takes what Status and the fixed cells leave; on narrow terminals Status gives up
+/// columns, down to 8, so it keeps 18.
+fn ticket_column_widths(area: Rect, mut status_w: usize) -> (usize, usize) {
     let inner = panel().inner(area).width as usize;
-    let prefix_and_separators = 4 + key_w + status_w + 3 * SEPARATOR_WIDTH + UPDATED_WIDTH;
-    let mut overflow = prefix_and_separators + summary_w;
-
-    if overflow > inner {
-        let mut to_trim = overflow - inner;
-        if summary_w > 18 {
-            let cut = to_trim.min(summary_w - 18);
-            summary_w -= cut;
-            to_trim -= cut;
-        }
-        if to_trim > 0 && status_w > 8 {
-            let cut = to_trim.min(status_w - 8);
-            status_w -= cut;
-            to_trim -= cut;
-        }
-        if to_trim > 0 && summary_w > 10 {
-            let cut = to_trim.min(summary_w - 10);
-            summary_w -= cut;
-        }
-    }
-
-    overflow = prefix_and_separators + summary_w;
-    if overflow < inner {
-        summary_w += inner - overflow;
-    }
-
-    (key_w, status_w, summary_w)
+    let room = inner.saturating_sub(4 + KEY_WIDTH + 3 * SEPARATOR_WIDTH + UPDATED_WIDTH);
+    let summary_w = narrow_for_summary(room, 18, &mut [(&mut status_w, 8)]);
+    (status_w, summary_w)
 }
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.unassigned_visible_by_epic();
     let shared = Shared::of(&grouped, Columns::GroupedByEpic);
     let now = crate::local_cache::now_unix_secs() as i64;
-    let (key_w, status_w, summary_w) = ticket_column_widths(area, status_width(&grouped));
+    let key_w = KEY_WIDTH;
+    let (status_w, summary_w) = ticket_column_widths(area, status_width(&grouped));
     let heading_style = Style::default()
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);

@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding};
 use crate::app::{App, GroupSelectionState, VisibleGroup};
 use crate::cache::{Status, StatusRules, Ticket};
 use crate::subtasks::Family;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 /// Width of a row's checkbox-and-key cell: the checkbox, a key of up to ten characters, and the
 /// indent of a sub-task drawn under its parent.
@@ -58,33 +58,49 @@ pub fn status_color(status: &str, rules: &StatusRules) -> Color {
     }
 }
 
-/// `s` cut to at most `max` display columns, ending "..." when cut.
+/// `s` cut to at most `max` display columns, ending "..." when cut. Widths are measured on whole
+/// prefixes, as `fit` and the columns measure them: an emoji with its variation selector is two
+/// columns together but one per character.
 pub fn truncate(s: &str, max: usize) -> String {
     if s.width() <= max {
         return s.to_string();
     }
     let ellipsis = &"..."[..max.min(3)];
-    let mut room = max - ellipsis.len();
-    let kept: String = s
-        .chars()
-        .take_while(|c| {
-            let w = c.width().unwrap_or(0);
-            let fits = w <= room;
-            if fits {
-                room -= w;
-            }
-            fits
-        })
-        .collect();
-    kept + ellipsis
+    let room = max - ellipsis.len();
+    let end = s
+        .char_indices()
+        .map(|(at, c)| at + c.len_utf8())
+        .take_while(|&end| s[..end].width() <= room)
+        .last()
+        .unwrap_or(0);
+    s[..end].to_string() + ellipsis
 }
 
 /// `text` cut and padded to exactly `width` display columns, so a cell holding wide characters
 /// keeps the columns after it in line.
 pub fn fit(text: &str, width: usize) -> String {
     let cell = truncate(text, width);
-    let pad = width - cell.width();
+    let pad = width.saturating_sub(cell.width());
     cell + &" ".repeat(pad)
+}
+
+/// Summary's width in `room` columns beside `columns`: when Summary would get fewer than
+/// `min_summary`, each column in turn gives up columns, down to its floor, until Summary has them.
+/// A terminal too narrow even then leaves Summary what is left.
+pub fn narrow_for_summary(
+    room: usize,
+    min_summary: usize,
+    columns: &mut [(&mut usize, usize)],
+) -> usize {
+    let mut used: usize = columns.iter().map(|(width, _)| **width).sum();
+    for (width, floor) in columns.iter_mut() {
+        let cut = (used + min_summary)
+            .saturating_sub(room)
+            .min(width.saturating_sub(*floor));
+        **width -= cut;
+        used -= cut;
+    }
+    room.saturating_sub(used)
 }
 
 /// The display width of the widest `value` among the rows `groups` draw, or of `heading` when
@@ -208,7 +224,7 @@ pub fn ticket_cells(
         (None, Some(parent)) => (format!("{} › ", parent), ticket.summary.clone()),
         _ => (String::new(), ticket.summary.clone()),
     };
-    let cell = format!("{:<width$}", truncate(&(prefix.clone() + &summary), width));
+    let cell = fit(&(prefix.clone() + &summary), width);
     let split = cell
         .char_indices()
         .nth(prefix.chars().count())
@@ -329,18 +345,14 @@ impl Shared {
         if self.epic_column {
             let epic = ticket.epic_name.as_deref().unwrap_or("-");
             row.push_span(separator.clone());
-            row.push_span(Span::styled(
-                format!("{:<epic_w$}", truncate(epic, epic_w)),
-                muted(base),
-            ));
+            row.push_span(Span::styled(fit(epic, epic_w), muted(base)));
         }
         row.push_span(separator.clone());
         row.push_span(Span::styled(updated_cell(now, ticket), muted(base)));
         if self.labels_column {
-            let labels = truncate(&self.row_labels(ticket), labels_w);
             row.push_span(separator);
             row.push_span(Span::styled(
-                format!("{labels:<labels_w$}"),
+                fit(&self.row_labels(ticket), labels_w),
                 if base.bg.is_some() {
                     base.fg(Color::Yellow)
                 } else {
@@ -436,13 +448,38 @@ mod tests {
         assert_eq!(fit("山田太郎", 5), "山...");
         assert_eq!(fit("abcdef", 2), "..");
         assert_eq!(fit("承認待ち", 20), format!("承認待ち{}", " ".repeat(12)));
+        // "❤️" (heart and variation selector) is two columns together, one per character.
+        assert_eq!(fit("❤️❤️xyzw", 5), "❤️...");
+        assert_eq!(fit("✔️✔️✔️✔️", 6), "✔️✔...");
         for (text, width) in [
             ("山田太郎", 6),
             ("山田太郎", 5),
             ("Waiting for Approval", 8),
+            ("❤️❤️xyzw", 5),
+            ("✔️✔️✔️✔️", 6),
         ] {
             assert_eq!(fit(text, width).width(), width, "{text}");
         }
+    }
+
+    #[test]
+    fn narrowing_cuts_columns_in_order_to_their_floors_only_until_summary_has_its_minimum() {
+        let narrow = |room: usize| {
+            let (mut epic, mut status) = (20, 20);
+            let summary = narrow_for_summary(room, 14, &mut [(&mut epic, 10), (&mut status, 8)]);
+            [epic, status, summary]
+        };
+        // 54 is exactly enough: nothing narrows, and wider rooms go to Summary.
+        assert_eq!(narrow(55), [20, 20, 15]);
+        assert_eq!(narrow(54), [20, 20, 14]);
+        assert_eq!(narrow(53), [19, 20, 14]);
+        // Epic stops at its floor before Status gives up anything.
+        assert_eq!(narrow(44), [10, 20, 14]);
+        assert_eq!(narrow(43), [10, 19, 14]);
+        assert_eq!(narrow(32), [10, 8, 14]);
+        // Too narrow even with every column at its floor: Summary gets what is left.
+        assert_eq!(narrow(31), [10, 8, 13]);
+        assert_eq!(narrow(0), [10, 8, 0]);
     }
 
     #[test]

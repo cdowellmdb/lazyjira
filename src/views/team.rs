@@ -5,52 +5,28 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    color_marks, fit, fold_indicator, group_marker, highlight_row, muted, panel, status_color,
-    status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH,
-    UPDATED_WIDTH,
+    color_marks, fit, fold_indicator, group_marker, highlight_row, muted, narrow_for_summary,
+    panel, status_color, status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH,
+    SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
-fn team_column_widths(area: Rect, status_w: usize) -> (usize, usize, usize, usize, usize) {
-    let key_w = KEY_WIDTH;
-    let mut summary_w = 28usize;
-    let mut epic_w = 20usize;
-    let mut labels_w = 18usize;
+/// Summary takes what Status, Epic, Labels and the fixed cells leave; on narrow terminals Epic,
+/// then Labels, then Status give up columns so it keeps 14.
+fn team_column_widths(area: Rect, mut status_w: usize) -> (usize, usize, usize, usize) {
+    let (mut epic_w, mut labels_w) = (20, 18);
     let inner = panel().inner(area).width as usize;
-    let prefix_and_separators = 2 + key_w + status_w + 5 * SEPARATOR_WIDTH + UPDATED_WIDTH;
-    let mut overflow = prefix_and_separators + summary_w + epic_w + labels_w;
-
-    if overflow > inner {
-        let mut to_trim = overflow - inner;
-        if summary_w > 14 {
-            let cut = to_trim.min(summary_w - 14);
-            summary_w -= cut;
-            to_trim -= cut;
-        }
-        if to_trim > 0 && epic_w > 10 {
-            let cut = to_trim.min(epic_w - 10);
-            epic_w -= cut;
-            to_trim -= cut;
-        }
-        if to_trim > 0 && labels_w > 8 {
-            let cut = to_trim.min(labels_w - 8);
-            labels_w -= cut;
-        }
-    }
-
-    overflow = prefix_and_separators + summary_w + epic_w + labels_w;
-    if overflow < inner {
-        summary_w += inner - overflow;
-    }
-
-    (key_w, status_w, summary_w, epic_w, labels_w)
+    let room = inner.saturating_sub(2 + KEY_WIDTH + 5 * SEPARATOR_WIDTH + UPDATED_WIDTH);
+    let columns = &mut [(&mut epic_w, 10), (&mut labels_w, 8), (&mut status_w, 8)];
+    let summary_w = narrow_for_summary(room, 14, columns);
+    (status_w, summary_w, epic_w, labels_w)
 }
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let members = app.team_visible_tickets_by_member();
     let now = crate::local_cache::now_unix_secs() as i64;
     let shared = Shared::of(&members, Columns::EpicAndLabels);
-    let (key_w, status_w, summary_w, epic_w, labels_w) =
-        team_column_widths(area, status_width(&members));
+    let key_w = KEY_WIDTH;
+    let (status_w, summary_w, epic_w, labels_w) = team_column_widths(area, status_width(&members));
     let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
     let heading_style = Style::default()
         .fg(Color::Reset)
