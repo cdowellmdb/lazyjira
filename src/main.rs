@@ -975,6 +975,10 @@ fn maybe_run_dev_mode() -> Result<()> {
                 release = true;
             }
             "--help" | "-h" => show_help = true,
+            "--version" | "-V" => {
+                println!("lazyjira {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             _ => passthrough_args.push(arg),
         }
     }
@@ -983,6 +987,7 @@ fn maybe_run_dev_mode() -> Result<()> {
         println!("lazyjira");
         println!("  --dev, --rebuild   Build from source and run (debug)");
         println!("  --dev-release      Build from source and run (release)");
+        println!("  -V, --version      Show the version");
         println!("  -h, --help         Show this help");
         std::process::exit(0);
     }
