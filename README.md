@@ -70,7 +70,7 @@ To build from source instead:
 cargo install --path . --force
 
 # From a release tag
-cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.13.0
+cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.14.0
 ```
 
 ## Quick start
