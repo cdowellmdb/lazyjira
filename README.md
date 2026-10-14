@@ -61,7 +61,7 @@ mkdir -p ~/.cargo/bin
 mv lazyjira ~/.cargo/bin/lazyjira
 ```
 
-Make sure `~/.cargo/bin` is on your `PATH`, or move the binary to another directory that is. Run `lazyjira --help` to check the install. To update, run the same commands again.
+Make sure `~/.cargo/bin` is on your `PATH`, or move the binary to another directory that is. Run `lazyjira --version` to check the install, or `lazyjira --help` for the flags. To update, run the same commands again.
 
 To build from source instead:
 

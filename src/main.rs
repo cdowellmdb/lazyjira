@@ -965,6 +965,7 @@ fn maybe_run_dev_mode() -> Result<()> {
     let mut force_rebuild = false;
     let mut release = false;
     let mut show_help = false;
+    let mut show_version = false;
     let mut passthrough_args = Vec::new();
 
     for arg in std::env::args().skip(1) {
@@ -975,6 +976,7 @@ fn maybe_run_dev_mode() -> Result<()> {
                 release = true;
             }
             "--help" | "-h" => show_help = true,
+            "--version" | "-V" => show_version = true,
             _ => passthrough_args.push(arg),
         }
     }
@@ -983,7 +985,13 @@ fn maybe_run_dev_mode() -> Result<()> {
         println!("lazyjira");
         println!("  --dev, --rebuild   Build from source and run (debug)");
         println!("  --dev-release      Build from source and run (release)");
+        println!("  -V, --version      Show the version");
         println!("  -h, --help         Show this help");
+        std::process::exit(0);
+    }
+
+    if show_version {
+        println!("lazyjira {}", env!("CARGO_PKG_VERSION"));
         std::process::exit(0);
     }
 
