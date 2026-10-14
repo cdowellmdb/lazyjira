@@ -3,44 +3,42 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::App;
+use crate::app::{App, VisibleGroup};
+use crate::cache::{Epic, Ticket};
 use crate::views::common::{
-    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, truncate, KEY_WIDTH,
+    color_marks, column_width, fit, fold_indicator, group_marker, highlight_row, panel,
+    status_color, status_width, ticket_cells, ticket_marker, truncate, KEY_WIDTH, SEPARATOR_WIDTH,
 };
 
-fn child_column_widths(area: Rect) -> (usize, usize, usize) {
+/// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so
+/// "Waiting for Approval" or a long name doesn't push its row's summary out of line; Summary
+/// takes the rest.
+fn child_column_widths(
+    area: Rect,
+    epics: &[VisibleGroup<'_, &Epic>],
+) -> (usize, usize, usize, usize) {
     let key_w = KEY_WIDTH;
-    let mut status_w = 12usize;
-    let mut summary_w = 48usize;
+    let mut status_w = status_width(epics);
+    let mut assignee_w = column_width(epics, "ASSIGNEE", assignee).min(24);
     let inner = panel().inner(area).width as usize;
-    let prefix_and_separators = 4 + key_w + 3 + status_w + 3;
-    let mut overflow = prefix_and_separators + summary_w;
+    let room = inner.saturating_sub(4 + key_w + 3 * SEPARATOR_WIDTH);
 
-    if overflow > inner {
-        let mut to_trim = overflow - inner;
-        if summary_w > 18 {
-            let cut = to_trim.min(summary_w - 18);
-            summary_w -= cut;
-            to_trim -= cut;
-        }
-        if to_trim > 0 && status_w > 8 {
-            let cut = to_trim.min(status_w - 8);
-            status_w -= cut;
-            to_trim -= cut;
-        }
-        if to_trim > 0 && summary_w > 10 {
-            let cut = to_trim.min(summary_w - 10);
-            summary_w -= cut;
-        }
-    }
+    // Narrow terminals: Assignee, then Status, give up columns (down to 8) until Summary has 18.
+    let short =
+        |status_w: usize, assignee_w: usize| (status_w + assignee_w + 18).saturating_sub(room);
+    assignee_w -= short(status_w, assignee_w).min(assignee_w.saturating_sub(8));
+    status_w -= short(status_w, assignee_w).min(status_w.saturating_sub(8));
 
-    overflow = prefix_and_separators + summary_w;
-    if overflow < inner {
-        summary_w += inner - overflow;
-    }
+    (
+        key_w,
+        status_w,
+        assignee_w,
+        room.saturating_sub(status_w + assignee_w),
+    )
+}
 
-    (key_w, status_w, summary_w)
+fn assignee(ticket: &Ticket) -> &str {
+    ticket.assignee.as_deref().unwrap_or("-")
 }
 
 fn progress_bar(done: usize, total: usize, width: usize) -> String {
@@ -58,7 +56,7 @@ fn progress_bar(done: usize, total: usize, width: usize) -> String {
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let visible_epics = app.epics_visible_epics();
-    let (key_w, status_w, summary_w) = child_column_widths(area);
+    let (key_w, status_w, assignee_w, summary_w) = child_column_widths(area, &visible_epics);
     let heading_style = Style::default()
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
@@ -68,11 +66,13 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let mut mouse_rows = Vec::new();
 
     if !visible_epics.is_empty() {
-        let header_w = 4 + key_w + 3 + status_w + 3 + summary_w;
+        let header_w = 4 + key_w + 3 * SEPARATOR_WIDTH + status_w + assignee_w + summary_w;
         lines.push(Line::from(vec![
             Span::styled(format!("    {:<key_w$}", "SEL KEY"), heading_style),
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
+            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{:<assignee_w$}", "ASSIGNEE"), heading_style),
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
         ]));
@@ -191,10 +191,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let mut row = vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(
-                        format!("{:<status_w$}", ticket.status.as_str()),
-                        status_style,
-                    ),
+                    Span::styled(fit(ticket.status.as_str(), status_w), status_style),
+                    Span::styled(" │ ", base.fg(Color::DarkGray)),
+                    Span::styled(fit(assignee(ticket), assignee_w), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ];
                 row.extend(summary);

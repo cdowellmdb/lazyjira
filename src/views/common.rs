@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding};
 use crate::app::{App, GroupSelectionState, VisibleGroup};
 use crate::cache::{Status, StatusRules, Ticket};
 use crate::subtasks::Family;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Width of a row's checkbox-and-key cell: the checkbox, a key of up to ten characters, and the
 /// indent of a sub-task drawn under its parent.
@@ -64,6 +65,49 @@ pub fn truncate(s: &str, max: usize) -> String {
     } else {
         s.to_string()
     }
+}
+
+/// `text` cut to `width` display columns (ending "..." when cut) and padded to exactly `width`,
+/// so a cell holding wide characters keeps the columns after it in line.
+pub fn fit(text: &str, width: usize) -> String {
+    let mut cell = String::new();
+    let mut used = 0;
+    if text.width() <= width {
+        cell.push_str(text);
+        used = text.width();
+    } else {
+        let ellipsis = &"..."[..width.min(3)];
+        for c in text.chars() {
+            let w = c.width().unwrap_or(0);
+            if used + w > width - ellipsis.len() {
+                break;
+            }
+            cell.push(c);
+            used += w;
+        }
+        cell.push_str(ellipsis);
+        used += ellipsis.len();
+    }
+    cell + &" ".repeat(width - used)
+}
+
+/// The display width of the widest `value` among the rows `groups` draw, or of `heading` when
+/// that is wider: a column as wide as what is on screen.
+pub fn column_width<H>(
+    groups: &[VisibleGroup<'_, H>],
+    heading: &str,
+    value: fn(&Ticket) -> &str,
+) -> usize {
+    groups
+        .iter()
+        .flat_map(|group| group.tickets.iter().flatten())
+        .map(|(_, ticket)| value(ticket).width())
+        .fold(heading.width(), usize::max)
+}
+
+/// The Status column's width: the longest status drawn.
+pub fn status_width<H>(groups: &[VisibleGroup<'_, H>]) -> usize {
+    column_width(groups, "STATUS", |ticket| ticket.status.as_str())
 }
 
 const UNSELECTED: char = '☐';
@@ -382,6 +426,26 @@ mod tests {
                 Some(1),
                 "{mark}"
             );
+        }
+    }
+
+    #[test]
+    fn fit_pads_or_cuts_to_exactly_width_display_columns() {
+        assert_eq!(fit("Sam", 5), "Sam  ");
+        assert_eq!(fit("abcdef", 6), "abcdef");
+        assert_eq!(fit("abcdefg", 6), "abc...");
+        // 山 is two columns: "山田" fits 4 exactly, and in 5 a cut can't split a character.
+        assert_eq!(fit("山田", 4), "山田");
+        assert_eq!(fit("山田太郎", 6), "山... ");
+        assert_eq!(fit("山田太郎", 5), "山...");
+        assert_eq!(fit("abcdef", 2), "..");
+        assert_eq!(fit("承認待ち", 20), format!("承認待ち{}", " ".repeat(12)));
+        for (text, width) in [
+            ("山田太郎", 6),
+            ("山田太郎", 5),
+            ("Waiting for Approval", 8),
+        ] {
+            assert_eq!(fit(text, width).width(), width, "{text}");
         }
     }
 

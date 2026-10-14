@@ -5,15 +5,15 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
+    color_marks, fit, fold_indicator, group_marker, highlight_row, panel, status_color,
+    status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH,
+    UPDATED_WIDTH,
 };
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
 
-fn ticket_column_widths(area: Rect) -> (usize, usize, usize) {
+fn ticket_column_widths(area: Rect, mut status_w: usize) -> (usize, usize, usize) {
     let key_w = KEY_WIDTH;
-    let mut status_w = 12usize;
     let mut summary_w = 48usize;
     let inner = panel().inner(area).width as usize;
     let prefix_and_separators = 4 + key_w + status_w + 3 * SEPARATOR_WIDTH + UPDATED_WIDTH;
@@ -49,7 +49,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.unassigned_visible_by_epic();
     let shared = Shared::of(&grouped, Columns::GroupedByEpic);
     let now = crate::local_cache::now_unix_secs() as i64;
-    let (key_w, status_w, summary_w) = ticket_column_widths(area);
+    let (key_w, status_w, summary_w) = ticket_column_widths(area, status_width(&grouped));
     let heading_style = Style::default()
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
@@ -144,10 +144,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             let mut row = Line::from(vec![
                 Span::styled(format!("    {:<key_w$}", key_cell), base),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:<status_w$}", ticket.status.as_str()),
-                    status_style,
-                ),
+                Span::styled(fit(ticket.status.as_str(), status_w), status_style),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
             ]);
             row.spans.extend(summary);

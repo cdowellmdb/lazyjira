@@ -591,6 +591,138 @@ mod tests {
         assert!(rows[row(&rows, "DEMO-3")].contains("DEMO-1 › DEMO-3"));
     }
 
+    /// The screen column `text` starts at in `row`, a line from `draw`: one symbol per cell, so a
+    /// wide character is followed by the blank cell it covers.
+    fn column_of(row: &str, text: &str) -> usize {
+        let at = row
+            .find(text)
+            .unwrap_or_else(|| panic!("{text} not in {row}"));
+        row[..at].chars().count()
+    }
+
+    #[test]
+    fn a_long_or_wide_status_keeps_summaries_in_line_on_every_tab_with_a_status_column() {
+        let ticket = |key: &str, status: &str, email: &str| {
+            let mut ticket = Ticket::for_test(key, status);
+            ticket.summary = format!("Summary of {key}");
+            ticket.assignee_email = Some(email.into());
+            ticket
+        };
+        let tickets = |email: &str| {
+            vec![
+                ticket("DEMO-1", "Waiting for Approval", email),
+                ticket("DEMO-2", "In Progress", email),
+                ticket("DEMO-3", "承認待ち", email),
+            ]
+        };
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.team_members = vec![TeamMember {
+            name: "Alex".into(),
+            email: "alex@example.com".into(),
+        }];
+        app.cache.team_tickets = tickets("alex@example.com");
+        app.cache.team_tickets.extend(tickets("__unassigned__"));
+        app.filter_results = tickets("alex@example.com");
+        app.cache.epics = vec![Epic {
+            key: "EPIC-9".into(),
+            summary: "Epic".into(),
+            children: tickets("alex@example.com"),
+        }];
+        for tab in [Tab::Team, Tab::Unassigned, Tab::Filters, Tab::Epics] {
+            app.active_tab = tab;
+            app.mark_cache_changed();
+            let rows = draw(&app, tab, 160);
+            let columns: Vec<usize> = ["DEMO-1", "DEMO-2", "DEMO-3"]
+                .iter()
+                .map(|key| {
+                    column_of(
+                        &line_with(&rows, key).unwrap().0,
+                        &format!("Summary of {key}"),
+                    )
+                })
+                .collect();
+            assert!(
+                columns.iter().all(|&c| c == columns[0]),
+                "{tab:?}: {columns:?}"
+            );
+            let row = &line_with(&rows, "DEMO-1").unwrap().0;
+            assert!(row.contains("Waiting for Approval │"), "{tab:?}: {row}");
+        }
+    }
+
+    /// The Epics tab drawn `width` wide with one child assigned to `assignee`, and the drawn
+    /// widths of its Status, Assignee and Summary columns, read from the headings.
+    fn epic_columns(width: u16, assignee: &str) -> (Vec<(String, Color)>, [usize; 3]) {
+        let mut waiting = Ticket::for_test("DEMO-1", "Waiting for Approval");
+        waiting.assignee = Some(assignee.into());
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Epics;
+        app.cache.epics = vec![Epic {
+            key: "EPIC-9".into(),
+            summary: "Epic".into(),
+            children: vec![waiting, Ticket::for_test("DEMO-2", "In Progress")],
+        }];
+        let rows = draw(&app, Tab::Epics, width);
+        let header = &line_with(&rows, "SEL KEY").unwrap().0;
+        let [status, assignee, summary] =
+            ["STATUS", "ASSIGNEE", "SUMMARY"].map(|heading| column_of(header, heading));
+        // The panel's border and padding take two columns on each side.
+        let widths = [
+            assignee - status - 3,
+            summary - assignee - 3,
+            width as usize - 2 - summary,
+        ];
+        (rows, widths)
+    }
+
+    #[test]
+    fn epic_children_show_their_assignee_in_a_column_of_at_most_24() {
+        let (rows, widths) = epic_columns(160, "Sam Doe");
+        assert_eq!(widths[..2], [20, 8]);
+        assert!(line_with(&rows, "DEMO-1")
+            .unwrap()
+            .0
+            .contains("Waiting for Approval │ Sam Doe  │"));
+        assert!(line_with(&rows, "DEMO-2")
+            .unwrap()
+            .0
+            .contains("In Progress          │ -        │"));
+
+        let name = "Alexandria Montgomery-Jo";
+        let (rows, widths) = epic_columns(160, name);
+        assert_eq!(widths[1], 24);
+        assert!(line_with(&rows, "DEMO-1")
+            .unwrap()
+            .0
+            .contains(&format!("│ {name} │")));
+
+        let (rows, widths) = epic_columns(160, "Alexandria Montgomery-Jon");
+        assert_eq!(widths[1], 24);
+        assert!(line_with(&rows, "DEMO-1")
+            .unwrap()
+            .0
+            .contains("│ Alexandria Montgomery... │"));
+
+        // Wide characters count by display width: 12 characters are 24 columns.
+        let (_, widths) = epic_columns(160, "山田太郎山田太郎山田太郎");
+        assert_eq!(widths[1], 24);
+    }
+
+    #[test]
+    fn narrow_epics_trim_assignee_then_status_to_8_so_summary_keeps_18() {
+        // 95 columns leave Summary exactly 18 beside Status 20 and Assignee 24.
+        let name = "Alexandria Montgomery-Jo";
+        assert_eq!(epic_columns(95, name).1, [20, 24, 18]);
+        assert_eq!(epic_columns(94, name).1, [20, 23, 18]);
+        // Assignee reaches 8 first, then Status gives up its columns.
+        assert_eq!(epic_columns(68, name).1, [9, 8, 18]);
+        assert_eq!(epic_columns(67, name).1, [8, 8, 18]);
+        // Neither goes below 8, so Summary shrinks instead of the row overflowing.
+        assert_eq!(epic_columns(66, name).1, [8, 8, 17]);
+    }
+
     /// Jira's `updated` for `secs` (Unix seconds), in UTC: Howard Hinnant's civil_from_days.
     fn jira_time(secs: i64) -> String {
         let (days, time) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));

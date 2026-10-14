@@ -5,13 +5,13 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    color_marks, fold_indicator, group_marker, highlight_row, muted, panel, status_color,
-    ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
+    color_marks, fit, fold_indicator, group_marker, highlight_row, muted, panel, status_color,
+    status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH,
+    UPDATED_WIDTH,
 };
 
-fn team_column_widths(area: Rect) -> (usize, usize, usize, usize, usize) {
+fn team_column_widths(area: Rect, status_w: usize) -> (usize, usize, usize, usize, usize) {
     let key_w = KEY_WIDTH;
-    let status_w = 15usize;
     let mut summary_w = 28usize;
     let mut epic_w = 20usize;
     let mut labels_w = 18usize;
@@ -49,7 +49,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let members = app.team_visible_tickets_by_member();
     let now = crate::local_cache::now_unix_secs() as i64;
     let shared = Shared::of(&members, Columns::EpicAndLabels);
-    let (key_w, status_w, summary_w, epic_w, labels_w) = team_column_widths(area);
+    let (key_w, status_w, summary_w, epic_w, labels_w) =
+        team_column_widths(area, status_width(&members));
     let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
     let heading_style = Style::default()
         .fg(Color::Reset)
@@ -158,7 +159,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let mut row = Line::from(vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
+                    Span::styled(fit(ticket.status.as_str(), status_w), colored),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
@@ -207,7 +208,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let mut row = Line::from(vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(format!("{:<status_w$}", ticket.status.as_str()), colored),
+                    Span::styled(fit(ticket.status.as_str(), status_w), colored),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
