@@ -594,6 +594,27 @@ mod tests {
         assert!(rows[row(&rows, "DEMO-3")].contains("DEMO-1 › DEMO-3"));
     }
 
+    #[test]
+    fn d_hides_done_children_in_epics_but_progress_still_counts_them() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Epics;
+        app.cache.epics = vec![Epic {
+            key: "EPIC-9".into(),
+            summary: "Epic".into(),
+            children: vec![
+                Ticket::for_test("DEMO-1", "In Progress"),
+                Ticket::for_test("DEMO-2", "Closed"),
+            ],
+        }];
+        assert!(line_with(&draw(&app, Tab::Epics, 120), "DEMO-2").is_some());
+        app.toggle_show_done();
+        let rows = draw(&app, Tab::Epics, 120);
+        assert!(line_with(&rows, "DEMO-1").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "DEMO-2").is_none(), "{rows:?}");
+        assert!(line_with(&rows, "(1 / 2 done").is_some(), "{rows:?}");
+    }
+
     /// The screen column `text` starts at in `row`, a line from `draw`: one symbol per cell, so a
     /// wide character is followed by the blank cell it covers.
     pub(super) fn column_of(row: &str, text: &str) -> usize {
