@@ -960,20 +960,25 @@ impl App {
         }
 
         for epic in epics {
+            // `d` hides done children; the epic stays, and its progress still counts them.
+            let shown: Vec<_> = epic
+                .children
+                .iter()
+                .filter(|t| self.done_status_shown(&t.status))
+                .collect();
             match &search {
                 Some(s) => {
                     let epic_matches = Self::contains_case_insensitive(&epic.key, s)
                         || Self::contains_case_insensitive(&epic.summary, s);
                     if epic_matches {
-                        let mut children: Vec<_> = epic.children.iter().collect();
+                        let mut children = shown;
                         self.status_rules.sort_tickets(&mut children);
                         visible.push((epic, children));
                         continue;
                     }
 
-                    let mut matching_children: Vec<_> = epic
-                        .children
-                        .iter()
+                    let mut matching_children: Vec<_> = shown
+                        .into_iter()
                         .filter(|t| Self::ticket_matches_search(t, s))
                         .collect();
                     self.status_rules.sort_tickets(&mut matching_children);
@@ -983,7 +988,7 @@ impl App {
                     }
                 }
                 None => {
-                    let mut children: Vec<_> = epic.children.iter().collect();
+                    let mut children = shown;
                     self.status_rules.sort_tickets(&mut children);
                     visible.push((epic, children));
                 }
@@ -1081,13 +1086,17 @@ impl App {
     /// Whether a status passes the My Work/Team toggles: `show_done` governs done statuses,
     /// and `status_focus` (when set) governs every other status.
     fn status_visible(&self, status: &str) -> bool {
-        if self.status_rules.is_done(status) {
-            self.show_done
-        } else {
-            self.status_focus
-                .as_deref()
-                .is_none_or(|focus| focus == status)
-        }
+        self.done_status_shown(status)
+            && (self.status_rules.is_done(status)
+                || self
+                    .status_focus
+                    .as_deref()
+                    .is_none_or(|focus| focus == status))
+    }
+
+    /// Whether `d` lets a ticket with this status show: done statuses only while done is shown.
+    fn done_status_shown(&self, status: &str) -> bool {
+        self.show_done || !self.status_rules.is_done(status)
     }
 
     /// Status groups and visible tickets in the exact order used by the My Work tab.
