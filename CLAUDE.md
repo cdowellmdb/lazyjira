@@ -30,6 +30,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/cache.rs** — Data types (Ticket, Epic, TeamMember, Status, Cache)
 - **src/config.rs** — `config.toml` schema, defaults, load/save
 - **src/settings.rs** — In-app team, epic, startup, and theme preferences
+- **src/delight.rs** — Confetti, the quit receipt, stale-ticket marks, the empty My Work scene and spooky season; all off with `preferences.delight = false`
 - **src/theme.rs** — Color themes: presets, custom themes from `[themes]`, and the pass that recolors a drawn frame
 - **src/mouse.rs** — Hit targets registered by renderers and mouse event handling
 - **src/setup.rs** — First-run setup screen (project key, team name); imports the legacy `team.yml` roster
@@ -65,6 +66,7 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 - **Grouped rows, selection, tab switching, cache mutation helpers, mouse targets or form fields**: "Visible rows"
 - **Sub-tasks, parents or folding**: "Sub-tasks nest under their parent"
 - **Colors or themes**: "Themes recolor the finished frame"
+- **Confetti, the quit receipt, stale marks or spooky season**: the `delight.rs` bullet of "Current UX behavior"
 - **Columns, marks, Team including the current user, done-group folding, done ordering (`order_done`) or the detail overlay's scrolling**: "Current UX behavior"
 
 ## Configuration
@@ -89,7 +91,7 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 
 ## Demo recording
 
-`docs/demo/record.sh` re-records `docs/images/demo.gif` with VHS (`docs/demo/record.sh docs/demo/themes.tape` re-records `docs/images/themes.gif`). It runs the app with a throwaway `HOME`/`TMPDIR` and puts `docs/demo/bin/jira` (a fake `jira` CLI with made-up data) first on `PATH`. It also starts `docs/demo/bin/fake_jira_rest.py`, which serves `POST /rest/api/2/search` and `GET /rest/api/2/issue/KEY` from the fake CLI's data (it imports `bin/jira`), and writes a jira-cli config in the throwaway `HOME` whose `server` points at it, with `epic.link` and `JIRA_API_TOKEN=demo`. Never record against a real Jira instance. The fake CLI answers only `jira me` and no-op writes; if you change which `jira` subcommands or flags the app uses, update it to match. If you change the JQL or fields a search sends, update the fake's evaluator (`evaluate`/`matches` in `bin/jira`) and `base_fields`; its Assigned Teams clause compares the value with `TEAM_NAME`, which must match the demo config's `jira.team_name`. Moves aren't served, so the demo doesn't show them. Re-record the GIFs once per PR, after the PR's final code change, rather than per ticket.
+`docs/demo/record.sh` re-records `docs/images/demo.gif` with VHS (`docs/demo/record.sh docs/demo/themes.tape` re-records `docs/images/themes.gif`). It runs the app with a throwaway `HOME`/`TMPDIR` and puts `docs/demo/bin/jira` (a fake `jira` CLI with made-up data) first on `PATH`. It also starts `docs/demo/bin/fake_jira_rest.py`, which serves `POST /rest/api/2/search`, `GET /rest/api/2/issue/KEY` and moves (`GET`/`POST /rest/api/2/issue/KEY/transitions`, kept in memory) from the fake CLI's data (it imports `bin/jira`), and writes a jira-cli config in the throwaway `HOME` whose `server` points at it, with `epic.link` and `JIRA_API_TOKEN=demo`. Never record against a real Jira instance. The fake CLI answers only `jira me` and no-op writes; if you change which `jira` subcommands or flags the app uses, update it to match. If you change the JQL or fields a search sends, update the fake's evaluator (`evaluate`/`matches` in `bin/jira`) and `base_fields`; its Assigned Teams clause compares the value with `TEAM_NAME`, which must match the demo config's `jira.team_name`. `docs/demo/bin/date` pins the day lazyjira reads at startup, so the recording never lands in spooky season. Re-record the GIFs once per PR, after the PR's final code change, rather than per ticket.
 
 ## Notes
 

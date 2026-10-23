@@ -5,8 +5,8 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, ticket_cells,
-    ticket_marker, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
+    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, status_label,
+    ticket_cells, ticket_marker, Ages, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
@@ -49,9 +49,44 @@ fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
     (key_w, summary_w, epic_w, labels_w)
 }
 
+/// What My Work shows with no rows: a scene when nothing is left to do (no active ticket, and no
+/// search or status focus hiding any), otherwise "No tickets found".
+fn empty_lines(app: &App) -> Vec<Line<'static>> {
+    let rules = app.status_rules();
+    let all_done = app
+        .cache
+        .my_tickets
+        .iter()
+        .all(|t| rules.is_done(&t.status));
+    let scene = (all_done && app.search.is_none() && app.status_focus.is_none())
+        .then(|| app.delight.inbox_zero())
+        .flatten();
+    let Some((art, caption)) = scene else {
+        return vec![Line::from(Span::styled(
+            "  No tickets found",
+            Style::default().fg(Color::DarkGray),
+        ))];
+    };
+    let mut lines = vec![Line::from("")];
+    lines.extend(art.iter().map(|row| {
+        Line::from(Span::styled(
+            format!("    {row}"),
+            Style::default().fg(Color::Cyan),
+        ))
+    }));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("    {caption}"),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines
+}
+
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.my_work_visible_by_status();
-    let now = crate::local_cache::now_unix_secs() as i64;
+    let ages = Ages::of(app);
     let shared = Shared::of(&grouped, Columns::EpicAndLabels);
     let (key_w, summary_w, epic_w, labels_w) = my_work_column_widths(area);
     let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
@@ -100,7 +135,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             "{} {} {} ({})",
             marker,
             indicator,
-            status.as_str().to_uppercase(),
+            status_label(app, status).to_uppercase(),
             total_count
         );
         let header_style = if is_header_selected {
@@ -133,6 +168,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 Style::default()
             };
+
+            let base = ages.fade(ticket, base);
             let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
             let (key_cell, summary) = ticket_cells(
                 app,
@@ -148,7 +185,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 separator(base),
             ]);
             row.spans.extend(summary);
-            shared.push_trailing_cells(now, &mut row, ticket, base, epic_w, labels_w);
+            shared.push_trailing_cells(ages, &mut row, ticket, base, epic_w, labels_w);
             lines.push(row);
         }
 
@@ -157,10 +194,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  No tickets found",
-            Style::default().fg(Color::DarkGray),
-        )));
+        lines = empty_lines(app);
     }
 
     highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);

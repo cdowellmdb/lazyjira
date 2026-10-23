@@ -102,18 +102,23 @@ pub enum BulkCall {
 /// Apply successful ticket changes even after dismissal, but show results only for the
 /// operation still displayed. Esc dismisses a modal without cancelling its Jira work.
 pub fn complete(app: &mut App, request: u64, summary: BulkSummary) {
-    apply_bulk_successes(app, &summary);
+    let celebrations = apply_bulk_successes(app, &summary);
     let action = match summary.action {
         BulkAction::Move => "move",
         BulkAction::Assign => "assign",
     };
-    app.flash = Some(format!(
+    let mut flash = format!(
         "Bulk {} complete: {} succeeded, {} failed, {} skipped",
         action,
         summary.succeeded,
         summary.failed,
         summary.skipped.len()
-    ));
+    );
+    for celebration in celebrations {
+        flash.push_str(" · ");
+        flash.push_str(&celebration);
+    }
+    app.flash = Some(flash);
     if matches!(app.bulk_state, Some(BulkState::Running { request: waiting, .. }) if waiting == request)
     {
         app.bulk_state = Some(BulkState::Result { summary, scroll: 0 });
@@ -148,11 +153,13 @@ pub fn summarize(
     }
 }
 
-fn apply_bulk_successes(app: &mut App, summary: &BulkSummary) {
+/// Applies the changes Jira made, and returns a message for each epic a move finished.
+fn apply_bulk_successes(app: &mut App, summary: &BulkSummary) -> Vec<String> {
+    let mut celebrations = Vec::new();
     match &summary.target {
         BulkTarget::Move { destination, .. } => {
             for key in &summary.successful_keys {
-                app.record_move(key, destination);
+                celebrations.extend(app.record_move(key, destination));
             }
         }
         BulkTarget::Assign {
@@ -165,6 +172,7 @@ fn apply_bulk_successes(app: &mut App, summary: &BulkSummary) {
         }
     }
     app.clamp_selection();
+    celebrations
 }
 
 /// The list row after `key`: j/Down moves down, k/Up moves up, other keys leave it.
@@ -659,6 +667,37 @@ mod tests {
         assert_eq!(app.find_ticket("DEMO-1").unwrap().status, "Done");
         assert_eq!(app.find_ticket("DEMO-2").unwrap().status, "In Progress");
         assert!(matches!(app.bulk_state, Some(BulkState::Result { .. })));
+    }
+
+    #[test]
+    fn a_bulk_move_that_finishes_an_epic_says_so_after_its_counts() {
+        let mut app = App::new();
+        app.delight.enabled = true;
+        app.cache.epics = vec![crate::cache::Epic {
+            key: "DEMO-300".into(),
+            summary: "Mobile onboarding".into(),
+            children: vec![
+                ticket("DEMO-301", "A", "To Do"),
+                ticket("DEMO-302", "B", "In Review"),
+            ],
+        }];
+        let target = BulkTarget::Move {
+            destination: "Done".to_string(),
+            resolution: None,
+        };
+        let results = vec![("DEMO-301".into(), Ok(())), ("DEMO-302".into(), Ok(()))];
+        complete(
+            &mut app,
+            0,
+            summarize(BulkAction::Move, target, results, vec![]),
+        );
+        assert_eq!(
+            app.flash.as_deref(),
+            Some(
+                "Bulk move complete: 2 succeeded, 0 failed, 0 skipped · \
+                 🎉 Epic DEMO-300 complete: Mobile onboarding"
+            )
+        );
     }
 
     #[test]

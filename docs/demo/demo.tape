@@ -42,6 +42,11 @@ Type "z"
 Sleep 1.5s
 Type "z"
 Sleep 800ms
+# Ship it: once Jira confirms the move to Done, confetti.
+Type "m"
+Sleep 1.5s
+Type "C"
+Sleep 3s
 Escape
 Sleep 800ms
 
@@ -105,5 +110,6 @@ Sleep 2.5s
 Tab 2
 Sleep 2s
 
-Hide
+# Quit: the session's receipt stays in the terminal.
 Type "q"
+Sleep 4s

@@ -91,8 +91,9 @@ impl App {
         };
         match result {
             Ok(()) => {
-                self.flash = Some(format!("Moved {} to {}", key, target));
-                self.record_move(key, &target);
+                let celebration = self.record_move(key, &target);
+                self.flash =
+                    Some(celebration.unwrap_or_else(|| format!("Moved {} to {}", key, target)));
                 self.clamp_selection();
             }
             Err(error) => self.moves.failures.push(MoveFailure {
@@ -104,10 +105,12 @@ impl App {
     }
 
     /// Jira confirmed `key` is now in the status named `status`: show it everywhere and ignore
-    /// older reads of it.
-    pub fn record_move(&mut self, key: &str, status: &str) {
+    /// older reads of it. Returns `celebrate_move`'s message for an epic the move finished.
+    pub fn record_move(&mut self, key: &str, status: &str) -> Option<String> {
+        let before = self.find_ticket(key).cloned();
         self.moves.confirm(key, status);
         self.update_ticket_status(key, status);
+        self.celebrate_move(before, status)
     }
 
     /// Re-applies moves Jira confirmed after a list read was requested, so the read can't undo them.
@@ -283,5 +286,61 @@ mod tests {
         assert_eq!(app.moves.failures()[0].key, "DEMO-2");
         app.moves.dismiss_failure();
         assert!(app.moves.failures().is_empty());
+    }
+
+    #[test]
+    fn shipping_the_last_open_child_of_an_epic_celebrates_the_epic() {
+        let mut app = app_with_ticket_everywhere();
+        app.delight.enabled = true;
+        assert!(app.moves.start(KEY, "Done"));
+        app.finish_move(KEY, Ok(()));
+        assert_eq!(app.flash.as_deref(), Some("🎉 Epic DEMO-1 complete: Epic"));
+        assert!(app.delight.animating());
+        assert!(app
+            .delight
+            .receipt()
+            .unwrap()
+            .contains("✓ 1 shipped  ↻ 1 moved"));
+    }
+
+    #[test]
+    fn shipping_a_child_while_another_is_open_only_throws_confetti() {
+        let mut app = app_with_ticket_everywhere();
+        app.delight.enabled = true;
+        app.cache.epics[0]
+            .children
+            .push(Ticket::for_test("DEMO-3", "In Progress"));
+        assert!(app.moves.start(KEY, "Done"));
+        app.finish_move(KEY, Ok(()));
+        assert_eq!(app.flash.as_deref(), Some("Moved DEMO-2478 to Done"));
+        assert!(app.delight.animating());
+    }
+
+    #[test]
+    fn a_move_between_active_statuses_ships_nothing() {
+        let mut app = app_with_ticket_everywhere();
+        app.delight.enabled = true;
+        assert!(app.moves.start(KEY, "In Progress"));
+        app.finish_move(KEY, Ok(()));
+        assert!(!app.delight.animating());
+        let receipt = app.delight.receipt().unwrap();
+        assert_eq!(
+            receipt
+                .lines()
+                .nth(1)
+                .unwrap()
+                .split_whitespace()
+                .collect::<Vec<_>>(),
+            ["│", "↻", "1", "moved", "│"]
+        );
+    }
+
+    #[test]
+    fn with_delight_off_finishing_an_epic_keeps_the_plain_message() {
+        let mut app = app_with_ticket_everywhere();
+        assert!(app.moves.start(KEY, "Done"));
+        app.finish_move(KEY, Ok(()));
+        assert_eq!(app.flash.as_deref(), Some("Moved DEMO-2478 to Done"));
+        assert!(!app.delight.animating());
     }
 }

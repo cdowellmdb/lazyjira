@@ -2,13 +2,14 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use std::time::Instant;
 
 use crate::app::{App, VisibleGroup};
 use crate::cache::{Epic, Ticket};
 use crate::views::common::{
     color_marks, column_width, fit, fold_indicator, group_marker, highlight_row,
-    narrow_for_summary, panel, status_color, status_width, ticket_cells, ticket_marker, KEY_WIDTH,
-    SEPARATOR_WIDTH,
+    narrow_for_summary, panel, status_color, status_label, status_width, ticket_cells,
+    ticket_marker, Ages, KEY_WIDTH, SEPARATOR_WIDTH,
 };
 
 /// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so
@@ -43,6 +44,7 @@ fn progress_bar(done: usize, total: usize, width: usize) -> String {
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let visible_epics = app.epics_visible_epics();
+    let ages = Ages::of(app);
     let key_w = KEY_WIDTH;
     let (status_w, assignee_w, summary_w) = child_column_widths(area, &visible_epics);
     let heading_style = Style::default()
@@ -89,13 +91,13 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let blocked = epic.blocked_count();
         let bar_width = 18usize;
         let progress = progress_bar(done, total, bar_width);
-        let meta = if blocked > 0 {
+        let counts = if blocked > 0 {
             format!(
-                "{}  ({} / {} done, {:.1}%, blocked {})",
-                progress, done, total, pct, blocked
+                "  ({} / {} done, {:.1}%, blocked {})",
+                done, total, pct, blocked
             )
         } else {
-            format!("{}  ({} / {} done, {:.1}%)", progress, done, total, pct)
+            format!("  ({} / {} done, {:.1}%)", done, total, pct)
         };
         let inner = panel().inner(area).width as usize;
         let prefix = 2 + 1 + 1 + 10 + 2; // mark + indicator + space + key + gap
@@ -126,10 +128,16 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         } else {
             Style::default().fg(Color::DarkGray)
         };
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(meta, meta_style),
-        ]));
+        let mut meta = vec![Span::raw("  ")];
+        match app
+            .delight
+            .rainbow_bar(&epic.key, &progress, meta_style, Instant::now())
+        {
+            Some(bar) => meta.extend(bar),
+            None => meta.push(Span::styled(progress, meta_style)),
+        }
+        meta.push(Span::styled(counts, meta_style));
+        lines.push(Line::from(meta));
 
         let Some(children) = &group.tickets else {
             lines.push(Line::from(""));
@@ -154,6 +162,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     Style::default()
                 };
+
+                let base = ages.fade(ticket, base);
                 let status_style = if is_selected {
                     Style::default()
                         .fg(status_color(&ticket.status, app.status_rules()))
@@ -174,7 +184,10 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let mut row = vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(fit(ticket.status.as_str(), status_w), status_style),
+                    Span::styled(
+                        fit(status_label(app, &ticket.status), status_w),
+                        status_style,
+                    ),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(fit(assignee(ticket), assignee_w), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),

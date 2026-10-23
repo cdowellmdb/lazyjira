@@ -6,8 +6,8 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, FilterFocus};
 use crate::views::common::{
     color_marks, fit, fold_indicator, group_marker, highlight_row, narrow_for_summary, panel,
-    status_color, status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH,
-    SEPARATOR_WIDTH, UPDATED_WIDTH,
+    status_color, status_label, status_width, ticket_cells, ticket_marker, Ages, Columns, Shared,
+    KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -107,7 +107,7 @@ fn results_column_widths(area: Rect, mut status_w: usize) -> (usize, usize) {
 
 fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let results_focused = app.filter_focus == FilterFocus::Results;
-    let now = crate::local_cache::now_unix_secs() as i64;
+    let ages = Ages::of(app);
     let border_style = if results_focused {
         Style::default().fg(Color::Yellow)
     } else {
@@ -181,7 +181,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     "{} {} {} ({})",
                     marker,
                     indicator,
-                    status.as_str().to_uppercase(),
+                    status_label(app, status).to_uppercase(),
                     group.total
                 ),
                 header_style,
@@ -205,6 +205,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     Style::default()
                 };
+                let base = ages.fade(ticket, base);
                 let (key_cell, summary) = ticket_cells(
                     app,
                     group.family.get(index).copied(),
@@ -225,11 +226,14 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let mut row = Line::from(vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(fit(ticket.status.as_str(), status_w), status_style),
+                    Span::styled(
+                        fit(status_label(app, &ticket.status), status_w),
+                        status_style,
+                    ),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
-                shared.push_trailing_cells(now, &mut row, ticket, base, 0, 0);
+                shared.push_trailing_cells(ages, &mut row, ticket, base, 0, 0);
                 lines.push(row);
             }
 

@@ -6,6 +6,7 @@ mod bulk_upload;
 mod cache;
 mod cache_refresh;
 mod config;
+mod delight;
 mod jira_client;
 mod jira_issue;
 mod jira_reads;
@@ -438,6 +439,9 @@ async fn main() -> Result<()> {
     app.set_status_rules(&config.statuses);
     app.show_done = config.preferences.show_done;
     app.theme = theme::resolve(&config.preferences.theme, &config.themes);
+    app.delight.enabled = config.preferences.delight;
+    app.delight.today = delight::Today::read();
+    app.delight.scene = local_cache::now_unix_secs() as usize;
     app.active_tab = Tab::all()
         .iter()
         .copied()
@@ -561,6 +565,7 @@ async fn main() -> Result<()> {
                     match result {
                         Ok(key) => {
                             app.flash = Some(format!("Created {}", key));
+                            app.delight.created(1);
                             // Trigger a manual refresh to pick up the new ticket
                             if !app.loading {
                                 app.loading = true;
@@ -581,6 +586,7 @@ async fn main() -> Result<()> {
                 BackgroundMessage::CommentAdded(result) => match result {
                     Ok(key) => {
                         app.flash = Some(format!("Comment added to {}", key));
+                        app.delight.commented();
                     }
                     Err(e) => {
                         app.flash = Some(format!("Comment failed: {}", e));
@@ -630,6 +636,7 @@ async fn main() -> Result<()> {
                 BackgroundMessage::BulkUploadCompleted(summary) => {
                     let succeeded = summary.succeeded;
                     let failed = summary.failed;
+                    app.delight.created(succeeded);
                     if matches!(app.bulk_upload_state, Some(BulkUploadState::Running { .. })) {
                         app.bulk_upload_state = Some(BulkUploadState::Result { summary });
                     }
@@ -669,7 +676,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        if state_changed {
+        if state_changed || app.delight.tick(std::time::Instant::now()) {
             draw_needed = true;
         }
         if draw_needed {
@@ -677,7 +684,9 @@ async fn main() -> Result<()> {
             draw_needed = false;
         }
 
-        if event::poll(Duration::from_millis(120))? {
+        // About 30 frames a second while confetti falls.
+        let wait = if app.delight.animating() { 33 } else { 120 };
+        if event::poll(Duration::from_millis(wait))? {
             match event::read()? {
                 Event::Key(key) if key.kind != KeyEventKind::Release => {
                     handle_key(&mut app, key, &bg_tx, &mut config).await;
@@ -711,7 +720,11 @@ async fn main() -> Result<()> {
 
     // Details recorded in the last moments are saved before the process ends.
     app.details.close(&app.listed_keys());
-    restore_terminal(&mut terminal)
+    restore_terminal(&mut terminal)?;
+    if let Some(receipt) = app.delight.receipt() {
+        println!("{receipt}");
+    }
+    Ok(())
 }
 
 /// Leaves raw mode and the alternate screen, so what prints next stays readable.
@@ -1089,7 +1102,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     }
     let tab_titles: Vec<Line> = Tab::all().iter().map(|t| Line::from(t.title())).collect();
     let tabs = Tabs::new(tab_titles)
-        .block(panel().title(" lazyjira "))
+        .block(panel().title(app.delight.title()))
         .divider(Span::styled(" · ", Style::default().fg(Color::DarkGray)))
         .select(match app.active_tab {
             Tab::MyWork => 0,
@@ -1176,8 +1189,9 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
                 .map(|age| format!("stale {}", format_age_minutes(age)))
                 .unwrap_or_else(|| "fresh".to_string());
             let focus_state = app.status_focus.as_deref().unwrap_or("all");
+            let spooky_hint = app.delight.theme_hint(&config.preferences.theme);
             shortcut_hints(&format!(
-                    " Tab: switch  j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  sel:{}  Enter: detail  z: fold  d: done({})  f/F: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
+                    " {spooky_hint}Tab: switch  j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  sel:{}  Enter: detail  z: fold  d: done({})  f/F: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
                     selected_count, done_state, focus_state, ticket_state, freshness_state, epic_state
                 ))
         }
@@ -1242,6 +1256,9 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     }
     widgets::move_failure::render(f, app, app.moves.failures());
     mouse::render_selection(f, app);
+    let area = f.area();
+    app.delight
+        .draw(f.buffer_mut(), area, std::time::Instant::now());
     app.settings
         .as_ref()
         .map_or(app.theme, |state| {

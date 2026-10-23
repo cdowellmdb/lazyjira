@@ -29,6 +29,9 @@ pub struct Preferences {
     pub start_tab: String,
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Confetti, the quit receipt, stale marks and spooky season (`delight`).
+    #[serde(default = "default_delight")]
+    pub delight: bool,
 }
 
 fn default_show_done() -> bool {
@@ -40,6 +43,9 @@ fn default_start_tab() -> String {
 fn default_theme() -> String {
     crate::theme::DEFAULT.into()
 }
+fn default_delight() -> bool {
+    true
+}
 
 impl Default for Preferences {
     fn default() -> Self {
@@ -47,6 +53,7 @@ impl Default for Preferences {
             show_done: default_show_done(),
             start_tab: default_start_tab(),
             theme: default_theme(),
+            delight: default_delight(),
         }
     }
 }
@@ -305,6 +312,17 @@ team_name = "My Team"
         assert_eq!(config.statuses.done, default_done_statuses());
         assert!(config.team.is_empty());
         assert!(config.filters.is_empty());
+        assert!(config.preferences.delight);
+    }
+
+    #[test]
+    fn delight_can_be_turned_off_and_stays_off_through_a_save() {
+        let toml_text =
+            "[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n\n[preferences]\ndelight = false\n";
+        let config: AppConfig = toml::from_str(toml_text).unwrap();
+        assert!(!config.preferences.delight);
+        let saved: AppConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert!(!saved.preferences.delight);
     }
 
     #[test]

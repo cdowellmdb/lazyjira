@@ -6,8 +6,8 @@ use ratatui::widgets::Paragraph;
 use crate::app::App;
 use crate::views::common::{
     color_marks, fit, fold_indicator, group_marker, highlight_row, narrow_for_summary, panel,
-    status_color, status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH,
-    SEPARATOR_WIDTH, UPDATED_WIDTH,
+    status_color, status_label, status_width, ticket_cells, ticket_marker, Ages, Columns, Shared,
+    KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
@@ -24,7 +24,7 @@ fn ticket_column_widths(area: Rect, mut status_w: usize) -> (usize, usize) {
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.unassigned_visible_by_epic();
     let shared = Shared::of(&grouped, Columns::GroupedByEpic);
-    let now = crate::local_cache::now_unix_secs() as i64;
+    let ages = Ages::of(app);
     let key_w = KEY_WIDTH;
     let (status_w, summary_w) = ticket_column_widths(area, status_width(&grouped));
     let heading_style = Style::default()
@@ -101,6 +101,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 Style::default()
             };
+
+            let base = ages.fade(ticket, base);
             let status_style = if is_selected {
                 Style::default()
                     .fg(status_color(&ticket.status, app.status_rules()))
@@ -121,11 +123,14 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             let mut row = Line::from(vec![
                 Span::styled(format!("    {:<key_w$}", key_cell), base),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
-                Span::styled(fit(ticket.status.as_str(), status_w), status_style),
+                Span::styled(
+                    fit(status_label(app, &ticket.status), status_w),
+                    status_style,
+                ),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
             ]);
             row.spans.extend(summary);
-            shared.push_trailing_cells(now, &mut row, ticket, base, 0, 0);
+            shared.push_trailing_cells(ages, &mut row, ticket, base, 0, 0);
             lines.push(row);
         }
 

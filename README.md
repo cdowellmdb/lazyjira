@@ -35,6 +35,14 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 - Settings (teammates, pinned epics, Done visibility, starting tab, theme) apply without a restart
 - Built-in color themes, previewed live as you pick, plus your own in `config.toml`
 
+**Little joys**
+- Confetti when Jira confirms a ticket's move to Done, and a screen-wide shower, with the epic's progress bar in rainbow colors, when that finishes an epic
+- Quitting prints a receipt of the session (shipped, moved, commented, created) that stays in your terminal
+- Active tickets nobody has touched for 3 weeks show 💤 before their age; after 90 days 🦕, and the row fades. The detail view puts the wait in perspective
+- An empty My Work shows a little scene instead of an empty table, picked each time you start lazyjira
+- Spooky season, October 15th to 31st: 🎃 in the title, 👻 and 💀 for stale tickets, Blocked shows as Cursed, and a `spooky` theme to try
+- Set `preferences.delight = false` to turn all of these off
+
 ## Requirements
 
 - The [`jira` CLI](https://github.com/ankitpokhrel/jira-cli) on your `PATH` and logged in (`jira init`). Running `jira me` should print your email.
@@ -119,6 +127,7 @@ jql = "priority = P1 AND created >= -7d"
 show_done = true
 start_tab = "My Work"
 theme = "default"
+delight = true
 
 [themes.ocean]
 background = "#0b1d2a"
@@ -136,7 +145,8 @@ accent = "#4fd1c5"
 | `filters` | empty | Saved JQL filters for the Filters tab. |
 | `preferences.show_done` | `true` | Whether Done tickets are visible. Updated when you press `d` or save preferences. |
 | `preferences.start_tab` | `"My Work"` | Starting tab: `My Work`, `Team`, `Epics`, `Unassigned`, or `Filters`. |
-| `preferences.theme` | `"default"` | Color theme: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin`, `solarized-light`, or a custom theme's name, in any case. An unknown name uses the default. |
+| `preferences.theme` | `"default"` | Color theme: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin`, `solarized-light`, `spooky`, or a custom theme's name, in any case. An unknown name uses the default. |
+| `preferences.delight` | `true` | Confetti, the quit receipt, stale-ticket marks, the empty My Work scene and spooky season. See [Little joys](#features). |
 | `themes.<name>` | empty | Custom themes. See [Themes](#themes). |
 
 ### Themes
@@ -188,7 +198,7 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 
 Each tab remembers its selection, search, status focus, and folded groups during the session. Folded parents are one set shared by every tab: a parent folded in My Work is folded in Epics too. A folded parent shows `▶` and how many sub-tasks are hidden, and a sub-task whose parent is in another group leads with the parent's key, muted. Done groups start folded in My Work and each time a filter runs, and list the most recently updated tickets first.
 
-Rows are marked `☐`, or `☒` when selected; a group header shows `⊟` when only some of its tickets are selected. My Work, Team, Unassigned and Filters show an Updated column with how long ago Jira last changed each ticket (`12m`, `5h`, `2d`, `3w`). When every row with an epic shares it, or every row carries the same labels, a muted line under the column headers names them once, like `all rows · epic Payments Platform Revamp · DEMO, Q3` (Unassigned, already grouped by epic, names only labels). My Work and Team then drop the Epic column, and their Labels column keeps only the labels that differ.
+Rows are marked `☐`, or `☒` when selected; a group header shows `⊟` when only some of its tickets are selected. My Work, Team, Unassigned and Filters show an Updated column with how long ago Jira last changed each ticket (`12m`, `5h`, `2d`, `3w`). An active ticket unchanged for 3 weeks leads its age with 💤, and after 90 days with 🦕, its summary muted (👻 and 💀 in late October). When every row with an epic shares it, or every row carries the same labels, a muted line under the column headers names them once, like `all rows · epic Payments Platform Revamp · DEMO, Q3` (Unassigned, already grouped by epic, names only labels). My Work and Team then drop the Epic column, and their Labels column keeps only the labels that differ.
 
 Refresh keeps the loaded list visible and follows the selected ticket even when other rows are added or reordered.
 
@@ -235,7 +245,7 @@ The move picker lists the transitions Jira offers for the ticket, as "transition
 
 A resolution is asked for only when the chosen transition has a resolution field, and the picker offers the values Jira allows for it, plus "No resolution" when the field is optional.
 
-The ticket keeps its status until Jira confirms the move; the status bar shows the move as pending in the meantime. If Jira rejects the move, its error stays on screen until you press `Enter` or `Esc`, and `o` opens the ticket in your browser. A ticket can have only one move running at a time.
+The ticket keeps its status until Jira confirms the move; the status bar shows the move as pending in the meantime. A confirmed move from an active status to a done one throws confetti; when it finishes an epic, the confetti fills the screen, the epic's progress bar turns rainbow, and the status bar names the epic. If Jira rejects the move, its error stays on screen until you press `Enter` or `Esc`, and `o` opens the ticket in your browser. A ticket can have only one move running at a time.
 
 A bulk move loads every selected ticket's transitions, then offers the statuses they can reach, with how many tickets can reach each. The same `p/w/n/t/v/b/c` keys pick a status: one match goes straight to the resolution or confirmation step, and when several statuses match, the picker lists just those. Uppercase letters work like lowercase here: a bulk move always asks for confirmation. Each ticket uses its own transition to the chosen status. Tickets without one, with several different ones, or already in that status are skipped, and the summary lists each with the reason. If any of the transitions has a resolution field, you pick one resolution for all of them: tickets whose transition allows it get it, tickets where it's optional are moved without it, and tickets that require a different one are skipped.
 

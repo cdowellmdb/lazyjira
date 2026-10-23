@@ -4,6 +4,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
 use crate::app::{App, GroupSelectionState, VisibleGroup};
 use crate::cache::{Status, StatusRules, Ticket};
+use crate::delight::Delight;
 use crate::subtasks::Family;
 use unicode_width::UnicodeWidthStr;
 
@@ -241,6 +242,16 @@ pub fn ticket_cells(
     )
 }
 
+/// The name a status cell or group header shows: Jira's, except that Blocked is Cursed in
+/// spooky season.
+pub fn status_label<'a>(app: &App, status: &'a str) -> &'a str {
+    if app.delight.spooky() && Status::from_str(status) == Status::Blocked {
+        "Cursed"
+    } else {
+        status
+    }
+}
+
 /// Width of the ` │ ` between two columns.
 pub const SEPARATOR_WIDTH: usize = 3;
 
@@ -331,12 +342,12 @@ impl Shared {
         }
     }
 
-    /// Pushes a row's trailing cells: Epic (when shown), Updated (its age at `now`), and Labels
-    /// (when shown), muted in `base`, the row's style (with its background on the selected row, where labels are
-    /// yellow).
+    /// Pushes a row's trailing cells: Epic (when shown), Updated (`Ages::updated_cell`), and
+    /// Labels (when shown), muted in `base`, the row's style (with its background on the
+    /// selected row, where labels are yellow).
     pub fn push_trailing_cells(
         &self,
-        now: i64,
+        ages: Ages,
         row: &mut Line<'static>,
         ticket: &Ticket,
         base: Style,
@@ -350,7 +361,7 @@ impl Shared {
             row.push_span(Span::styled(fit(epic, epic_w), muted(base)));
         }
         row.push_span(separator.clone());
-        row.push_span(Span::styled(updated_cell(now, ticket), muted(base)));
+        row.push_span(Span::styled(ages.updated_cell(ticket), muted(base)));
         if self.labels_column {
             row.push_span(separator);
             row.push_span(Span::styled(
@@ -400,17 +411,51 @@ impl Shared {
     }
 }
 
+/// Ticket ages at one moment, read once per render so every age on screen is measured to it,
+/// and what `delight` makes of them: a stale ticket's mark, and a fossil's faded row.
+#[derive(Clone, Copy)]
+pub struct Ages<'a> {
+    /// Unix seconds.
+    now: i64,
+    delight: &'a Delight,
+    rules: &'a StatusRules,
+}
+
+impl<'a> Ages<'a> {
+    pub fn of(app: &'a App) -> Self {
+        Ages {
+            now: crate::local_cache::now_unix_secs() as i64,
+            delight: &app.delight,
+            rules: app.status_rules(),
+        }
+    }
+
+    /// A row's Updated cell: how long before `now` Jira last updated the ticket, after its stale
+    /// mark when it has one, right-aligned by display width, or "-" when the read didn't say.
+    pub fn updated_cell(&self, ticket: &Ticket) -> String {
+        let age = ticket
+            .updated_secs()
+            .map_or_else(|| "-".to_string(), |at| age(at, self.now));
+        let cell = match self.delight.stale_mark(self.rules, ticket, self.now) {
+            Some(mark) => format!("{mark} {age}"),
+            None => age,
+        };
+        let pad = UPDATED_WIDTH.saturating_sub(cell.width());
+        format!("{}{cell}", " ".repeat(pad))
+    }
+
+    /// `base`, muted when `ticket` is a fossil, so its whole row fades.
+    pub fn fade(&self, ticket: &Ticket, base: Style) -> Style {
+        if self.delight.is_fossil(self.rules, ticket, self.now) {
+            muted(base)
+        } else {
+            base
+        }
+    }
+}
+
 /// Width of the Updated column: its heading's.
 pub const UPDATED_WIDTH: usize = 7;
-
-/// A row's Updated cell: how long before `now` (Unix seconds, read once per render) Jira last
-/// updated the ticket, right-aligned, or "-" when the read didn't say.
-pub fn updated_cell(now: i64, ticket: &Ticket) -> String {
-    let age = ticket
-        .updated_secs()
-        .map_or_else(|| "-".to_string(), |at| age(at, now));
-    format!("{age:>UPDATED_WIDTH$}")
-}
 
 /// How long ago `updated` was at `now` (both Unix seconds), in its largest whole unit: "59m",
 /// "23h", "6d", "3w". A time ahead of `now` (clocks disagree) is "0m".
