@@ -181,7 +181,7 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 | `S` | Settings: teammates, pinned epics, Done visibility, starting tab, theme |
 | `z/Z` | Fold the current group, or a parent's sub-tasks when a parent or one of its sub-tasks is selected / fold all groups |
 | `d` | Toggle visibility of done statuses (`statuses.done`); not on Filters |
-| `f/F` | Focus the next / previous status in My Work or Team, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that) |
+| `f/F` | Focus the next / previous status in My Work, Team or Epics, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that). In Epics it filters the children and hides epics with none left |
 | `r` | Refresh |
 | `?` | Keybindings help |
 | `q` | Quit |

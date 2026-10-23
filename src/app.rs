@@ -280,7 +280,7 @@ pub struct App {
     pub show_done: bool,
     /// Recolors each drawn frame.
     pub theme: crate::theme::Theme,
-    /// Optional focused active status name for My Work and Team.
+    /// Optional focused active status name for My Work, Team and Epics.
     pub status_focus: Option<String>,
     /// True while full epic relationships are being refreshed in background.
     pub epics_refreshing: bool,
@@ -940,8 +940,25 @@ impl App {
             .unwrap_or(usize::MAX)
     }
 
-    /// Epics and visible child rows in the exact order used by the Epics tab.
+    /// Epics and visible child rows in the exact order used by the Epics tab. A status focus
+    /// also drops the epics with no child left to show.
     pub(crate) fn epics_visible_epics(&self) -> Vec<VisibleGroup<'_, &crate::cache::Epic>> {
+        let visible = self
+            .epics_with_children(|status| self.status_visible(status))
+            .into_iter()
+            .filter(|(_, children)| self.status_focus.is_none() || !children.is_empty());
+        self.index_groups(
+            Tab::Epics,
+            visible.map(|(epic, tickets)| (epic.key.clone(), epic, nest(tickets))),
+        )
+    }
+
+    /// Epics in display order with their children whose status is `shown` and that match the
+    /// search. An epic matching the search keeps all its shown children.
+    fn epics_with_children(
+        &self,
+        shown: impl Fn(&str) -> bool,
+    ) -> Vec<(&crate::cache::Epic, Vec<&crate::cache::Ticket>)> {
         let search = self.normalized_search();
         let mut visible = Vec::new();
         let mut epics: Vec<_> = self
@@ -960,12 +977,8 @@ impl App {
         }
 
         for epic in epics {
-            // `d` hides done children; the epic stays, and its progress still counts them.
-            let shown: Vec<_> = epic
-                .children
-                .iter()
-                .filter(|t| self.done_status_shown(&t.status))
-                .collect();
+            // Hidden children leave the epic in place, and its progress still counts them.
+            let shown: Vec<_> = epic.children.iter().filter(|t| shown(&t.status)).collect();
             match &search {
                 Some(s) => {
                     let epic_matches = Self::contains_case_insensitive(&epic.key, s)
@@ -994,13 +1007,7 @@ impl App {
                 }
             }
         }
-
-        self.index_groups(
-            Tab::Epics,
-            visible
-                .into_iter()
-                .map(|(epic, tickets)| (epic.key.clone(), epic, nest(tickets))),
-        )
+        visible
     }
 
     /// Unassigned tickets grouped by epic.
@@ -1083,7 +1090,7 @@ impl App {
         )
     }
 
-    /// Whether a status passes the My Work/Team toggles: `show_done` governs done statuses,
+    /// Whether a status passes the My Work/Team/Epics toggles: `show_done` governs done statuses,
     /// and `status_focus` (when set) governs every other status.
     fn status_visible(&self, status: &str) -> bool {
         self.done_status_shown(status)
@@ -1539,10 +1546,15 @@ impl App {
     }
 
     /// The statuses `cycle_status_focus` steps through: every status with tickets in the
-    /// My Work or Team tab for the current search, whatever the focus, in display order.
+    /// My Work, Team or Epics tab for the current search, whatever the focus, in display order.
     /// Done statuses are left out because `d` shows and hides them. Other tabs have none.
     pub fn focusable_statuses(&self) -> Vec<String> {
         let groups = match self.active_tab {
+            Tab::Epics => self.status_rules.group(
+                self.epics_with_children(|_| true)
+                    .into_iter()
+                    .flat_map(|(_, children)| children),
+            ),
             Tab::MyWork => self.my_work_by_status(|_| true),
             Tab::Team => {
                 let members = self.team_tickets_by_member(|_| true);

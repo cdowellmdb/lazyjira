@@ -615,6 +615,40 @@ mod tests {
         assert!(line_with(&rows, "(1 / 2 done").is_some(), "{rows:?}");
     }
 
+    #[test]
+    fn f_focuses_one_status_in_epics_and_drops_epics_with_no_child_in_it() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Epics;
+        app.cache.epics = vec![
+            Epic {
+                key: "EPIC-1".into(),
+                summary: "Epic".into(),
+                children: vec![
+                    Ticket::for_test("DEMO-1", "In Progress"),
+                    Ticket::for_test("DEMO-2", "On Deck"),
+                ],
+            },
+            Epic {
+                key: "EPIC-2".into(),
+                summary: "Epic".into(),
+                children: vec![Ticket::for_test("DEMO-3", "On Deck")],
+            },
+        ];
+        assert_eq!(app.focusable_statuses(), ["In Progress", "On Deck"]);
+
+        app.cycle_status_focus(true);
+        let rows = draw(&app, Tab::Epics, 120);
+        assert!(line_with(&rows, "DEMO-1").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "DEMO-2").is_none(), "{rows:?}");
+        assert!(line_with(&rows, "EPIC-2").is_none(), "{rows:?}");
+
+        app.cycle_status_focus(true);
+        let rows = draw(&app, Tab::Epics, 120);
+        assert!(line_with(&rows, "DEMO-1").is_none(), "{rows:?}");
+        assert!(line_with(&rows, "DEMO-3").is_some(), "{rows:?}");
+    }
+
     /// The screen column `text` starts at in `row`, a line from `draw`: one symbol per cell, so a
     /// wide character is followed by the blank cell it covers.
     pub(super) fn column_of(row: &str, text: &str) -> usize {
