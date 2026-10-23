@@ -416,7 +416,7 @@ impl Shared {
 #[derive(Clone, Copy)]
 pub struct Ages<'a> {
     /// Unix seconds.
-    pub now: i64,
+    now: i64,
     delight: &'a Delight,
     rules: &'a StatusRules,
 }

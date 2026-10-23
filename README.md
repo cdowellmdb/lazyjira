@@ -145,7 +145,7 @@ accent = "#4fd1c5"
 | `filters` | empty | Saved JQL filters for the Filters tab. |
 | `preferences.show_done` | `true` | Whether Done tickets are visible. Updated when you press `d` or save preferences. |
 | `preferences.start_tab` | `"My Work"` | Starting tab: `My Work`, `Team`, `Epics`, `Unassigned`, or `Filters`. |
-| `preferences.theme` | `"default"` | Color theme: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin`, `spooky`, `solarized-light`, or a custom theme's name, in any case. An unknown name uses the default. |
+| `preferences.theme` | `"default"` | Color theme: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin`, `solarized-light`, `spooky`, or a custom theme's name, in any case. An unknown name uses the default. |
 | `preferences.delight` | `true` | Confetti, the quit receipt, stale-ticket marks, the empty My Work scene and spooky season. See [Little joys](#features). |
 | `themes.<name>` | empty | Custom themes. See [Themes](#themes). |
 
