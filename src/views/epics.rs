@@ -7,8 +7,8 @@ use crate::app::{App, VisibleGroup};
 use crate::cache::{Epic, Ticket};
 use crate::views::common::{
     color_marks, column_width, fit, fold_indicator, group_marker, highlight_row,
-    narrow_for_summary, panel, status_color, status_width, ticket_cells, ticket_marker, KEY_WIDTH,
-    SEPARATOR_WIDTH,
+    narrow_for_summary, panel, status_color, status_label, status_width, ticket_cells,
+    ticket_marker, Ages, KEY_WIDTH, SEPARATOR_WIDTH,
 };
 
 /// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so
@@ -43,6 +43,7 @@ fn progress_bar(done: usize, total: usize, width: usize) -> String {
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let visible_epics = app.epics_visible_epics();
+    let ages = Ages::now(app);
     let key_w = KEY_WIDTH;
     let (status_w, assignee_w, summary_w) = child_column_widths(area, &visible_epics);
     let heading_style = Style::default()
@@ -164,6 +165,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let (key_cell, summary) = ticket_cells(
                     app,
+                    ages,
                     group.family.get(index).copied(),
                     ticket,
                     marker,
@@ -174,7 +176,10 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let mut row = vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(fit(ticket.status.as_str(), status_w), status_style),
+                    Span::styled(
+                        fit(status_label(app, &ticket.status), status_w),
+                        status_style,
+                    ),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(fit(assignee(ticket), assignee_w), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),

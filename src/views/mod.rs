@@ -1053,4 +1053,143 @@ mod tests {
             }
         }
     }
+
+    /// Spooky season, for `App::delight.today`.
+    const HALLOWEEN_WEEK: crate::delight::Today = crate::delight::Today {
+        weekday: 5,
+        month: 10,
+        day: 23,
+    };
+
+    #[test]
+    fn stale_active_tickets_lead_their_age_with_a_mark_and_fossils_fade() {
+        const DAY: i64 = 24 * 60 * 60;
+        // Ages sit mid-unit, so the clock moving on while the test runs can't change them.
+        let now = crate::local_cache::now_unix_secs() as i64;
+        let ticket = |key: &str, status: &str, ago: i64| {
+            let mut ticket = labelled(key, None, &[]);
+            ticket.summary = format!("Summary of {key}");
+            ticket.status = status.into();
+            ticket.updated = Some(jira_time(now - ago));
+            ticket
+        };
+        let mut app = App::new();
+        app.loading = false;
+        app.delight.enabled = true;
+        app.cache.my_tickets = vec![
+            ticket("DEMO-1", "In Progress", FRESH_AGO),
+            ticket("DEMO-2", "In Progress", 21 * DAY + DAY / 2),
+            ticket("DEMO-3", "To Do", 91 * DAY + DAY / 2),
+            ticket("DEMO-4", "Closed", 91 * DAY + DAY / 2),
+        ];
+        // Just under three weeks: fresh.
+        const FRESH_AGO: i64 = 21 * DAY - DAY / 2;
+        // A label on one row keeps the Labels column, so Updated has a separator after it.
+        app.cache.my_tickets[0].labels = vec!["a".into()];
+        app.mark_cache_changed();
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|frame| render_tab(frame, &app, Tab::MyWork))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (0..30)
+            .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        let row = |text: &str| rows.iter().position(|row| row.contains(text)).unwrap();
+        let header = &rows[row("SEL KEY")];
+        let updated = header
+            .split('│')
+            .position(|c| c.contains("UPDATED"))
+            .unwrap();
+        let separator_after_updated = |row: &str| {
+            let (at, _) = row.match_indices('│').nth(updated).unwrap();
+            row[..at].chars().count()
+        };
+        for (key, age) in [
+            ("DEMO-1", "2w"),
+            ("DEMO-2", "💤 3w"),
+            ("DEMO-3", "🦕 13w"),
+            ("DEMO-4", "13w"),
+        ] {
+            let drawn = &rows[row(key)];
+            let cell = drawn.split('│').nth(updated).unwrap();
+            assert_eq!(cell.split_whitespace().collect::<Vec<_>>().join(" "), age);
+            assert_eq!(
+                separator_after_updated(drawn),
+                separator_after_updated(header),
+                "{key}: {drawn}"
+            );
+        }
+        let summary_fg = |key: &str| {
+            let y = row(key);
+            let x = column_of(&rows[y], &format!("Summary of {key}"));
+            buffer[(x as u16, y as u16)].fg
+        };
+        assert_eq!(summary_fg("DEMO-2"), Color::Reset);
+        assert_eq!(summary_fg("DEMO-3"), Color::DarkGray, "a fossil fades");
+        assert_eq!(summary_fg("DEMO-4"), Color::Reset, "done is never stale");
+
+        app.delight.enabled = false;
+        let rows = draw(&app, Tab::MyWork, 120);
+        assert!(!rows
+            .iter()
+            .any(|(row, _)| row.contains('💤') || row.contains('🦕')));
+    }
+
+    #[test]
+    fn blocked_is_cursed_in_spooky_season() {
+        let mut app = App::new();
+        app.loading = false;
+        app.delight.enabled = true;
+        app.delight.today = Some(HALLOWEEN_WEEK);
+        let mut ticket = Ticket::for_test("DEMO-1", "Blocked");
+        ticket.assignee_email = Some("alex@example.com".into());
+        app.cache.team_members = vec![TeamMember {
+            name: "Alex".into(),
+            email: "alex@example.com".into(),
+        }];
+        app.cache.my_tickets = vec![ticket.clone()];
+        app.cache.team_tickets = vec![ticket];
+        app.mark_cache_changed();
+        assert!(line_with(&draw(&app, Tab::MyWork, 120), "CURSED (1)").is_some());
+        app.active_tab = Tab::Team;
+        app.mark_cache_changed();
+        let team = draw(&app, Tab::Team, 120);
+        assert!(line_with(&team, "DEMO-1").unwrap().0.contains("│ Cursed "));
+
+        app.delight.today = None;
+        app.active_tab = Tab::MyWork;
+        app.mark_cache_changed();
+        assert!(line_with(&draw(&app, Tab::MyWork, 120), "BLOCKED (1)").is_some());
+    }
+
+    #[test]
+    fn an_empty_my_work_celebrates_unless_a_search_focus_or_delight_off_explains_it() {
+        let mut app = App::new();
+        app.loading = false;
+        app.delight.enabled = true;
+        app.delight.today = Some(HALLOWEEN_WEEK);
+        app.mark_cache_changed();
+        let has = |app: &App, text: &str| line_with(&draw(app, Tab::MyWork, 120), text).is_some();
+        assert!(has(&app, "Spooky quiet"), "nothing assigned");
+
+        app.show_done = false;
+        app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "Closed")];
+        app.mark_cache_changed();
+        assert!(has(&app, "Spooky quiet"), "only done tickets, hidden");
+
+        app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "In Progress")];
+        app.search = Some("nothing matches this".into());
+        app.mark_cache_changed();
+        assert!(has(&app, "No tickets found"), "a search hides the rows");
+
+        app.cache.my_tickets.clear();
+        app.mark_cache_changed();
+        assert!(has(&app, "No tickets found"), "a search is still on");
+        app.search = None;
+        app.delight.enabled = false;
+        app.mark_cache_changed();
+        assert!(has(&app, "No tickets found"), "delight off");
+    }
 }

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stands in for `date` in the demo, so the recording doesn't depend on the day it's made:
+# lazyjira asks it for the day once at startup (`+%u %m %d`), for the quit receipt and spooky
+# season. Wednesday, September 16th.
+echo "3 09 16"

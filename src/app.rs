@@ -285,6 +285,8 @@ pub struct App {
     pub show_done: bool,
     /// Recolors each drawn frame.
     pub theme: crate::theme::Theme,
+    /// Confetti, the quit receipt, stale marks and spooky season.
+    pub delight: crate::delight::Delight,
     /// Optional focused active status name for My Work, Team and Epics.
     pub status_focus: Option<String>,
     /// True while full epic relationships are being refreshed in background.
@@ -379,6 +381,7 @@ impl App {
             search: None,
             show_done: true,
             theme: Default::default(),
+            delight: Default::default(),
             status_focus: None,
             epics_refreshing: false,
             epic_refresh_request: 0,

@@ -4,6 +4,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
 use crate::app::{App, GroupSelectionState, VisibleGroup};
 use crate::cache::{Status, StatusRules, Ticket};
+use crate::delight::Staleness;
 use crate::subtasks::Family;
 use unicode_width::UnicodeWidthStr;
 
@@ -196,15 +197,19 @@ pub fn color_marks(lines: &mut [Line<'_>]) {
 /// its parent is indented, and a parent shows whether its sub-tasks are folded, with how many are
 /// hidden. A sub-task whose parent is elsewhere leads its summary with the parent's key, muted so
 /// the summary reads first (gray on the selected row, as other muted cells are). The summary is
-/// drawn in `base`, truncated and padded to `width`.
+/// drawn in `base`, truncated and padded to `width`, and muted when the ticket is a fossil at `ages`' moment
+/// (`delight::Staleness`).
 pub fn ticket_cells(
     app: &App,
+    ages: Ages,
     family: Option<Family>,
     ticket: &Ticket,
     marker: char,
     width: usize,
     base: Style,
 ) -> (String, Vec<Span<'static>>) {
+    let fossil = ages.staleness(ticket) == Staleness::Fossil;
+    let summary_style = if fossil { muted(base) } else { base };
     let folded = app.is_parent_folded(&ticket.key);
     let key = match family {
         Some(Family::Child) => format!("  {} {}", marker, ticket.key),
@@ -236,9 +241,19 @@ pub fn ticket_cells(
         key,
         vec![
             Span::styled(prefix.to_string(), muted(base)),
-            Span::styled(summary.to_string(), base),
+            Span::styled(summary.to_string(), summary_style),
         ],
     )
+}
+
+/// The name a status cell or group header shows: Jira's, except that Blocked is Cursed in
+/// spooky season.
+pub fn status_label<'a>(app: &App, status: &'a str) -> &'a str {
+    if app.delight.spooky() && Status::from_str(status) == Status::Blocked {
+        "Cursed"
+    } else {
+        status
+    }
 }
 
 /// Width of the ` │ ` between two columns.
@@ -331,12 +346,13 @@ impl Shared {
         }
     }
 
-    /// Pushes a row's trailing cells: Epic (when shown), Updated (its age at `now`), and Labels
+    /// Pushes a row's trailing cells: Epic (when shown), Updated (its age at `ages`' moment, after its stale
+    /// mark when it has one), and Labels
     /// (when shown), muted in `base`, the row's style (with its background on the selected row, where labels are
     /// yellow).
     pub fn push_trailing_cells(
         &self,
-        now: i64,
+        ages: Ages,
         row: &mut Line<'static>,
         ticket: &Ticket,
         base: Style,
@@ -350,7 +366,11 @@ impl Shared {
             row.push_span(Span::styled(fit(epic, epic_w), muted(base)));
         }
         row.push_span(separator.clone());
-        row.push_span(Span::styled(updated_cell(now, ticket), muted(base)));
+        let mark = ages.app.delight.stale_mark(ages.staleness(ticket));
+        row.push_span(Span::styled(
+            updated_cell(ages.now, ticket, mark),
+            muted(base),
+        ));
         if self.labels_column {
             row.push_span(separator);
             row.push_span(Span::styled(
@@ -400,16 +420,44 @@ impl Shared {
     }
 }
 
+/// Ticket ages at one moment, read once per render so every age on screen is measured to it.
+#[derive(Clone, Copy)]
+pub struct Ages<'a> {
+    /// Unix seconds.
+    pub now: i64,
+    app: &'a App,
+}
+
+impl<'a> Ages<'a> {
+    pub fn now(app: &'a App) -> Self {
+        Ages {
+            now: crate::local_cache::now_unix_secs() as i64,
+            app,
+        }
+    }
+
+    fn staleness(&self, ticket: &Ticket) -> Staleness {
+        self.app
+            .delight
+            .staleness(self.app.status_rules(), ticket, self.now)
+    }
+}
+
 /// Width of the Updated column: its heading's.
 pub const UPDATED_WIDTH: usize = 7;
 
 /// A row's Updated cell: how long before `now` (Unix seconds, read once per render) Jira last
-/// updated the ticket, right-aligned, or "-" when the read didn't say.
-pub fn updated_cell(now: i64, ticket: &Ticket) -> String {
+/// updated the ticket, after `mark` when there is one, right-aligned by display width, or "-"
+/// when the read didn't say.
+pub fn updated_cell(now: i64, ticket: &Ticket, mark: Option<&str>) -> String {
     let age = ticket
         .updated_secs()
         .map_or_else(|| "-".to_string(), |at| age(at, now));
-    format!("{age:>UPDATED_WIDTH$}")
+    let cell = mark.map_or(age.clone(), |mark| format!("{mark} {age}"));
+    format!(
+        "{}{cell}",
+        " ".repeat(UPDATED_WIDTH.saturating_sub(cell.width()))
+    )
 }
 
 /// How long ago `updated` was at `now` (both Unix seconds), in its largest whole unit: "59m",

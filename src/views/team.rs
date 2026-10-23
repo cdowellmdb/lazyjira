@@ -6,8 +6,8 @@ use ratatui::widgets::Paragraph;
 use crate::app::App;
 use crate::views::common::{
     color_marks, fit, fold_indicator, group_marker, highlight_row, muted, narrow_for_summary,
-    panel, status_color, status_width, ticket_cells, ticket_marker, Columns, Shared, KEY_WIDTH,
-    SEPARATOR_WIDTH, UPDATED_WIDTH,
+    panel, status_color, status_label, status_width, ticket_cells, ticket_marker, Ages, Columns,
+    Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 /// Summary takes what Status, Epic, Labels and the fixed cells leave; on narrow terminals Epic,
@@ -23,7 +23,7 @@ fn team_column_widths(area: Rect, mut status_w: usize) -> (usize, usize, usize, 
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let members = app.team_visible_tickets_by_member();
-    let now = crate::local_cache::now_unix_secs() as i64;
+    let ages = Ages::now(app);
     let shared = Shared::of(&members, Columns::EpicAndLabels);
     let key_w = KEY_WIDTH;
     let (status_w, summary_w, epic_w, labels_w) = team_column_widths(area, status_width(&members));
@@ -125,6 +125,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let (key_cell, summary) = ticket_cells(
                     app,
+                    ages,
                     group.family.get(index).copied(),
                     ticket,
                     marker,
@@ -135,11 +136,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let mut row = Line::from(vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(fit(ticket.status.as_str(), status_w), colored),
+                    Span::styled(fit(status_label(app, &ticket.status), status_w), colored),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
-                shared.push_trailing_cells(now, &mut row, ticket, base, epic_w, labels_w);
+                shared.push_trailing_cells(ages, &mut row, ticket, base, epic_w, labels_w);
                 lines.push(row);
             }
 
@@ -174,6 +175,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let (key_cell, summary) = ticket_cells(
                     app,
+                    ages,
                     group.family.get(index).copied(),
                     ticket,
                     marker,
@@ -184,11 +186,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let mut row = Line::from(vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                    Span::styled(fit(ticket.status.as_str(), status_w), colored),
+                    Span::styled(fit(status_label(app, &ticket.status), status_w), colored),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                 ]);
                 row.spans.extend(summary);
-                shared.push_trailing_cells(now, &mut row, ticket, base, epic_w, labels_w);
+                shared.push_trailing_cells(ages, &mut row, ticket, base, epic_w, labels_w);
                 lines.push(row);
             }
 

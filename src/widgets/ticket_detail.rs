@@ -501,6 +501,11 @@ fn render_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, ticke
     let width = body.width as usize;
 
     let mut lines = header_lines(ticket, app.status_rules(), width);
+    let now = crate::local_cache::now_unix_secs() as i64;
+    if let Some(quip) = app.delight.stale_quip(app.status_rules(), ticket, now) {
+        let quip = Span::styled(quip, muted().add_modifier(Modifier::ITALIC));
+        lines.extend(markup::wrap(vec![], vec![], vec![quip], width));
+    }
     lines.push(Line::from(""));
     lines.push(rule(width));
     lines.push(Line::from(""));

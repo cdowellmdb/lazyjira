@@ -105,5 +105,16 @@ Sleep 2.5s
 Tab 2
 Sleep 2s
 
-Hide
+# Ship it: once Jira confirms the move to Done, confetti.
+Enter
+Sleep 1.5s
+Type "m"
+Sleep 1.5s
+Type "C"
+Sleep 3s
+Escape
+Sleep 1s
+
+# Quit: the session's receipt stays in the terminal.
 Type "q"
+Sleep 4s

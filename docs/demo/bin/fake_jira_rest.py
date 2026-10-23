@@ -2,9 +2,11 @@
 """Fake Jira REST API for recording the README demo.
 
 Serves `POST /rest/api/2/search`, which lazyjira reads its ticket lists, epics and their
-children, sub-task parents and prefetched details from, and `GET /rest/api/2/issue/KEY`, which
-it reads a ticket opened in the detail view from. It answers from the same made-up data as the
-fake `jira` CLI next to it, which it imports, so the two never disagree. Moves aren't served.
+children, sub-task parents and prefetched details from, `GET /rest/api/2/issue/KEY`, which
+it reads a ticket opened in the detail view from, and moves: `GET` and `POST
+/rest/api/2/issue/KEY/transitions`. It answers from the same made-up data as the fake `jira`
+CLI next to it, which it imports, so the two never disagree. A move lasts until the server
+stops, and needs no resolution.
 
 Binds a free port on 127.0.0.1 and writes it to the file named by the first argument, for
 record.sh to put in the demo's jira-cli config.
@@ -16,6 +18,7 @@ import json
 import os
 import re
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -27,10 +30,34 @@ loader.exec_module(cli)
 
 DEFAULT_PAGE_SIZE = 50
 
+# Every ticket can move to each of these: transition id -> (name, status).
+TRANSITIONS = {
+    "11": ("Start Progress", "In Progress"),
+    "21": ("Send to Review", "In Review"),
+    "31": ("Block", "Blocked"),
+    "41": ("Done", "Done"),
+}
+
+# Moves made while the server runs: key -> (status, when). Every read shows them.
+moved = {}
+listed = cli.all_tickets
+
+
+def all_tickets():
+    tickets = listed()
+    for ticket in tickets:
+        ticket["status"] = moved.get(ticket["key"], (ticket["status"],))[0]
+    return tickets
+
+
+cli.all_tickets = all_tickets  # run_query reads the module's all_tickets
+
 
 def issue(ticket, wanted):
     """`ticket` with the fields in `wanted` (all of them when it's None), as Jira shapes it."""
     fields = cli.issue_payload(ticket)["fields"]
+    if ticket["key"] in moved:
+        fields["updated"] = moved[ticket["key"]][1]
     if wanted is not None:
         fields = {name: value for name, value in fields.items() if name in wanted}
     return {"key": ticket["key"], "fields": fields}
@@ -49,6 +76,12 @@ def search(body):
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urlparse(self.path)
+        if re.fullmatch(r"/rest/api/2/issue/[A-Za-z0-9_-]+/transitions", url.path):
+            offered = [
+                {"id": id, "name": name, "to": {"name": status}, "fields": {}}
+                for id, (name, status) in TRANSITIONS.items()
+            ]
+            return self.reply(200, {"transitions": offered})
         found = re.fullmatch(r"/rest/api/2/issue/([A-Za-z0-9_-]+)", url.path)
         if not found:
             return self.reply(404, {"errorMessages": [f"{url.path} isn't served by the demo"]})
@@ -59,13 +92,20 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(200, issue(tickets[0], asked[0].split(",") if asked else None))
 
     def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length) or b"{}")
+        move = re.fullmatch(r"/rest/api/2/issue/([A-Za-z0-9_-]+)/transitions", self.path)
+        if move:
+            _, status = TRANSITIONS[body["transition"]["id"]]
+            when = time.strftime("%Y-%m-%dT%H:%M:%S.000+0000", time.gmtime())
+            moved[move.group(1)] = (status, when)
+            return self.reply(204, None)
         if self.path != "/rest/api/2/search":
             return self.reply(404, {"errorMessages": [f"{self.path} isn't served by the demo"]})
-        length = int(self.headers.get("Content-Length", 0))
-        self.reply(200, search(json.loads(self.rfile.read(length) or b"{}")))
+        self.reply(200, search(body))
 
     def reply(self, status, payload):
-        data = json.dumps(payload).encode()
+        data = b"" if payload is None else json.dumps(payload).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
