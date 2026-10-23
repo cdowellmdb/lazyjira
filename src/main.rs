@@ -2096,11 +2096,11 @@ async fn handle_main_keys(
             });
         }
         KeyCode::Char(c @ ('f' | 'F')) => {
-            if matches!(app.active_tab, Tab::MyWork | Tab::Team) {
+            if app.active_tab.has_status_focus() {
                 app.cycle_status_focus(c == 'f');
                 app.flash = Some(app.status_focus_message());
             } else {
-                app.flash = Some("Status focus works in My Work and Team".to_string());
+                app.flash = Some("Status focus works in My Work, Team and Epics".to_string());
             }
         }
         KeyCode::Char('r') => {
