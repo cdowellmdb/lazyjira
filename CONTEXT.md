@@ -72,5 +72,11 @@ A ticket's comments with their authors and times, newest first. Lazyjira's reads
 A move or assignment applied to selected tickets, with success, failure, or a reason for skipping each ticket.
 _Avoid_: Bulk upload when updating existing tickets.
 
+**Shipped**:
+A ticket a confirmed move took from an active status to a done one during the session. The quit receipt lists shipped tickets.
+
+**Stale**:
+An active ticket whose Jira `updated` is at least three weeks old (dusty), or at least 90 days old (a fossil, whose row fades). Done tickets are never stale.
+
 **Bulk upload**:
 Creation of tickets from CSV rows after preview and validation.

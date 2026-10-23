@@ -51,7 +51,7 @@ fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
 
 /// What My Work shows with no rows: a scene when nothing is left to do (no active ticket, and no
 /// search or status focus hiding any), otherwise "No tickets found".
-fn empty_lines(app: &App, now: i64) -> Vec<Line<'static>> {
+fn empty_lines(app: &App) -> Vec<Line<'static>> {
     let rules = app.status_rules();
     let all_done = app
         .cache
@@ -59,7 +59,7 @@ fn empty_lines(app: &App, now: i64) -> Vec<Line<'static>> {
         .iter()
         .all(|t| rules.is_done(&t.status));
     let scene = (all_done && app.search.is_none() && app.status_focus.is_none())
-        .then(|| app.delight.inbox_zero(now))
+        .then(|| app.delight.inbox_zero())
         .flatten();
     let Some((art, caption)) = scene else {
         return vec![Line::from(Span::styled(
@@ -86,7 +86,7 @@ fn empty_lines(app: &App, now: i64) -> Vec<Line<'static>> {
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.my_work_visible_by_status();
-    let ages = Ages::now(app);
+    let ages = Ages::of(app);
     let shared = Shared::of(&grouped, Columns::EpicAndLabels);
     let (key_w, summary_w, epic_w, labels_w) = my_work_column_widths(area);
     let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
@@ -168,10 +168,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 Style::default()
             };
+
+            let base = ages.fade(ticket, base);
             let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
             let (key_cell, summary) = ticket_cells(
                 app,
-                ages,
                 group.family.get(index).copied(),
                 ticket,
                 marker,
@@ -193,7 +194,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     if lines.is_empty() {
-        lines = empty_lines(app, ages.now);
+        lines = empty_lines(app);
     }
 
     highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);

@@ -10,6 +10,8 @@ use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT: &str = "default";
+/// The preset that spooky season offers (`delight`).
+pub const SPOOKY: &str = "spooky";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -100,17 +102,17 @@ pub const PRESETS: &[(&str, Theme)] = &[
         ),
     ),
     (
-        "spooky",
-        preset(
-            0x1a1022, 0xf2e9e4, 0x6b5b7a, 0xb8a9c9, 0x3a2449, 0xff8c1a, 0xffb347, 0xe63946,
-            0x9bdc5b, 0xb388ff, 0xff4fd8,
-        ),
-    ),
-    (
         "solarized-light",
         preset(
             0xfdf6e3, 0x586e75, 0x657b83, 0x586e75, 0xeee8d5, 0x2aa198, 0xb58900, 0xdc322f,
             0x859900, 0x268bd2, 0xd33682,
+        ),
+    ),
+    (
+        SPOOKY,
+        preset(
+            0x1a1022, 0xf2e9e4, 0x6b5b7a, 0xb8a9c9, 0x3a2449, 0xff8c1a, 0xffb347, 0xe63946,
+            0x9bdc5b, 0xb388ff, 0xff4fd8,
         ),
     ),
 ];

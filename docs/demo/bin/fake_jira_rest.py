@@ -96,7 +96,10 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length) or b"{}")
         move = re.fullmatch(r"/rest/api/2/issue/([A-Za-z0-9_-]+)/transitions", self.path)
         if move:
-            _, status = TRANSITIONS[body["transition"]["id"]]
+            offered = TRANSITIONS.get(body.get("transition", {}).get("id"))
+            if not offered:
+                return self.reply(400, {"errorMessages": ["The demo has no such transition."]})
+            _, status = offered
             when = time.strftime("%Y-%m-%dT%H:%M:%S.000+0000", time.gmtime())
             moved[move.group(1)] = (status, when)
             return self.reply(204, None)

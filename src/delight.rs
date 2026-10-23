@@ -6,17 +6,19 @@ use std::time::{Duration, Instant};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
+use crate::app::App;
 use crate::cache::{StatusRules, Ticket};
-use crate::views::common::{age, fit};
+use crate::views::common::fit;
 
 const DAY: i64 = 24 * 60 * 60;
 /// An active ticket untouched this long is dusty.
-pub const DUSTY_AFTER: i64 = 21 * DAY;
+const DUSTY_AFTER: i64 = 21 * DAY;
 /// An active ticket untouched this long is a fossil, and its row fades.
-pub const FOSSIL_AFTER: i64 = 90 * DAY;
+const FOSSIL_AFTER: i64 = 90 * DAY;
 const YEAR: i64 = 365 * DAY;
 
 #[derive(Debug, Default)]
@@ -24,18 +26,20 @@ pub struct Delight {
     pub enabled: bool,
     /// The local date, read once at startup; `None` in tests and when `date` can't run.
     pub today: Option<Today>,
+    /// Which inbox-zero scene this session shows, chosen at startup so each launch can differ.
+    pub scene: usize,
     confetti: Option<Confetti>,
-    pub tally: Tally,
+    tally: Tally,
 }
 
 /// What the session did, for the receipt.
 #[derive(Debug, Default)]
-pub struct Tally {
+struct Tally {
     /// Tickets moved from an active status to a done one, in the order Jira confirmed them.
     shipped: Vec<Shipped>,
-    pub moved: usize,
-    pub comments: usize,
-    pub created: usize,
+    moved: usize,
+    comments: usize,
+    created: usize,
 }
 
 #[derive(Debug)]
@@ -47,7 +51,7 @@ struct Shipped {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Staleness {
+enum Staleness {
     Fresh,
     Dusty,
     Fossil,
@@ -62,10 +66,38 @@ impl Delight {
                 .is_some_and(|today| today.month == 10 && today.day >= 15)
     }
 
+    /// The title of the tab bar's frame.
+    pub fn title(&self) -> &'static str {
+        if self.spooky() {
+            " lazyjira 🎃 "
+        } else {
+            " lazyjira "
+        }
+    }
+
+    /// The footer's first hint: in spooky season, until `theme` is the spooky one, where to
+    /// find it. `S` stays Settings; the hint only points there. Empty otherwise.
+    pub fn theme_hint(&self, theme: &str) -> &'static str {
+        if self.spooky() && !theme.eq_ignore_ascii_case(crate::theme::SPOOKY) {
+            "🎃 S: settings › spooky theme  "
+        } else {
+            ""
+        }
+    }
+
+    pub fn commented(&mut self) {
+        self.tally.comments += 1;
+    }
+
+    pub fn created(&mut self, count: usize) {
+        self.tally.created += count;
+    }
+
     /// Records that Jira confirmed a move. `shipped` is the ticket as it was before the move
-    /// when the move took it from an active status to a done one; `epic_finished` when that
-    /// was the last open child of an epic, which gets the bigger celebration.
-    pub fn moved(&mut self, shipped: Option<&Ticket>, epic_finished: bool, now: i64) {
+    /// when the move took it from an active status to a done one; `finished_epic` is the epic
+    /// whose last open child that was, which gets the bigger celebration. A running epic
+    /// celebration is never cut short by a smaller one.
+    fn moved(&mut self, shipped: Option<&Ticket>, finished_epic: Option<&str>, now: i64) {
         self.tally.moved += 1;
         let Some(ticket) = shipped else { return };
         self.tally.shipped.push(Shipped {
@@ -73,10 +105,14 @@ impl Delight {
             summary: ticket.summary.clone(),
             idle: ticket.updated_secs().map(|at| (now - at).max(0)),
         });
-        if self.enabled {
+        let raining = self
+            .confetti
+            .as_ref()
+            .is_some_and(|confetti| confetti.epic.is_some());
+        if self.enabled && (finished_epic.is_some() || !raining) {
             self.confetti = Some(Confetti {
                 started: Instant::now(),
-                big: epic_finished,
+                epic: finished_epic.map(str::to_string),
             });
         }
     }
@@ -97,6 +133,34 @@ impl Delight {
         self.confetti.is_some()
     }
 
+    /// An epic's progress bar (`[####--]`) as spans, its filled part in rainbow colors that
+    /// shift with time while confetti celebrates finishing `epic`; `None` otherwise.
+    pub fn rainbow_bar(
+        &self,
+        epic: &str,
+        bar: &str,
+        style: Style,
+        now: Instant,
+    ) -> Option<Vec<Span<'static>>> {
+        let confetti = self.confetti.as_ref()?;
+        if confetti.epic.as_deref() != Some(epic) {
+            return None;
+        }
+        let shift = (now.duration_since(confetti.started).as_millis() / 100) as usize;
+        let spans = bar
+            .chars()
+            .enumerate()
+            .map(|(at, c)| match c {
+                '#' => Span::styled(
+                    "#",
+                    style.fg(SPARK_COLORS[(at + shift) % SPARK_COLORS.len()]),
+                ),
+                c => Span::styled(c.to_string(), style),
+            })
+            .collect();
+        Some(spans)
+    }
+
     /// Draws the falling confetti over everything in `area`, before the theme recolors it.
     pub fn draw(&self, buf: &mut Buffer, area: Rect, now: Instant) {
         let Some(confetti) = &self.confetti else {
@@ -112,7 +176,7 @@ impl Delight {
 
     /// How long `ticket` has sat untouched at `now` (Unix seconds). Done tickets, tickets
     /// whose read had no `updated`, and everything while delight is off are fresh.
-    pub fn staleness(&self, rules: &StatusRules, ticket: &Ticket, now: i64) -> Staleness {
+    fn staleness(&self, rules: &StatusRules, ticket: &Ticket, now: i64) -> Staleness {
         match self.idle(rules, ticket, now) {
             Some(idle) if idle >= FOSSIL_AFTER => Staleness::Fossil,
             Some(idle) if idle >= DUSTY_AFTER => Staleness::Dusty,
@@ -127,10 +191,20 @@ impl Delight {
         ticket.updated_secs().map(|at| now - at)
     }
 
-    /// The mark the Updated column shows before a stale ticket's age. Each is two columns wide
-    /// and shown as an emoji by default, so the column stays in line.
-    pub fn stale_mark(&self, staleness: Staleness) -> Option<&'static str> {
-        match (staleness, self.spooky()) {
+    /// Whether `ticket` is a fossil at `now`, so its row fades.
+    pub fn is_fossil(&self, rules: &StatusRules, ticket: &Ticket, now: i64) -> bool {
+        self.staleness(rules, ticket, now) == Staleness::Fossil
+    }
+
+    /// The mark the Updated column shows before a stale ticket's age at `now`. Each is two
+    /// columns wide and shown as an emoji by default, so the column stays in line.
+    pub fn stale_mark(
+        &self,
+        rules: &StatusRules,
+        ticket: &Ticket,
+        now: i64,
+    ) -> Option<&'static str> {
+        match (self.staleness(rules, ticket, now), self.spooky()) {
             (Staleness::Fresh, _) => None,
             (Staleness::Dusty, false) => Some("💤"),
             (Staleness::Fossil, false) => Some("🦕"),
@@ -160,16 +234,16 @@ impl Delight {
         }
     }
 
-    /// The art and caption My Work shows when nothing is left to do, a different one each day
-    /// (`now` in Unix seconds), or `None` while delight is off.
-    pub fn inbox_zero(&self, now: i64) -> Option<(&'static [&'static str], &'static str)> {
+    /// The art and caption My Work shows when nothing is left to do: this session's scene, or
+    /// `None` while delight is off.
+    pub fn inbox_zero(&self) -> Option<Scene> {
         if !self.enabled {
             return None;
         }
         if self.spooky() {
             return Some(GHOST);
         }
-        Some(SCENES[(now / DAY).rem_euclid(SCENES.len() as i64) as usize])
+        Some(SCENES[self.scene % SCENES.len()])
     }
 
     /// The receipt printed after the terminal is restored on quit: what the session shipped,
@@ -207,7 +281,9 @@ impl Delight {
             .filter(|(idle, _)| *idle >= DAY)
             .max_by_key(|(idle, _)| *idle);
         if let Some((idle, key)) = oldest {
-            body.push(format!("oldest slain: {} ({} idle)", key, age(0, idle)));
+            let days = idle / DAY;
+            let unit = if days == 1 { "day" } else { "days" };
+            body.push(format!("oldest slain: {key} ({days} {unit})"));
         }
 
         let inner = RECEIPT_WIDTH - 2;
@@ -222,7 +298,10 @@ impl Delight {
         };
         let sign_off = format!(" {sign_off} ");
         let left = (inner - sign_off.width()) / 2;
-        let mut lines = vec![format!("╭{}╮", fill(&title, inner))];
+        let mut lines = vec![format!(
+            "╭{title}{}╮",
+            "─".repeat(inner.saturating_sub(title.width()))
+        )];
         lines.extend(
             body.iter()
                 .map(|line| format!("│ {} │", fit(line, inner - 2))),
@@ -242,9 +321,27 @@ const RECEIPT_WIDTH: usize = 44;
 /// How many shipped tickets the receipt names before "+ N more".
 const RECEIPT_SHIPPED: usize = 5;
 
-/// `text` followed by box-drawing dashes to `width` columns.
-fn fill(text: &str, width: usize) -> String {
-    format!("{text}{}", "─".repeat(width.saturating_sub(text.width())))
+impl App {
+    /// Tallies a move Jira confirmed for the receipt, and celebrates it when it took `before`
+    /// (the ticket as it was) from an active status to the done `status`. Returns a message
+    /// naming the epic the move finished, when it finished one and delight is on.
+    pub fn celebrate_move(&mut self, before: Option<Ticket>, status: &str) -> Option<String> {
+        let rules = self.status_rules();
+        let shipped =
+            before.filter(|ticket| !rules.is_done(&ticket.status) && rules.is_done(status));
+        let finished = shipped.as_ref().and_then(|ticket| {
+            self.cache.epics.iter().find(|epic| {
+                epic.children.iter().any(|child| child.key == ticket.key)
+                    && epic.done_count(rules) == epic.total()
+            })
+        });
+        let message =
+            finished.map(|epic| format!("🎉 Epic {} complete: {}", epic.key, epic.summary));
+        let epic = finished.map(|epic| epic.key.clone());
+        let now = crate::local_cache::now_unix_secs() as i64;
+        self.delight.moved(shipped.as_ref(), epic.as_deref(), now);
+        message.filter(|_| self.delight.enabled)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,8 +402,8 @@ impl Today {
 #[derive(Debug)]
 struct Confetti {
     started: Instant,
-    /// An epic was finished: confetti rains over the whole screen, for longer.
-    big: bool,
+    /// The epic this finished: confetti rains over the whole screen, for longer.
+    epic: Option<String>,
 }
 
 /// Each one column wide, so a spark covers exactly the cell it lands on.
@@ -322,7 +419,7 @@ const SPARK_COLORS: [Color; 6] = [
 
 impl Confetti {
     fn duration(&self) -> Duration {
-        Duration::from_millis(if self.big { 2600 } else { 1400 })
+        Duration::from_millis(if self.epic.is_some() { 2600 } else { 1400 })
     }
 
     /// Each spark's cell, character and color `elapsed` seconds in, for those inside `area`.
@@ -330,12 +427,12 @@ impl Confetti {
     /// Sparks dim to `·` in the last quarter.
     fn particles(&self, area: Rect, elapsed: f32) -> Vec<(u16, u16, char, Color)> {
         let (w, h) = (area.width as f32, area.height as f32);
-        let count = if self.big { 160 } else { 48 };
+        let count = if self.epic.is_some() { 160 } else { 48 };
         let fading = elapsed > self.duration().as_secs_f32() * 0.75;
         (0..count)
             .filter_map(|i| {
                 let r = |k| noise(i, k);
-                let (x, y) = if self.big {
+                let (x, y) = if self.epic.is_some() {
                     let sway = (elapsed * 4.0 + r(3) * 6.3).sin() * 2.0;
                     let fall = (0.35 + 0.4 * r(2)) * h * elapsed;
                     (r(0) * w + sway, fall - r(1) * h * 0.8)
@@ -376,9 +473,10 @@ fn noise(i: u64, k: u64) -> f32 {
     (z >> 40) as f32 / (1u64 << 24) as f32
 }
 
-type Scene = (&'static [&'static str], &'static str);
+/// Lines of art and a caption.
+pub type Scene = (&'static [&'static str], &'static str);
 
-const SCENES: [Scene; 4] = [
+const SCENES: [Scene; 5] = [
     (
         &[
             r"      |\      _,,,---,,_",
@@ -386,7 +484,7 @@ const SCENES: [Scene; 4] = [
             r"     |,4-  ) )-,_. ,\ (  `'-'",
             r"    '---''(_/--'  `-'\_)",
         ],
-        "Inbox zero. The cat approves.",
+        "Inbox zero. The cat has the keyboard now.",
     ),
     (
         &[
@@ -412,6 +510,16 @@ const SCENES: [Scene; 4] = [
     ),
     (
         &[
+            r" \|/                     \|/",
+            r"  |`-._               _.-'|",
+            r"  |    `-._________.-'    |",
+            r"  |                       |",
+            r"~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+        ],
+        "Nothing to do. The hammock is free.",
+    ),
+    (
+        &[
             r"       /\",
             r"      |  |",
             r"      |()|",
@@ -419,7 +527,7 @@ const SCENES: [Scene; 4] = [
             r"    /_|__|_\",
             r"      /**\",
         ],
-        "Inbox zero. Go build something.",
+        "Nothing assigned. Go build something.",
     ),
 ];
 
@@ -513,13 +621,18 @@ mod tests {
 
     #[test]
     fn stale_marks_are_two_columns_and_spooky_in_season() {
+        let rules = StatusRules::default();
+        let ticket = untouched("In Progress");
+        let mark = |delight: &Delight, now| delight.stale_mark(&rules, &ticket, now);
         let plain = on(date(5, 10, 1));
         let spooky = on(date(5, 10, 23));
-        assert_eq!(plain.stale_mark(Staleness::Fresh), None);
-        assert_eq!(plain.stale_mark(Staleness::Dusty), Some("💤"));
-        assert_eq!(plain.stale_mark(Staleness::Fossil), Some("🦕"));
-        assert_eq!(spooky.stale_mark(Staleness::Dusty), Some("👻"));
-        assert_eq!(spooky.stale_mark(Staleness::Fossil), Some("💀"));
+        assert_eq!(mark(&plain, DUSTY_AFTER - 1), None);
+        assert_eq!(mark(&plain, DUSTY_AFTER), Some("💤"));
+        assert_eq!(mark(&plain, FOSSIL_AFTER), Some("🦕"));
+        assert_eq!(mark(&spooky, DUSTY_AFTER), Some("👻"));
+        assert_eq!(mark(&spooky, FOSSIL_AFTER), Some("💀"));
+        assert!(!plain.is_fossil(&rules, &ticket, FOSSIL_AFTER - 1));
+        assert!(plain.is_fossil(&rules, &ticket, FOSSIL_AFTER));
         for mark in ["💤", "🦕", "👻", "💀"] {
             assert_eq!(mark.width(), 2, "{mark}");
         }
@@ -538,35 +651,45 @@ mod tests {
     }
 
     #[test]
-    fn inbox_zero_changes_scene_each_day_and_haunts_in_season() {
-        let delight = on(date(5, 9, 1));
-        assert_eq!(delight.inbox_zero(0), Some(SCENES[0]));
-        assert_eq!(delight.inbox_zero(DAY - 1), Some(SCENES[0]));
-        assert_eq!(delight.inbox_zero(DAY), Some(SCENES[1]));
-        assert_eq!(delight.inbox_zero(4 * DAY), Some(SCENES[0]));
-        assert_eq!(on(date(5, 10, 23)).inbox_zero(0), Some(GHOST));
-        assert_eq!(Delight::default().inbox_zero(0), None);
+    fn inbox_zero_shows_the_sessions_scene_and_haunts_in_season() {
+        let mut delight = on(date(5, 9, 1));
+        assert_eq!(delight.inbox_zero(), Some(SCENES[0]));
+        delight.scene = SCENES.len() - 1;
+        assert_eq!(delight.inbox_zero(), Some(SCENES[SCENES.len() - 1]));
+        delight.scene = SCENES.len();
+        assert_eq!(delight.inbox_zero(), Some(SCENES[0]));
+        assert_eq!(on(date(5, 10, 23)).inbox_zero(), Some(GHOST));
+        assert_eq!(Delight::default().inbox_zero(), None);
     }
 
     #[test]
     fn shipping_a_ticket_starts_confetti_and_finishing_an_epic_makes_it_big() {
         let mut delight = on(None);
-        delight.moved(None, false, 0);
+        delight.moved(None, None, 0);
         assert!(!delight.animating(), "a move that ships nothing");
         assert!(
             delight.receipt().unwrap().contains("│ ↻ 1 moved "),
             "no \"0 shipped\""
         );
-        delight.moved(Some(&untouched("In Progress")), false, DAY);
-        assert!(delight.confetti.as_ref().is_some_and(|c| !c.big));
-        delight.moved(Some(&untouched("In Progress")), true, DAY);
-        assert!(delight.confetti.as_ref().is_some_and(|c| c.big));
+        delight.moved(Some(&untouched("In Progress")), None, DAY);
+        assert!(delight.confetti.as_ref().is_some_and(|c| c.epic.is_none()));
+        delight.moved(Some(&untouched("In Progress")), Some("DEMO-300"), DAY);
+        assert!(delight
+            .confetti
+            .as_ref()
+            .is_some_and(|c| c.epic.as_deref() == Some("DEMO-300")));
         assert_eq!(delight.tally.moved, 3);
         assert_eq!(delight.tally.shipped.len(), 2);
         assert_eq!(delight.tally.shipped[0].idle, Some(DAY));
 
+        delight.moved(Some(&untouched("In Progress")), None, DAY);
+        assert!(
+            delight.confetti.as_ref().unwrap().epic.is_some(),
+            "a smaller burst doesn't cut the epic's rain short"
+        );
+
         let mut off = Delight::default();
-        off.moved(Some(&untouched("In Progress")), true, DAY);
+        off.moved(Some(&untouched("In Progress")), Some("DEMO-300"), DAY);
         assert!(!off.animating());
         assert_eq!(off.tally.shipped.len(), 1, "the tally still counts");
     }
@@ -574,7 +697,7 @@ mod tests {
     #[test]
     fn confetti_ends_after_its_duration_with_one_more_draw() {
         let mut delight = on(None);
-        delight.moved(Some(&untouched("In Progress")), false, 0);
+        delight.moved(Some(&untouched("In Progress")), None, 0);
         let started = delight.confetti.as_ref().unwrap().started;
         assert!(delight.tick(started + Duration::from_millis(1399)));
         assert!(delight.animating());
@@ -589,7 +712,7 @@ mod tests {
         for big in [false, true] {
             let confetti = Confetti {
                 started: Instant::now(),
-                big,
+                epic: big.then(|| "DEMO-300".to_string()),
             };
             let end = confetti.duration().as_secs_f32();
             let mut drawn = 0;
@@ -601,8 +724,23 @@ mod tests {
                 }
             }
             assert!(drawn > 0, "big: {big}");
-            let late = confetti.particles(area, end * 0.9);
-            assert!(late.iter().all(|(_, _, spark, _)| *spark == '·'));
+            let sparks = |at: f32| -> Vec<char> {
+                let particles = confetti.particles(area, at);
+                particles
+                    .into_iter()
+                    .map(|(_, _, spark, _)| spark)
+                    .collect()
+            };
+            // The last quarter starts at exactly three quarters of the duration.
+            assert!(
+                sparks(end * 0.75).iter().any(|spark| *spark != '·'),
+                "big: {big}"
+            );
+            let dim = sparks(end * 0.75 + 0.001);
+            assert!(
+                !dim.is_empty() && dim.iter().all(|spark| *spark == '·'),
+                "big: {big}"
+            );
         }
         for spark in SPARKS {
             assert_eq!(spark.to_string().width(), 1, "{spark}");
@@ -632,8 +770,8 @@ mod tests {
         let mut login = untouched("In Progress");
         login.key = "DEMO-41".to_string();
         login.summary = "Fix login redirect".to_string();
-        delight.moved(Some(&login), false, 13 * 7 * DAY);
-        delight.moved(None, false, 0);
+        delight.moved(Some(&login), None, 13 * 7 * DAY);
+        delight.moved(None, None, 0);
         delight.tally.comments = 2;
         let receipt = delight.receipt().unwrap();
         let expected = [
@@ -641,7 +779,7 @@ mod tests {
             "│ ✓ 1 shipped  ↻ 2 moved  💬 2             │",
             "│                                          │",
             "│ DEMO-41  Fix login redirect              │",
-            "│ oldest slain: DEMO-41 (13w idle)         │",
+            "│ oldest slain: DEMO-41 (91 days)          │",
             "╰───────────── see you Monday ─────────────╯",
         ];
         assert_eq!(receipt, expected.join("\n"));
@@ -658,13 +796,28 @@ mod tests {
     }
 
     #[test]
+    fn the_receipt_names_exactly_five_shipped_tickets_without_more() {
+        let mut delight = on(None);
+        for n in 1..=5 {
+            let mut ticket = untouched("To Do");
+            ticket.key = format!("DEMO-{n}");
+            delight.moved(Some(&ticket), None, 0);
+        }
+        let receipt = delight.receipt().unwrap();
+        for n in 1..=5 {
+            assert!(receipt.contains(&format!("│ DEMO-{n}  ")), "{receipt}");
+        }
+        assert!(!receipt.contains("more"), "{receipt}");
+    }
+
+    #[test]
     fn the_receipt_names_five_shipped_tickets_then_counts_the_rest() {
         let mut delight = on(None);
         for n in 1..=6 {
             let mut ticket = untouched("To Do");
             ticket.key = format!("DEMO-{n}");
             ticket.updated = None;
-            delight.moved(Some(&ticket), false, 0);
+            delight.moved(Some(&ticket), None, 0);
         }
         let receipt = delight.receipt().unwrap();
         assert!(receipt.contains("│ DEMO-5  "));
@@ -678,12 +831,58 @@ mod tests {
     #[test]
     fn a_ticket_shipped_within_a_day_is_not_the_oldest_slain() {
         let mut delight = on(None);
-        delight.moved(Some(&untouched("To Do")), false, DAY - 1);
+        delight.moved(Some(&untouched("To Do")), None, DAY - 1);
         assert!(!delight.receipt().unwrap().contains("oldest slain"));
-        delight.moved(Some(&untouched("To Do")), false, DAY);
+        delight.moved(Some(&untouched("To Do")), None, DAY);
         assert!(delight
             .receipt()
             .unwrap()
-            .contains("oldest slain: DEMO-7 (1d idle)"));
+            .contains("oldest slain: DEMO-7 (1 day)"));
+    }
+
+    #[test]
+    fn only_the_finished_epics_bar_turns_rainbow() {
+        let mut delight = on(None);
+        let started = Instant::now();
+        assert_eq!(
+            delight.rainbow_bar("DEMO-300", "[#-]", Style::default(), started),
+            None
+        );
+        delight.moved(Some(&untouched("To Do")), Some("DEMO-300"), 0);
+        let started = delight.confetti.as_ref().unwrap().started;
+        assert_eq!(
+            delight.rainbow_bar("DEMO-100", "[#-]", Style::default(), started),
+            None
+        );
+        let colors = |at| {
+            let bar = delight
+                .rainbow_bar("DEMO-300", "[##-]", Style::default(), at)
+                .unwrap();
+            let text: String = bar.iter().map(|span| span.content.as_ref()).collect();
+            assert_eq!(text, "[##-]");
+            (bar[1].style.fg, bar[2].style.fg, bar[3].style.fg)
+        };
+        assert_eq!(
+            colors(started),
+            (Some(SPARK_COLORS[1]), Some(SPARK_COLORS[2]), None)
+        );
+        let later = started + Duration::from_millis(100);
+        assert_eq!(
+            colors(later),
+            (Some(SPARK_COLORS[2]), Some(SPARK_COLORS[3]), None)
+        );
+    }
+
+    #[test]
+    fn the_footer_points_to_the_spooky_theme_in_settings_until_it_is_chosen() {
+        let spooky = on(date(5, 10, 23));
+        assert_eq!(
+            spooky.theme_hint("default"),
+            "🎃 S: settings › spooky theme  "
+        );
+        assert_eq!(spooky.theme_hint("Spooky"), "");
+        assert_eq!(on(date(5, 11, 1)).theme_hint("default"), "");
+        assert_eq!(spooky.title(), " lazyjira 🎃 ");
+        assert_eq!(on(date(5, 11, 1)).title(), " lazyjira ");
     }
 }

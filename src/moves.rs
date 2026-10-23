@@ -105,30 +105,12 @@ impl App {
     }
 
     /// Jira confirmed `key` is now in the status named `status`: show it everywhere and ignore
-    /// older reads of it. Returns a message celebrating the epic the move finished, when it
-    /// finished one and delight is on.
+    /// older reads of it. Returns `celebrate_move`'s message for an epic the move finished.
     pub fn record_move(&mut self, key: &str, status: &str) -> Option<String> {
-        let rules = self.status_rules();
-        // The ticket as it was, when this move takes it from active to done.
-        let shipped = self
-            .find_ticket(key)
-            .filter(|ticket| !rules.is_done(&ticket.status) && rules.is_done(status))
-            .cloned();
+        let before = self.find_ticket(key).cloned();
         self.moves.confirm(key, status);
         self.update_ticket_status(key, status);
-        let rules = self.status_rules();
-        let finished_epic = shipped.as_ref().and_then(|_| {
-            self.cache.epics.iter().find(|epic| {
-                epic.children.iter().any(|child| child.key == key)
-                    && epic.done_count(rules) == epic.total()
-            })
-        });
-        let celebration =
-            finished_epic.map(|epic| format!("🎉 Epic {} complete: {}", epic.key, epic.summary));
-        let now = crate::local_cache::now_unix_secs() as i64;
-        self.delight
-            .moved(shipped.as_ref(), celebration.is_some(), now);
-        celebration.filter(|_| self.delight.enabled)
+        self.celebrate_move(before, status)
     }
 
     /// Re-applies moves Jira confirmed after a list read was requested, so the read can't undo them.

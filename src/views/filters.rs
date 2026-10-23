@@ -107,7 +107,7 @@ fn results_column_widths(area: Rect, mut status_w: usize) -> (usize, usize) {
 
 fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let results_focused = app.filter_focus == FilterFocus::Results;
-    let ages = Ages::now(app);
+    let ages = Ages::of(app);
     let border_style = if results_focused {
         Style::default().fg(Color::Yellow)
     } else {
@@ -205,9 +205,9 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 } else {
                     Style::default()
                 };
+                let base = ages.fade(ticket, base);
                 let (key_cell, summary) = ticket_cells(
                     app,
-                    ages,
                     group.family.get(index).copied(),
                     ticket,
                     marker,

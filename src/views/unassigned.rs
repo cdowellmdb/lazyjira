@@ -24,7 +24,7 @@ fn ticket_column_widths(area: Rect, mut status_w: usize) -> (usize, usize) {
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.unassigned_visible_by_epic();
     let shared = Shared::of(&grouped, Columns::GroupedByEpic);
-    let ages = Ages::now(app);
+    let ages = Ages::of(app);
     let key_w = KEY_WIDTH;
     let (status_w, summary_w) = ticket_column_widths(area, status_width(&grouped));
     let heading_style = Style::default()
@@ -101,6 +101,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 Style::default()
             };
+
+            let base = ages.fade(ticket, base);
             let status_style = if is_selected {
                 Style::default()
                     .fg(status_color(&ticket.status, app.status_rules()))
@@ -111,7 +113,6 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
             let (key_cell, summary) = ticket_cells(
                 app,
-                ages,
                 group.family.get(index).copied(),
                 ticket,
                 marker,

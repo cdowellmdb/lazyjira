@@ -1073,6 +1073,8 @@ mod tests {
             ticket.updated = Some(jira_time(now - ago));
             ticket
         };
+        // Just under three weeks: fresh.
+        const FRESH_AGO: i64 = 21 * DAY - DAY / 2;
         let mut app = App::new();
         app.loading = false;
         app.delight.enabled = true;
@@ -1082,8 +1084,6 @@ mod tests {
             ticket("DEMO-3", "To Do", 91 * DAY + DAY / 2),
             ticket("DEMO-4", "Closed", 91 * DAY + DAY / 2),
         ];
-        // Just under three weeks: fresh.
-        const FRESH_AGO: i64 = 21 * DAY - DAY / 2;
         // A label on one row keeps the Labels column, so Updated has a separator after it.
         app.cache.my_tickets[0].labels = vec!["a".into()];
         app.mark_cache_changed();
@@ -1121,14 +1121,22 @@ mod tests {
                 "{key}: {drawn}"
             );
         }
-        let summary_fg = |key: &str| {
+        let fg = |key: &str, text: &str| {
             let y = row(key);
-            let x = column_of(&rows[y], &format!("Summary of {key}"));
-            buffer[(x as u16, y as u16)].fg
+            buffer[(column_of(&rows[y], text) as u16, y as u16)].fg
         };
-        assert_eq!(summary_fg("DEMO-2"), Color::Reset);
-        assert_eq!(summary_fg("DEMO-3"), Color::DarkGray, "a fossil fades");
-        assert_eq!(summary_fg("DEMO-4"), Color::Reset, "done is never stale");
+        let row_fg = |key: &str| (fg(key, key), fg(key, &format!("Summary of {key}")));
+        assert_eq!(row_fg("DEMO-2"), (Color::Reset, Color::Reset));
+        assert_eq!(
+            row_fg("DEMO-3"),
+            (Color::DarkGray, Color::DarkGray),
+            "a fossil fades"
+        );
+        assert_eq!(
+            row_fg("DEMO-4"),
+            (Color::Reset, Color::Reset),
+            "done is never stale"
+        );
 
         app.delight.enabled = false;
         let rows = draw(&app, Tab::MyWork, 120);

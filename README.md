@@ -36,10 +36,10 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 - Built-in color themes, previewed live as you pick, plus your own in `config.toml`
 
 **Little joys**
-- Confetti when Jira confirms a ticket's move to Done, and a screen-wide shower when that finishes an epic
+- Confetti when Jira confirms a ticket's move to Done, and a screen-wide shower, with the epic's progress bar in rainbow colors, when that finishes an epic
 - Quitting prints a receipt of the session (shipped, moved, commented, created) that stays in your terminal
 - Active tickets nobody has touched for 3 weeks show 💤 before their age; after 90 days 🦕, and the row fades. The detail view puts the wait in perspective
-- An empty My Work shows a little scene instead of an empty table, a new one each day
+- An empty My Work shows a little scene instead of an empty table, picked each time you start lazyjira
 - Spooky season, October 15th to 31st: 🎃 in the title, 👻 and 💀 for stale tickets, Blocked shows as Cursed, and a `spooky` theme to try
 - Set `preferences.delight = false` to turn all of these off
 
@@ -245,7 +245,7 @@ The move picker lists the transitions Jira offers for the ticket, as "transition
 
 A resolution is asked for only when the chosen transition has a resolution field, and the picker offers the values Jira allows for it, plus "No resolution" when the field is optional.
 
-The ticket keeps its status until Jira confirms the move; the status bar shows the move as pending in the meantime. A confirmed move from an active status to a done one throws confetti; when it finishes an epic, the confetti fills the screen and the status bar names the epic. If Jira rejects the move, its error stays on screen until you press `Enter` or `Esc`, and `o` opens the ticket in your browser. A ticket can have only one move running at a time.
+The ticket keeps its status until Jira confirms the move; the status bar shows the move as pending in the meantime. A confirmed move from an active status to a done one throws confetti; when it finishes an epic, the confetti fills the screen, the epic's progress bar turns rainbow, and the status bar names the epic. If Jira rejects the move, its error stays on screen until you press `Enter` or `Esc`, and `o` opens the ticket in your browser. A ticket can have only one move running at a time.
 
 A bulk move loads every selected ticket's transitions, then offers the statuses they can reach, with how many tickets can reach each. The same `p/w/n/t/v/b/c` keys pick a status: one match goes straight to the resolution or confirmation step, and when several statuses match, the picker lists just those. Uppercase letters work like lowercase here: a bulk move always asks for confirmation. Each ticket uses its own transition to the chosen status. Tickets without one, with several different ones, or already in that status are skipped, and the summary lists each with the reason. If any of the transitions has a resolution field, you pick one resolution for all of them: tickets whose transition allows it get it, tickets where it's optional are moved without it, and tickets that require a different one are skipped.
 

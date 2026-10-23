@@ -23,7 +23,7 @@ fn team_column_widths(area: Rect, mut status_w: usize) -> (usize, usize, usize, 
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let members = app.team_visible_tickets_by_member();
-    let ages = Ages::now(app);
+    let ages = Ages::of(app);
     let shared = Shared::of(&members, Columns::EpicAndLabels);
     let key_w = KEY_WIDTH;
     let (status_w, summary_w, epic_w, labels_w) = team_column_widths(area, status_width(&members));
@@ -116,6 +116,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Style::default()
                 };
 
+                let base = ages.fade(ticket, base);
+
                 let status_fg = status_color(&ticket.status, app.status_rules());
                 let colored = if is_selected {
                     Style::default().fg(status_fg).bg(Color::DarkGray)
@@ -125,7 +127,6 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let (key_cell, summary) = ticket_cells(
                     app,
-                    ages,
                     group.family.get(index).copied(),
                     ticket,
                     marker,
@@ -166,6 +167,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Style::default().add_modifier(Modifier::DIM)
                 };
 
+                let base = ages.fade(ticket, base);
+
                 let status_fg = status_color(&ticket.status, app.status_rules());
                 let colored = if is_selected {
                     Style::default().fg(status_fg).bg(Color::DarkGray)
@@ -175,7 +178,6 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let (key_cell, summary) = ticket_cells(
                     app,
-                    ages,
                     group.family.get(index).copied(),
                     ticket,
                     marker,
