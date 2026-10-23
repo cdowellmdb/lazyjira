@@ -80,9 +80,16 @@ Sleep 800ms
 Tab
 Sleep 2.5s
 
-# Epics
+# Epics, then focus one status at a time and back to all.
 Tab
 Sleep 3s
+Type "f"
+Sleep 2s
+Type "f"
+Sleep 2s
+Type "F"
+Type "F"
+Sleep 1s
 
 # Unassigned
 Tab

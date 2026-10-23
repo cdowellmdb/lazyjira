@@ -963,7 +963,7 @@ impl App {
         )
     }
 
-    /// Epics in display order with their children whose status is `shown` and that match the
+    /// Epics in display order with their children whose status `is_shown` and that match the
     /// search. An epic matching the search keeps all its shown children.
     fn epics_with_children(
         &self,
