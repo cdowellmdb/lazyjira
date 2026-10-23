@@ -2096,7 +2096,7 @@ async fn handle_main_keys(
             });
         }
         KeyCode::Char(c @ ('f' | 'F')) => {
-            if matches!(app.active_tab, Tab::MyWork | Tab::Team | Tab::Epics) {
+            if app.active_tab.has_status_focus() {
                 app.cycle_status_focus(c == 'f');
                 app.flash = Some(app.status_focus_message());
             } else {

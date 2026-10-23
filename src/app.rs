@@ -149,6 +149,11 @@ impl Tab {
         }
     }
 
+    /// Whether `f`/`F` focuses a status in this tab; `App::focusable_statuses` lists them.
+    pub fn has_status_focus(self) -> bool {
+        matches!(self, Tab::MyWork | Tab::Team | Tab::Epics)
+    }
+
     pub fn title(&self) -> &'static str {
         match self {
             Tab::MyWork => "My Work",
@@ -941,12 +946,17 @@ impl App {
     }
 
     /// Epics and visible child rows in the exact order used by the Epics tab. A status focus
-    /// also drops the epics with no child left to show.
+    /// also drops the epics with no shown child in the focused status, like search drops the
+    /// epics with no match; a kept epic still shows its done children while `d` shows them.
     pub(crate) fn epics_visible_epics(&self) -> Vec<VisibleGroup<'_, &crate::cache::Epic>> {
         let visible = self
             .epics_with_children(|status| self.status_visible(status))
             .into_iter()
-            .filter(|(_, children)| self.status_focus.is_none() || !children.is_empty());
+            .filter(|(_, children)| {
+                self.status_focus
+                    .as_deref()
+                    .is_none_or(|focus| children.iter().any(|t| t.status == focus))
+            });
         self.index_groups(
             Tab::Epics,
             visible.map(|(epic, tickets)| (epic.key.clone(), epic, nest(tickets))),
@@ -957,7 +967,7 @@ impl App {
     /// search. An epic matching the search keeps all its shown children.
     fn epics_with_children(
         &self,
-        shown: impl Fn(&str) -> bool,
+        is_shown: impl Fn(&str) -> bool,
     ) -> Vec<(&crate::cache::Epic, Vec<&crate::cache::Ticket>)> {
         let search = self.normalized_search();
         let mut visible = Vec::new();
@@ -977,8 +987,12 @@ impl App {
         }
 
         for epic in epics {
-            // Hidden children leave the epic in place, and its progress still counts them.
-            let shown: Vec<_> = epic.children.iter().filter(|t| shown(&t.status)).collect();
+            // The epic's progress still counts the children hidden here.
+            let shown: Vec<_> = epic
+                .children
+                .iter()
+                .filter(|t| is_shown(&t.status))
+                .collect();
             match &search {
                 Some(s) => {
                     let epic_matches = Self::contains_case_insensitive(&epic.key, s)

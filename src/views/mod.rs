@@ -620,33 +620,55 @@ mod tests {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::Epics;
+        let epic = |key: &str, children: Vec<Ticket>| Epic {
+            key: key.into(),
+            summary: "Epic".into(),
+            children,
+        };
         app.cache.epics = vec![
-            Epic {
-                key: "EPIC-1".into(),
-                summary: "Epic".into(),
-                children: vec![
+            epic(
+                "EPIC-1",
+                vec![
                     Ticket::for_test("DEMO-1", "In Progress"),
                     Ticket::for_test("DEMO-2", "On Deck"),
+                    Ticket::for_test("DEMO-3", "Closed"),
                 ],
-            },
-            Epic {
-                key: "EPIC-2".into(),
-                summary: "Epic".into(),
-                children: vec![Ticket::for_test("DEMO-3", "On Deck")],
-            },
+            ),
+            epic("EPIC-2", vec![Ticket::for_test("DEMO-4", "On Deck")]),
+            epic("EPIC-3", vec![Ticket::for_test("DEMO-5", "Closed")]),
         ];
+        // Done is left to `d`.
         assert_eq!(app.focusable_statuses(), ["In Progress", "On Deck"]);
 
         app.cycle_status_focus(true);
         let rows = draw(&app, Tab::Epics, 120);
         assert!(line_with(&rows, "DEMO-1").is_some(), "{rows:?}");
         assert!(line_with(&rows, "DEMO-2").is_none(), "{rows:?}");
+        // A kept epic shows its done children, and its progress counts every child.
+        assert!(line_with(&rows, "DEMO-3").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "(1 / 3 done").is_some(), "{rows:?}");
+        // An epic with only done children has none in the focus.
         assert!(line_with(&rows, "EPIC-2").is_none(), "{rows:?}");
+        assert!(line_with(&rows, "EPIC-3").is_none(), "{rows:?}");
 
         app.cycle_status_focus(true);
         let rows = draw(&app, Tab::Epics, 120);
         assert!(line_with(&rows, "DEMO-1").is_none(), "{rows:?}");
-        assert!(line_with(&rows, "DEMO-3").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "DEMO-2").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "DEMO-4").is_some(), "{rows:?}");
+
+        // An epic matching the search by key still needs a child in the focus.
+        app.search = Some("epic-2".into());
+        assert_eq!(app.focusable_statuses(), ["On Deck"]);
+        app.cycle_status_focus(false);
+        app.cycle_status_focus(true);
+        assert_eq!(app.status_focus.as_deref(), Some("On Deck"));
+        assert!(line_with(&draw(&app, Tab::Epics, 120), "DEMO-4").is_some());
+        app.search = Some("epic-1".into());
+        let rows = draw(&app, Tab::Epics, 120);
+        assert!(line_with(&rows, "DEMO-2").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "DEMO-1").is_none(), "{rows:?}");
+        assert!(line_with(&rows, "EPIC-2").is_none(), "{rows:?}");
     }
 
     /// The screen column `text` starts at in `row`, a line from `draw`: one symbol per cell, so a

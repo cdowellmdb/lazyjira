@@ -60,7 +60,7 @@ A JQL query sent to Jira's REST search endpoint to read tickets (`jira_rest::sea
 _Avoid_: Search for a call to Jira; Search is the local text filter.
 
 **Status focus**:
-A restriction of My Work or Team to one displayed active status.
+A restriction of My Work, Team or Epics to one displayed active status. In Epics it applies to an epic's children, and an epic with no child in that status is hidden.
 
 **Ticket detail**:
 The expanded view of a ticket's fields, description, and comments.
