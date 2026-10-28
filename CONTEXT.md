@@ -13,8 +13,12 @@ The name Jira gives a ticket's current workflow position, such as In Progress or
 _Avoid_: Transition when referring to the ticket's current position.
 
 **Done**:
-The classification of statuses treated as finished work for visibility, active counts, and epic progress. Several differently named statuses can count as done.
+The classification of statuses treated as finished work for visibility, active counts, and epic progress (except dropped ones). Several differently named statuses can count as done.
 _Avoid_: Closed as a synonym for every done status; Closed is a specific status name.
+
+**Dropped**:
+A done status for work the team decided not to do, such as Won't Do. It is done for visibility and active counts, but an epic's progress leaves it out, and a move to it isn't shipped.
+_Avoid_: Cancelled as a synonym for every dropped status; Cancelled is a specific status name.
 
 **Transition**:
 A workflow action Jira currently offers for a ticket, leading to a destination status. Different transitions can lead to the same status.
@@ -27,7 +31,7 @@ An attempt to change a ticket's status through one of its available transitions.
 A value describing how a ticket was resolved, offered or required by a transition. It is distinct from the destination status.
 
 **Epic**:
-A Jira issue grouping related child tickets, with progress measured by how many children count as done.
+A Jira issue grouping related child tickets, with progress measured by how many of its children that aren't dropped count as done.
 
 **Sub-task**:
 A Jira issue that belongs to a parent ticket. Views show it under its parent when the parent is in the same group, and otherwise lead its summary with the parent's key. Epic progress counts sub-tasks of an epic's children as part of the epic.
@@ -73,7 +77,7 @@ A move or assignment applied to selected tickets, with success, failure, or a re
 _Avoid_: Bulk upload when updating existing tickets.
 
 **Shipped**:
-A ticket a confirmed move took from an active status to a done one during the session. The quit receipt lists shipped tickets.
+A ticket a confirmed move took from an active status to a done one, not a dropped one, during the session. The quit receipt lists shipped tickets.
 
 **Stale**:
 An active ticket whose Jira `updated` is at least three weeks old (dusty), or at least 90 days old (a fossil, whose row fades). Done tickets are never stale.

@@ -595,6 +595,43 @@ mod tests {
     }
 
     #[test]
+    fn epic_headers_show_percent_done_without_the_dropped_children() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Epics;
+        let header = |app: &mut App, children: &[(&str, usize)]| {
+            app.cache.epics = vec![Epic::for_test("EPIC-9", children)];
+            let rows = draw(app, Tab::Epics, 160);
+            let header = rows
+                .iter()
+                .position(|(row, _)| row.contains("EPIC-9"))
+                .unwrap()
+                + 1;
+            rows[header].0.clone()
+        };
+        // 108 of the 111 not dropped is 97.3%, shown rounded down.
+        let line = header(
+            &mut app,
+            &[("Won't Do", 10), ("In Progress", 3), ("Closed", 108)],
+        );
+        assert!(
+            line.contains("97% done · 121 tickets: 108 Closed · 3 In Progress · 10 Won't Do"),
+            "{line}"
+        );
+        let line = header(&mut app, &[("Closed", 199), ("In Progress", 1)]);
+        assert!(line.contains("  99% done · 200 tickets"), "{line}");
+        let line = header(&mut app, &[("Closed", 200)]);
+        assert!(line.contains("  100% done · 200 tickets"), "{line}");
+        // With no child in scope, there's nothing to measure.
+        let line = header(&mut app, &[("Won't Do", 2)]);
+        assert!(line.contains("  2 tickets: 2 Won't Do"), "{line}");
+        assert!(!line.contains("% done"), "{line}");
+        let line = header(&mut app, &[]);
+        assert!(line.contains("  0 tickets"), "{line}");
+        assert!(!line.contains("% done"), "{line}");
+    }
+
+    #[test]
     fn d_hides_done_children_in_epics_but_progress_still_counts_them() {
         let mut app = App::new();
         app.loading = false;
@@ -612,7 +649,10 @@ mod tests {
         let rows = draw(&app, Tab::Epics, 120);
         assert!(line_with(&rows, "DEMO-1").is_some(), "{rows:?}");
         assert!(line_with(&rows, "DEMO-2").is_none(), "{rows:?}");
-        assert!(line_with(&rows, "(1 / 2 done").is_some(), "{rows:?}");
+        assert!(
+            line_with(&rows, "50% done · 2 tickets: 1 Closed · 1 In Progress").is_some(),
+            "{rows:?}"
+        );
     }
 
     #[test]
@@ -646,7 +686,14 @@ mod tests {
         assert!(line_with(&rows, "DEMO-2").is_none(), "{rows:?}");
         // A kept epic shows its done children, and its progress counts every child.
         assert!(line_with(&rows, "DEMO-3").is_some(), "{rows:?}");
-        assert!(line_with(&rows, "(1 / 3 done").is_some(), "{rows:?}");
+        assert!(
+            line_with(
+                &rows,
+                "33% done · 3 tickets: 1 Closed · 1 In Progress · 1 On Deck"
+            )
+            .is_some(),
+            "{rows:?}"
+        );
         // An epic with only done children has none in the focus.
         assert!(line_with(&rows, "EPIC-2").is_none(), "{rows:?}");
         assert!(line_with(&rows, "EPIC-3").is_none(), "{rows:?}");

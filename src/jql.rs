@@ -200,10 +200,26 @@ mod tests {
             statuses: StatusConfig {
                 active: vec!["In Progress".into(), "To Do".into()],
                 done: vec!["Done".into(), "Closed".into()],
+                dropped: vec![],
             },
             filters: vec![],
             preferences: Default::default(),
             themes: Default::default(),
+        }
+    }
+
+    #[test]
+    fn dropped_statuses_never_reach_the_list_search() {
+        let without = test_config();
+        let mut with = test_config();
+        with.statuses.dropped = vec!["Won't Do".into(), "Not In This Project".into()];
+        for scope in [
+            TicketFetchScope::ActiveOnly,
+            TicketFetchScope::ActiveAndRecentDone,
+        ] {
+            let jql = lists_jql(&with, &["alex@example.com"], scope);
+            assert_eq!(jql, lists_jql(&without, &["alex@example.com"], scope));
+            assert!(!jql.contains("Won't Do"), "{jql}");
         }
     }
 

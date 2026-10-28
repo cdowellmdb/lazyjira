@@ -317,6 +317,19 @@ mod tests {
     }
 
     #[test]
+    fn dropping_the_last_open_child_celebrates_nothing() {
+        let mut app = app_with_ticket_everywhere();
+        app.delight.enabled = true;
+        // "Won't Do" is dropped by default: done, but not shipped.
+        assert!(app.moves.start(KEY, "Won't Do"));
+        app.finish_move(KEY, Ok(()));
+        assert_eq!(app.flash.as_deref(), Some("Moved DEMO-2478 to Won't Do"));
+        assert!(!app.delight.animating());
+        assert!(app.delight.receipt().unwrap().contains("↻ 1 moved"));
+        assert!(!app.delight.receipt().unwrap().contains("shipped"));
+    }
+
+    #[test]
     fn a_move_between_active_statuses_ships_nothing() {
         let mut app = app_with_ticket_everywhere();
         app.delight.enabled = true;

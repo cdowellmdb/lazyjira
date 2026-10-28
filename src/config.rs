@@ -73,14 +73,19 @@ fn default_done_window_days() -> u32 {
     14
 }
 
-/// Which status names are considered active vs done. Their order is the order status
-/// groups are shown in: active statuses first, then done.
+/// Which status names are considered active, done or dropped. Their order is the order status
+/// groups are shown in: active statuses first, then done, then dropped. Dropped statuses are
+/// done work nobody did ("Won't Do"): done everywhere, but an epic's progress leaves them out.
+/// Unlike `active` and `done`, the list read's JQL doesn't name them, so a name the project
+/// lacks costs nothing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusConfig {
     #[serde(default = "default_active_statuses")]
     pub active: Vec<String>,
     #[serde(default = "default_done_statuses")]
     pub done: Vec<String>,
+    #[serde(default = "default_dropped_statuses")]
+    pub dropped: Vec<String>,
 }
 
 /// Also the display order of status groups (see `cache::StatusRules`).
@@ -99,11 +104,20 @@ fn default_done_statuses() -> Vec<String> {
     vec!["Done".to_string(), "Closed".to_string()]
 }
 
+fn default_dropped_statuses() -> Vec<String> {
+    vec![
+        "Won't Do".to_string(),
+        "Won't Fix".to_string(),
+        "Cancelled".to_string(),
+    ]
+}
+
 impl Default for StatusConfig {
     fn default() -> Self {
         Self {
             active: default_active_statuses(),
             done: default_done_statuses(),
+            dropped: default_dropped_statuses(),
         }
     }
 }
@@ -289,6 +303,7 @@ mod tests {
         );
         assert_eq!(parsed.statuses.active, config.statuses.active);
         assert_eq!(parsed.statuses.done, config.statuses.done);
+        assert_eq!(parsed.statuses.dropped, config.statuses.dropped);
         assert_eq!(parsed.filters.len(), 1);
         assert_eq!(parsed.filters[0].name, "My bugs");
         assert_eq!(parsed.filters[0].jql, config.filters[0].jql);
@@ -309,6 +324,10 @@ team_name = "My Team"
         assert_eq!(config.jira.done_window_days, 14);
         assert!(config.jira.epics_i_care_about.is_empty());
         assert_eq!(config.statuses.active, default_active_statuses());
+        assert_eq!(
+            config.statuses.dropped,
+            ["Won't Do", "Won't Fix", "Cancelled"]
+        );
         assert_eq!(config.statuses.done, default_done_statuses());
         assert!(config.team.is_empty());
         assert!(config.filters.is_empty());
