@@ -207,7 +207,8 @@ impl StatusRules {
         self.place(name).rank
     }
 
-    /// Whether the status named `name` is done (hidden by `d`, counted as epic progress).
+    /// Whether the status named `name` is done (hidden by `d`), dropped included; epic progress
+    /// counts only `StatusKind::Done`.
     pub fn is_done(&self, name: &str) -> bool {
         self.kind(name) != StatusKind::Active
     }

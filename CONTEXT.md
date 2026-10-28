@@ -13,7 +13,7 @@ The name Jira gives a ticket's current workflow position, such as In Progress or
 _Avoid_: Transition when referring to the ticket's current position.
 
 **Done**:
-The classification of statuses treated as finished work for visibility, active counts, and epic progress. Several differently named statuses can count as done.
+The classification of statuses treated as finished work for visibility, active counts, and epic progress (except dropped ones). Several differently named statuses can count as done.
 _Avoid_: Closed as a synonym for every done status; Closed is a specific status name.
 
 **Dropped**:

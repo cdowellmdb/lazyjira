@@ -594,7 +594,7 @@ mod tests {
         let bar = epic_bar(
             &Epic::for_test("DEMO-1", &[]),
             &rules(),
-            24,
+            EPIC_BAR_WIDTH,
             Style::default(),
         );
         let text: String = bar.iter().map(|span| span.content.as_ref()).collect();
