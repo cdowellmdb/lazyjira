@@ -3,7 +3,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
 use crate::app::{App, GroupSelectionState, VisibleGroup};
-use crate::cache::{Status, StatusRules, Ticket};
+use crate::cache::{Epic, Status, StatusRules, Ticket};
 use crate::delight::Delight;
 use crate::subtasks::Family;
 use unicode_width::UnicodeWidthStr;
@@ -41,9 +41,12 @@ pub fn highlight_row(lines: &mut [Line<'_>], index: Option<usize>, width: u16) {
     }
 }
 
-/// Color for a status name: green when it's done, otherwise by the built-in status it
-/// reads as, and magenta for workflow statuses the app doesn't know.
+/// Color for a status name: dark gray when it's dropped, green when it's done, otherwise by the
+/// built-in status it reads as, and magenta for workflow statuses the app doesn't know.
 pub fn status_color(status: &str, rules: &StatusRules) -> Color {
+    if rules.is_dropped(status) {
+        return Color::DarkGray;
+    }
     if rules.is_done(status) {
         return Color::Green;
     }
@@ -57,6 +60,84 @@ pub fn status_color(status: &str, rules: &StatusRules) -> Color {
         Status::Closed => Color::Green,
         Status::Other(_) => Color::Magenta,
     }
+}
+
+/// An epic's children counted by status: done statuses first, then active ones, then dropped
+/// ones, each in display order. The order its progress bar and counts show them in.
+pub fn epic_status_counts(epic: &Epic, rules: &StatusRules) -> Vec<(String, usize)> {
+    let mut counts: Vec<(String, usize)> = rules
+        .group(&epic.children)
+        .into_iter()
+        .map(|(status, tickets)| (status, tickets.len()))
+        .collect();
+    // The sort is stable, so each kind keeps display order.
+    counts.sort_by_key(
+        |(status, _)| match (rules.is_done(status), rules.is_dropped(status)) {
+            (_, true) => 2,
+            (true, false) => 0,
+            (false, false) => 1,
+        },
+    );
+    counts
+}
+
+/// An epic's progress bar, `width` cells: a run per status in
+/// `epic_status_counts`' order, as wide as its share of the children (see `share_cells`), `█`
+/// when the status is done, `░` when it's dropped and `▓` otherwise, in the status's color. An
+/// epic with no children draws `░` in `style`.
+pub fn epic_bar(
+    epic: &Epic,
+    rules: &StatusRules,
+    width: usize,
+    style: Style,
+) -> Vec<Span<'static>> {
+    let counts = epic_status_counts(epic, rules);
+    let sizes: Vec<usize> = counts.iter().map(|(_, count)| *count).collect();
+    let mut spans = Vec::new();
+    if counts.is_empty() {
+        spans.push(Span::styled("░".repeat(width), style));
+    }
+    for ((status, _), cells) in counts.iter().zip(share_cells(&sizes, width)) {
+        let mark = if rules.is_dropped(status) {
+            "░"
+        } else if rules.is_done(status) {
+            "█"
+        } else {
+            "▓"
+        };
+        spans.push(Span::styled(
+            mark.repeat(cells),
+            style.fg(status_color(status, rules)),
+        ));
+    }
+    spans
+}
+
+/// Splits `width` cells between `counts` in proportion, the cells left after rounding down going
+/// to the largest remainders (earliest first), so they sum to `width`. A nonzero count with no
+/// cell then takes one from the widest run, while that run has more than one.
+fn share_cells(counts: &[usize], width: usize) -> Vec<usize> {
+    let total: usize = counts.iter().sum();
+    if total == 0 {
+        return vec![0; counts.len()];
+    }
+    let mut cells: Vec<usize> = counts.iter().map(|count| count * width / total).collect();
+    let mut by_remainder: Vec<usize> = (0..counts.len()).collect();
+    by_remainder.sort_by_key(|&at| std::cmp::Reverse(counts[at] * width % total));
+    let left = width - cells.iter().sum::<usize>();
+    for &at in by_remainder.iter().take(left) {
+        cells[at] += 1;
+    }
+    for at in 0..counts.len() {
+        if counts[at] > 0 && cells[at] == 0 {
+            let widest = (0..cells.len()).max_by_key(|&run| cells[run]).unwrap_or(at);
+            if cells[widest] > 1 {
+                cells[widest] -= 1;
+                cells[at] += 1;
+            }
+        }
+    }
+    cells
 }
 
 /// `s` cut to at most `max` display columns, ending "..." when cut. Widths are measured on whole
@@ -472,6 +553,84 @@ pub fn age(updated: i64, now: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn epic(statuses: &[(&str, usize)]) -> Epic {
+        let children = statuses
+            .iter()
+            .flat_map(|(status, count)| (0..*count).map(move |_| status))
+            .enumerate()
+            .map(|(at, status)| Ticket {
+                key: format!("DEMO-{at}"),
+                status: status.to_string(),
+                ..Ticket::default()
+            })
+            .collect();
+        Epic {
+            key: "DEMO-1".into(),
+            summary: "Demo epic".into(),
+            children,
+        }
+    }
+
+    fn rules() -> StatusRules {
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+        StatusRules::new(
+            &names(&["To Do", "In Progress"]),
+            &names(&["Done"]),
+            &names(&["Won't Do"]),
+        )
+    }
+
+    #[test]
+    fn share_cells_fill_the_width_in_proportion() {
+        // 108 Done, 3 In Progress, 10 Won't Do over 24 cells: floors 21, 0, 1, and the two
+        // cells left go to the largest remainders, Won't Do's then In Progress's.
+        assert_eq!(share_cells(&[108, 3, 10], 24), vec![21, 1, 2]);
+        assert_eq!(share_cells(&[1, 1, 1], 24), vec![8, 8, 8]);
+        assert_eq!(share_cells(&[1, 1], 3), vec![2, 1]);
+        assert_eq!(share_cells(&[], 24), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn every_status_gets_a_cell_while_the_widest_can_spare_one() {
+        // 1 of 1000 rounds to no cell, so it takes one from the widest run.
+        assert_eq!(share_cells(&[999, 1], 24), vec![23, 1]);
+        // With fewer cells than statuses, a run of one is never taken from.
+        assert_eq!(share_cells(&[5, 1, 1], 2), vec![1, 1, 0]);
+    }
+
+    #[test]
+    fn epic_bar_puts_done_first_and_dropped_last() {
+        let rules = rules();
+        let epic = epic(&[("In Progress", 3), ("Won't Do", 10), ("Done", 108)]);
+        assert_eq!(
+            epic_status_counts(&epic, &rules),
+            vec![
+                ("Done".to_string(), 108),
+                ("In Progress".to_string(), 3),
+                ("Won't Do".to_string(), 10),
+            ]
+        );
+        let bar = epic_bar(&epic, &rules, 24, Style::default());
+        let text: String = bar.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, format!("{}▓{}", "█".repeat(21), "░".repeat(2)));
+        let colors: Vec<_> = bar.iter().map(|span| span.style.fg).collect();
+        assert_eq!(
+            colors,
+            vec![
+                Some(Color::Green),
+                Some(Color::Yellow),
+                Some(Color::DarkGray)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_epic_draws_an_empty_bar() {
+        let bar = epic_bar(&epic(&[]), &rules(), 24, Style::default());
+        let text: String = bar.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "░".repeat(24));
+    }
 
     #[test]
     fn each_selection_mark_is_one_column_wide() {

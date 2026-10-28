@@ -133,7 +133,7 @@ impl Delight {
         self.confetti.is_some()
     }
 
-    /// An epic's progress bar (`[####--]`) as spans, its filled part in rainbow colors that
+    /// An epic's progress bar (`████▓▓`) as spans, its done part in rainbow colors that
     /// shift with time while confetti celebrates finishing `epic`; `None` otherwise.
     pub fn rainbow_bar(
         &self,
@@ -151,8 +151,8 @@ impl Delight {
             .chars()
             .enumerate()
             .map(|(at, c)| match c {
-                '#' => Span::styled(
-                    "#",
+                '█' => Span::styled(
+                    "█",
                     style.fg(SPARK_COLORS[(at + shift) % SPARK_COLORS.len()]),
                 ),
                 c => Span::styled(c.to_string(), style),
@@ -323,12 +323,14 @@ const RECEIPT_SHIPPED: usize = 5;
 
 impl App {
     /// Tallies a move Jira confirmed for the receipt, and celebrates it when it took `before`
-    /// (the ticket as it was) from an active status to the done `status`. Returns a message
+    /// (the ticket as it was) from an active status to the done `status`; dropping a ticket
+    /// isn't shipping it. Returns a message
     /// naming the epic the move finished, when it finished one and delight is on.
     pub fn celebrate_move(&mut self, before: Option<Ticket>, status: &str) -> Option<String> {
         let rules = self.status_rules();
-        let shipped =
-            before.filter(|ticket| !rules.is_done(&ticket.status) && rules.is_done(status));
+        let shipped = before.filter(|ticket| {
+            !rules.is_done(&ticket.status) && rules.is_done(status) && !rules.is_dropped(status)
+        });
         let finished = shipped.as_ref().and_then(|ticket| {
             self.cache.epics.iter().find(|epic| {
                 epic.children.iter().any(|child| child.key == ticket.key)
@@ -845,31 +847,31 @@ mod tests {
         let mut delight = on(None);
         let started = Instant::now();
         assert_eq!(
-            delight.rainbow_bar("DEMO-300", "[#-]", Style::default(), started),
+            delight.rainbow_bar("DEMO-300", "█▓", Style::default(), started),
             None
         );
         delight.moved(Some(&untouched("To Do")), Some("DEMO-300"), 0);
         let started = delight.confetti.as_ref().unwrap().started;
         assert_eq!(
-            delight.rainbow_bar("DEMO-100", "[#-]", Style::default(), started),
+            delight.rainbow_bar("DEMO-100", "█▓", Style::default(), started),
             None
         );
         let colors = |at| {
             let bar = delight
-                .rainbow_bar("DEMO-300", "[##-]", Style::default(), at)
+                .rainbow_bar("DEMO-300", "██▓", Style::default(), at)
                 .unwrap();
             let text: String = bar.iter().map(|span| span.content.as_ref()).collect();
-            assert_eq!(text, "[##-]");
-            (bar[1].style.fg, bar[2].style.fg, bar[3].style.fg)
+            assert_eq!(text, "██▓");
+            (bar[0].style.fg, bar[1].style.fg, bar[2].style.fg)
         };
         assert_eq!(
             colors(started),
-            (Some(SPARK_COLORS[1]), Some(SPARK_COLORS[2]), None)
+            (Some(SPARK_COLORS[0]), Some(SPARK_COLORS[1]), None)
         );
         let later = started + Duration::from_millis(100);
         assert_eq!(
             colors(later),
-            (Some(SPARK_COLORS[2]), Some(SPARK_COLORS[3]), None)
+            (Some(SPARK_COLORS[1]), Some(SPARK_COLORS[2]), None)
         );
     }
 

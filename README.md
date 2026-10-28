@@ -17,7 +17,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 - Sub-tasks nest under their parent, or lead with its key when the parent is elsewhere
 - Opens instantly from a local cache, then refreshes from Jira without losing your place
 - Ticket detail renders Jira markup and shows comments; `h` lists them newest first
-- Epic progress bars and each child's assignee, with an optional list of the epics you care about
+- Epic progress bars split by status, so done, in-progress and dropped (e.g. Won't Do) work each show in their own color with a count, and each child's assignee, with an optional list of the epics you care about
 
 **Change tickets safely**
 - Create, comment on, assign, edit, and move tickets without leaving the terminal
@@ -114,6 +114,7 @@ epics_i_care_about = ["DEMO-100", "DEMO-200"]
 [statuses]
 active = ["In Progress", "Ready for Work", "Needs Triage", "To Do", "In Review", "Blocked"]
 done = ["Done", "Closed"]
+dropped = ["Won't Do", "Won't Fix", "Cancelled"]
 
 [[filters]]
 name = "My bugs"
@@ -141,7 +142,8 @@ accent = "#4fd1c5"
 | `jira.done_window_days` | `14` | How many days of recently finished tickets to load. |
 | `jira.epics_i_care_about` | empty (all epics) | Limits the Epics tab to these epics, in this order. Must be in the `[jira]` section. |
 | `team` | you | Display name mapped to Jira email for everyone shown in the Team tab. If your Jira hides assignee emails, tickets are matched to people by display name (your own entry is named from your email, like `Sam Chen` for `sam.chen@…`), so give `team` the names Jira shows. |
-| `statuses.active`, `statuses.done` | shown above | Which statuses are loaded, and which count as done: `d` hides done tickets, epic progress counts them, and Team lists them after active work. So adding e.g. `"Cancelled"` or `"Won't Do"` to `done` treats them as finished. The order is also the order status groups are shown in My Work, Filters and Epics: active statuses first, then statuses not listed, then done. Tickets show Jira's own status name (Resolved stays Resolved). A status not listed follows a listed one it's a synonym of (Resolved follows Done, Open follows To Do); otherwise Done/Closed/Resolved-like names count as done and the rest as active. |
+| `statuses.active`, `statuses.done` | shown above | Which statuses are loaded, and which count as done: `d` hides done tickets, epic progress counts them, and Team lists them after active work. For work you decided not to do, like `"Won't Do"`, use `dropped` instead. The order is also the order status groups are shown in My Work, Filters and Epics: active statuses first, then statuses not listed, then done, then dropped. Tickets show Jira's own status name (Resolved stays Resolved). A status not listed follows a listed one it's a synonym of (Resolved follows Done, Open follows To Do); otherwise Done/Closed/Resolved-like names count as done and the rest as active. |
+| `statuses.dropped` | shown above | Statuses for work you decided not to do. They count as done everywhere (`d` hides them), but an epic's progress leaves them out: they show grey at the end of its bar, its percentage is of the rest, and moving a ticket to one throws no confetti. Unlike `active` and `done`, these names aren't sent to Jira, so listing one your project doesn't have is harmless. A name here wins over `active` and `done`. |
 | `filters` | empty | Saved JQL filters for the Filters tab. |
 | `preferences.show_done` | `true` | Whether Done tickets are visible. Updated when you press `d` or save preferences. |
 | `preferences.start_tab` | `"My Work"` | Starting tab: `My Work`, `Team`, `Epics`, `Unassigned`, or `Filters`. |
@@ -190,7 +192,7 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 | `c` | Create ticket (not on Filters) |
 | `S` | Settings: teammates, pinned epics, Done visibility, starting tab, theme |
 | `z/Z` | Fold the current group, or a parent's sub-tasks when a parent or one of its sub-tasks is selected / fold all groups |
-| `d` | Toggle visibility of done statuses (`statuses.done`); not on Filters |
+| `d` | Toggle visibility of done statuses (`statuses.done` and `statuses.dropped`); not on Filters |
 | `f/F` | Focus the next / previous status in My Work, Team or Epics, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that). In Epics it filters the children, and hides epics with no child in that status |
 | `r` | Refresh |
 | `?` | Keybindings help |

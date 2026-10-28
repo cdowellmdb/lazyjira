@@ -182,6 +182,7 @@ mod tests {
             statuses: StatusConfig {
                 active: vec!["In Progress".into(), "To Do".into()],
                 done: vec!["Done".into(), "Closed".into()],
+                dropped: vec![],
             },
             filters: vec![],
             preferences: Default::default(),
@@ -455,6 +456,7 @@ mod tests {
         let rules = crate::cache::StatusRules::new(
             &["In Progress".to_string(), "To Do".to_string()],
             &["Done".to_string(), "Closed".to_string()],
+            &[],
         );
         // Worked by hand: DEMO-100 is DEMO-1, DEMO-2, DEMO-3 and DEMO-7, of which DEMO-1, DEMO-3
         // (Resolved follows Done) and DEMO-7 are done; DEMO-200 is DEMO-4, DEMO-5 and DEMO-8, of

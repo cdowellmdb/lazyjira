@@ -9,7 +9,7 @@ use ratatui::widgets::{
 use crate::app::{App, DetailMode};
 use crate::cache::{ActivityKind, Epic, Status, StatusRules, Ticket};
 use crate::move_picker::MovePicker;
-use crate::views::common::{fit, panel, status_color, truncate};
+use crate::views::common::{epic_bar, epic_status_counts, fit, panel, status_color, truncate};
 use crate::widgets::activity::format_timestamp;
 use crate::widgets::markup;
 
@@ -59,19 +59,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
-}
-
-fn progress_bar(done: usize, total: usize, width: usize) -> String {
-    if total == 0 || width == 0 {
-        return format!("[{}]", "-".repeat(width));
-    }
-
-    let filled = ((done * width) + (total / 2)) / total;
-    format!(
-        "[{}{}]",
-        "#".repeat(filled.min(width)),
-        "-".repeat(width.saturating_sub(filled.min(width)))
-    )
 }
 
 /// Draws the overlay's frame for `key` and returns the area inside it.
@@ -526,30 +513,33 @@ fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, 
     lines.push(Line::from(""));
 
     let total = epic.total();
-    let done = epic.done_count(rules);
-    push_field(
-        &mut lines,
-        "Progress",
-        vec![Span::styled(
-            format!(
-                "{}\u{a0}\u{a0}{}\u{a0}/\u{a0}{}\u{a0}({:.1}%)",
-                progress_bar(done, total, 24),
-                done,
-                total,
-                epic.progress_pct(rules)
-            ),
-            Style::default().fg(Color::Green),
-        )],
-        width,
-    );
+    let (done, scope) = epic.progress(rules);
+    let mut progress = epic_bar(epic, rules, 24, Style::default());
+    progress.push(Span::styled(
+        format!(
+            "\u{a0}\u{a0}{}\u{a0}/\u{a0}{}\u{a0}({:.1}%)",
+            done,
+            scope,
+            epic.progress_pct(rules)
+        ),
+        Style::default().fg(Color::Green),
+    ));
+    // Dropped children aren't in the fraction, so name them to make it add up to the total.
+    if scope < total {
+        progress.push(Span::styled(
+            format!(",\u{a0}{}\u{a0}dropped", total - scope),
+            muted(),
+        ));
+    }
+    push_field(&mut lines, "Progress", progress, width);
 
     let mut counts = Vec::new();
-    for (status, tickets) in rules.group(&epic.children) {
+    for (status, count) in epic_status_counts(epic, rules) {
         if !counts.is_empty() {
             counts.push(Span::raw("  "));
         }
         counts.push(Span::styled(
-            format!("{}:\u{a0}{}", status.as_str(), tickets.len()).replace(' ', "\u{a0}"),
+            format!("{}:\u{a0}{}", status.as_str(), count).replace(' ', "\u{a0}"),
             Style::default().fg(status_color(status.as_str(), rules)),
         ));
     }
@@ -831,6 +821,46 @@ mod tests {
             .iter()
             .position(|l| l.contains(text))
             .unwrap_or_else(|| panic!("{:?} not drawn:\n{}", text, lines.join("\n")))
+    }
+
+    #[test]
+    fn epic_detail_names_dropped_children_so_the_counts_add_up() {
+        let mut app = App::new();
+        app.loading = false;
+        let children = [("Closed", 108), ("In Progress", 3), ("Won't Do", 10)]
+            .iter()
+            .flat_map(|(status, count)| (0..*count).map(move |_| *status))
+            .enumerate()
+            .map(|(at, status)| Ticket::for_test(&format!("DEMO-{at}"), status))
+            .collect();
+        app.cache.epics = vec![Epic {
+            key: "DEMO-3228".into(),
+            summary: "Epic".into(),
+            children,
+        }];
+        app.detail_epic_key = Some("DEMO-3228".into());
+        let lines = draw(&app, 120, 40);
+        let progress = &lines[row(&lines, "Progress")];
+        assert!(
+            progress.contains("108 / 111 (97.3%), 10 dropped"),
+            "{progress}"
+        );
+        let status = &lines[row(&lines, "Status")];
+        assert!(
+            status.contains("Closed: 108  In Progress: 3  Won't Do: 10"),
+            "{status}"
+        );
+        row(&lines, "Related tickets (121)");
+
+        // With nothing dropped, the fraction is the whole epic.
+        app.cache.epics[0]
+            .children
+            .retain(|t| t.status != "Won't Do");
+        let lines = draw(&app, 120, 40);
+        let progress = &lines[row(&lines, "Progress")];
+        assert!(progress.contains("108 / 111 (97.3%)"), "{progress}");
+        assert!(!progress.contains("dropped"), "{progress}");
+        row(&lines, "Related tickets (111)");
     }
 
     #[tokio::test]

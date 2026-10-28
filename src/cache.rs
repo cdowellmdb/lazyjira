@@ -84,10 +84,11 @@ impl Status {
 }
 
 /// How the `[statuses]` config places each status name: the display order of status groups
-/// and epic children, and whether a status is done. Names match case-insensitively.
+/// and epic children, and whether a status is done or dropped. Names match case-insensitively.
 ///
 /// Order: active statuses in config order, then statuses the config doesn't list (in
-/// first-seen order), then done statuses. A name in both lists counts as done.
+/// first-seen order), then done statuses, then dropped ones. A dropped status is also done. A
+/// name in several lists takes the last of active, done and dropped.
 ///
 /// A name the config doesn't list takes the place of a listed name `Status::from_str` reads
 /// the same way, so with the default config "Open" sits with To Do and "Resolved" with Done.
@@ -109,16 +110,19 @@ pub struct StatusRules {
 struct Placement {
     rank: usize,
     done: bool,
+    dropped: bool,
 }
 
 impl StatusRules {
-    pub fn new(active: &[String], done: &[String]) -> Self {
+    pub fn new(active: &[String], done: &[String], dropped: &[String]) -> Self {
         let mut listed = HashMap::new();
         for name in Self::names(active) {
             let rank = listed.len();
-            listed
-                .entry(name_key(name))
-                .or_insert(Placement { rank, done: false });
+            listed.entry(name_key(name)).or_insert(Placement {
+                rank,
+                done: false,
+                dropped: false,
+            });
         }
         let unlisted = listed.len();
         let mut next = unlisted + 1;
@@ -130,6 +134,21 @@ impl StatusRules {
                     Placement {
                         rank: next,
                         done: true,
+                        dropped: false,
+                    },
+                );
+                next += 1;
+            }
+        }
+        for name in Self::names(dropped) {
+            let key = name_key(name);
+            if !listed.get(&key).is_some_and(|p: &Placement| p.dropped) {
+                listed.insert(
+                    key,
+                    Placement {
+                        rank: next,
+                        done: true,
+                        dropped: true,
                     },
                 );
                 next += 1;
@@ -137,7 +156,10 @@ impl StatusRules {
         }
 
         let mut built_in = HashMap::new();
-        for name in Self::names(active).chain(Self::names(done)) {
+        for name in Self::names(active)
+            .chain(Self::names(done))
+            .chain(Self::names(dropped))
+        {
             let status = Status::from_str(name);
             if !matches!(status, Status::Other(_)) {
                 built_in.entry(status).or_insert(listed[&name_key(name)]);
@@ -173,6 +195,7 @@ impl StatusRules {
                 self.unlisted
             },
             done: status == Status::Closed,
+            dropped: false,
         }
     }
 
@@ -184,6 +207,11 @@ impl StatusRules {
     /// Whether the status named `name` is done (hidden by `d`, counted as epic progress).
     pub fn is_done(&self, name: &str) -> bool {
         self.place(name).done
+    }
+
+    /// Whether the status named `name` is dropped: done, but left out of an epic's progress.
+    pub fn is_dropped(&self, name: &str) -> bool {
+        self.place(name).dropped
     }
 
     /// Groups tickets by status name in display order. Done groups are in `order_done`'s order;
@@ -232,7 +260,7 @@ impl StatusRules {
 impl Default for StatusRules {
     fn default() -> Self {
         let statuses = crate::config::StatusConfig::default();
-        Self::new(&statuses.active, &statuses.done)
+        Self::new(&statuses.active, &statuses.done, &statuses.dropped)
     }
 }
 
@@ -378,18 +406,23 @@ impl Epic {
             .count()
     }
 
-    pub fn blocked_count(&self) -> usize {
-        self.children
+    /// The children done and not dropped, out of those not dropped: dropped work is neither
+    /// progress nor left to do.
+    pub fn progress(&self, rules: &StatusRules) -> (usize, usize) {
+        let dropped = self
+            .children
             .iter()
-            .filter(|t| Status::from_str(&t.status) == Status::Blocked)
-            .count()
+            .filter(|t| rules.is_dropped(&t.status))
+            .count();
+        (self.done_count(rules) - dropped, self.total() - dropped)
     }
 
     pub fn progress_pct(&self, rules: &StatusRules) -> f64 {
-        if self.total() == 0 {
+        let (done, scope) = self.progress(rules);
+        if scope == 0 {
             return 0.0;
         }
-        self.done_count(rules) as f64 / self.total() as f64 * 100.0
+        done as f64 / scope as f64 * 100.0
     }
 }
 
@@ -512,6 +545,7 @@ mod tests {
                 "In Team Review",
             ]),
             &names(&["Done", "Closed", "Cancelled", "Won't Do"]),
+            &[],
         )
     }
 
@@ -580,6 +614,57 @@ mod tests {
     }
 
     #[test]
+    fn dropped_statuses_are_done_and_go_after_every_done_one() {
+        let rules = StatusRules::new(
+            &names(&["In Progress", "Won't Fix"]),
+            &names(&["Done", "Cancelled"]),
+            &names(&["Won't Do", "Cancelled", "Won't Fix"]),
+        );
+        for dropped in ["won't do", "Cancelled", "Won't Fix"] {
+            assert!(rules.is_done(dropped), "{dropped} should be done");
+            assert!(rules.is_dropped(dropped), "{dropped} should be dropped");
+        }
+        for kept in ["Done", "Resolved", "In Progress", "On Deck"] {
+            assert!(!rules.is_dropped(kept), "{kept} shouldn't be dropped");
+        }
+        assert_eq!(
+            group_names(
+                &rules,
+                &["Won't Do", "Done", "Won't Fix", "On Deck", "In Progress"]
+            ),
+            ["In Progress", "On Deck", "Done", "Won't Do", "Won't Fix"]
+        );
+    }
+
+    #[test]
+    fn epic_progress_leaves_dropped_children_out() {
+        let rules = StatusRules::new(
+            &names(&["In Progress"]),
+            &names(&["Done"]),
+            &names(&["Won't Do"]),
+        );
+        let epic = |statuses: &[&str]| super::Epic {
+            key: "DEMO-1".into(),
+            summary: "Epic".into(),
+            children: statuses
+                .iter()
+                .enumerate()
+                .map(|(i, status)| Ticket::for_test(&format!("DEMO-{}", i + 2), status))
+                .collect(),
+        };
+        let mixed = epic(&["Done", "Done", "Done", "In Progress", "Won't Do"]);
+        assert_eq!(mixed.progress(&rules), (3, 4));
+        assert_eq!(mixed.progress_pct(&rules), 75.0);
+        // Finished, as far as moves and confetti go, counts dropped children as done.
+        let finished = epic(&["Done", "Won't Do"]);
+        assert_eq!(finished.done_count(&rules), finished.total());
+        assert_eq!(finished.progress(&rules), (1, 1));
+        let all_dropped = epic(&["Won't Do", "Won't Do"]);
+        assert_eq!(all_dropped.progress(&rules), (0, 0));
+        assert_eq!(all_dropped.progress_pct(&rules), 0.0);
+    }
+
+    #[test]
     fn done_comes_from_config_with_closed_like_names_as_the_fallback() {
         let rules = demo_rules();
         for done in ["Cancelled", "won't do", "Done", "Resolved"] {
@@ -590,13 +675,13 @@ mod tests {
         }
 
         // Config wins over the built-in reading, and a name in both lists is done.
-        let rules = StatusRules::new(&names(&["Done", "Denied"]), &names(&["Denied"]));
+        let rules = StatusRules::new(&names(&["Done", "Denied"]), &names(&["Denied"]), &[]);
         assert!(!rules.is_done("Done"));
         assert!(rules.is_done("Denied"));
         assert!(rules.rank("Denied") > rules.rank("Stalled"));
 
         // Nothing configured reads as Closed, so Resolved is done and goes last.
-        let rules = StatusRules::new(&names(&["Backlog"]), &names(&["Denied"]));
+        let rules = StatusRules::new(&names(&["Backlog"]), &names(&["Denied"]), &[]);
         assert!(rules.is_done("Resolved"));
         assert!(rules.rank("Resolved") > rules.rank("Denied"));
     }

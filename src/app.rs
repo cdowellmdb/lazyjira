@@ -510,9 +510,11 @@ impl App {
         }
     }
 
-    /// Orders statuses and decides which are done from the configured `active` and `done` lists.
+    /// Orders statuses and decides which are done or dropped from the configured `active`,
+    /// `done` and `dropped` lists.
     pub fn set_status_rules(&mut self, statuses: &crate::config::StatusConfig) {
-        let rules = crate::cache::StatusRules::new(&statuses.active, &statuses.done);
+        let rules =
+            crate::cache::StatusRules::new(&statuses.active, &statuses.done, &statuses.dropped);
         if self.status_rules != rules {
             self.status_rules = rules;
             self.mark_cache_changed();
@@ -2401,6 +2403,7 @@ mod tests {
                 "Stalled",
             ]),
             done: names(&["Done", "Closed", "Resolved"]),
+            dropped: vec![],
         }
     }
 
@@ -2585,6 +2588,7 @@ mod tests {
         let statuses = crate::config::StatusConfig {
             active: names(&["On Deck", "In Progress"]),
             done: names(&["Done", "Cancelled", "Won't Do", "Denied"]),
+            dropped: vec![],
         };
         let tickets = [
             ("DEMO-1", "In Progress"),

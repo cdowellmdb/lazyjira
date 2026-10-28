@@ -200,6 +200,7 @@ mod tests {
             statuses: StatusConfig {
                 active: vec!["In Progress".into(), "To Do".into()],
                 done: vec!["Done".into(), "Closed".into()],
+                dropped: vec![],
             },
             filters: vec![],
             preferences: Default::default(),
