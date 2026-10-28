@@ -209,6 +209,21 @@ mod tests {
     }
 
     #[test]
+    fn dropped_statuses_never_reach_the_list_search() {
+        let without = test_config();
+        let mut with = test_config();
+        with.statuses.dropped = vec!["Won't Do".into(), "Not In This Project".into()];
+        for scope in [
+            TicketFetchScope::ActiveOnly,
+            TicketFetchScope::ActiveAndRecentDone,
+        ] {
+            let jql = lists_jql(&with, &["alex@example.com"], scope);
+            assert_eq!(jql, lists_jql(&without, &["alex@example.com"], scope));
+            assert!(!jql.contains("Won't Do"), "{jql}");
+        }
+    }
+
+    #[test]
     fn the_list_search_covers_the_roster_and_the_teams_unassigned_work() {
         let config = test_config();
         let emails = ["alex@example.com", "sam@example.com"];

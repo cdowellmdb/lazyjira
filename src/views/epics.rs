@@ -7,9 +7,9 @@ use std::time::Instant;
 use crate::app::{App, VisibleGroup};
 use crate::cache::{Epic, Ticket};
 use crate::views::common::{
-    color_marks, column_width, epic_bar, epic_status_counts, fit, fold_indicator, group_marker,
-    highlight_row, narrow_for_summary, panel, status_color, status_label, status_width,
-    ticket_cells, ticket_marker, Ages, KEY_WIDTH, SEPARATOR_WIDTH,
+    color_marks, column_width, epic_bar, fit, fold_indicator, group_marker, highlight_row,
+    narrow_for_summary, panel, status_color, status_label, status_width, ticket_cells,
+    ticket_marker, Ages, EPIC_BAR_WIDTH, KEY_WIDTH, SEPARATOR_WIDTH,
 };
 
 /// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so
@@ -25,27 +25,22 @@ fn child_column_widths(area: Rect, epics: &[VisibleGroup<'_, &Epic>]) -> (usize,
     (status_w, assignee_w, summary_w)
 }
 
-/// Cells in an epic header's progress bar.
-const BAR_WIDTH: usize = 24;
-
 fn assignee(ticket: &Ticket) -> &str {
     ticket.assignee.as_deref().unwrap_or("-")
 }
 
 /// "97% done · 121 tickets: 108 Done · 3 In Progress · 10 Won't Do", each count in its status's
-/// color, in the progress bar's order. The percentage is of the children not dropped
-/// (`Epic::progress`) and rounds down, so it reaches 100% only when every one is done; an epic
-/// with none has no percentage.
+/// color, in the progress bar's order, after `Epic::percent_done` when it has one.
 fn status_counts(app: &App, epic: &Epic, style: Style) -> Vec<Span<'static>> {
     let rules = app.status_rules();
     let total = epic.total();
     let noun = if total == 1 { "ticket" } else { "tickets" };
-    let done = match epic.progress(rules) {
-        (_, 0) => String::new(),
-        (done, scope) => format!("{}% done · ", done * 100 / scope),
+    let done = match epic.percent_done(rules) {
+        Some(percent) => format!("{percent}% done · "),
+        None => String::new(),
     };
     let mut spans = vec![Span::styled(format!("  {done}{total} {noun}"), style)];
-    for (at, (status, count)) in epic_status_counts(epic, rules).into_iter().enumerate() {
+    for (at, (status, count)) in epic.status_counts(rules).into_iter().enumerate() {
         spans.push(Span::styled(if at == 0 { ": " } else { " · " }, style));
         spans.push(Span::styled(
             format!("{count} {}", status_label(app, &status)),
@@ -128,15 +123,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray)
         };
         let mut meta = vec![Span::raw("  ")];
-        let bar = epic_bar(epic, app.status_rules(), BAR_WIDTH, meta_style);
-        let text: String = bar.iter().map(|span| span.content.as_ref()).collect();
-        match app
-            .delight
-            .rainbow_bar(&epic.key, &text, meta_style, Instant::now())
-        {
-            Some(rainbow) => meta.extend(rainbow),
-            None => meta.extend(bar),
-        }
+        let bar = epic_bar(epic, app.status_rules(), EPIC_BAR_WIDTH, meta_style);
+        meta.extend(app.delight.rainbow_bar(&epic.key, bar, Instant::now()));
         meta.extend(status_counts(app, epic, meta_style));
         lines.push(Line::from(meta));
 

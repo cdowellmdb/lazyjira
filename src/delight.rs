@@ -6,13 +6,13 @@ use std::time::{Duration, Instant};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Color;
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
-use crate::cache::{StatusRules, Ticket};
-use crate::views::common::fit;
+use crate::cache::{StatusKind, StatusRules, Ticket};
+use crate::views::common::{fit, DONE_CELL};
 
 const DAY: i64 = 24 * 60 * 60;
 /// An active ticket untouched this long is dusty.
@@ -133,32 +133,39 @@ impl Delight {
         self.confetti.is_some()
     }
 
-    /// An epic's progress bar (`████▓▓`) as spans, its done part in rainbow colors that
-    /// shift with time while confetti celebrates finishing `epic`; `None` otherwise.
+    /// `epic`'s progress bar (`views::common::epic_bar`'s spans) with its done cells in rainbow
+    /// colors that shift with time while confetti celebrates finishing it; other runs, and the
+    /// bar of any other epic, are left as they are.
     pub fn rainbow_bar(
         &self,
         epic: &str,
-        bar: &str,
-        style: Style,
+        bar: Vec<Span<'static>>,
         now: Instant,
-    ) -> Option<Vec<Span<'static>>> {
-        let confetti = self.confetti.as_ref()?;
-        if confetti.epic.as_deref() != Some(epic) {
-            return None;
-        }
+    ) -> Vec<Span<'static>> {
+        let Some(confetti) = self
+            .confetti
+            .as_ref()
+            .filter(|confetti| confetti.epic.as_deref() == Some(epic))
+        else {
+            return bar;
+        };
         let shift = (now.duration_since(confetti.started).as_millis() / 100) as usize;
-        let spans = bar
-            .chars()
-            .enumerate()
-            .map(|(at, c)| match c {
-                '█' => Span::styled(
-                    "█",
-                    style.fg(SPARK_COLORS[(at + shift) % SPARK_COLORS.len()]),
-                ),
-                c => Span::styled(c.to_string(), style),
+        let mut cell = 0;
+        bar.into_iter()
+            .flat_map(|run| {
+                let start = cell;
+                cell += run.content.chars().count();
+                if !run.content.starts_with(DONE_CELL) {
+                    return vec![run];
+                }
+                (start..cell)
+                    .map(|at| {
+                        let color = SPARK_COLORS[(at + shift) % SPARK_COLORS.len()];
+                        Span::styled(DONE_CELL, run.style.fg(color))
+                    })
+                    .collect()
             })
-            .collect();
-        Some(spans)
+            .collect()
     }
 
     /// Draws the falling confetti over everything in `area`, before the theme recolors it.
@@ -329,7 +336,8 @@ impl App {
     pub fn celebrate_move(&mut self, before: Option<Ticket>, status: &str) -> Option<String> {
         let rules = self.status_rules();
         let shipped = before.filter(|ticket| {
-            !rules.is_done(&ticket.status) && rules.is_done(status) && !rules.is_dropped(status)
+            rules.kind(&ticket.status) == StatusKind::Active
+                && rules.kind(status) == StatusKind::Done
         });
         let finished = shipped.as_ref().and_then(|ticket| {
             self.cache.epics.iter().find(|epic| {
@@ -547,6 +555,7 @@ const GHOST: Scene = (
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Style;
 
     fn on(today: Option<Today>) -> Delight {
         Delight {
@@ -844,34 +853,41 @@ mod tests {
 
     #[test]
     fn only_the_finished_epics_bar_turns_rainbow() {
+        let bar = || {
+            vec![
+                Span::styled("██", Style::default().fg(Color::Green)),
+                Span::styled("░", Style::default().fg(Color::Gray)),
+            ]
+        };
         let mut delight = on(None);
         let started = Instant::now();
-        assert_eq!(
-            delight.rainbow_bar("DEMO-300", "█▓", Style::default(), started),
-            None
-        );
+        assert_eq!(delight.rainbow_bar("DEMO-300", bar(), started), bar());
         delight.moved(Some(&untouched("To Do")), Some("DEMO-300"), 0);
         let started = delight.confetti.as_ref().unwrap().started;
-        assert_eq!(
-            delight.rainbow_bar("DEMO-100", "█▓", Style::default(), started),
-            None
-        );
+        assert_eq!(delight.rainbow_bar("DEMO-100", bar(), started), bar());
         let colors = |at| {
-            let bar = delight
-                .rainbow_bar("DEMO-300", "██▓", Style::default(), at)
-                .unwrap();
+            let bar = delight.rainbow_bar("DEMO-300", bar(), at);
             let text: String = bar.iter().map(|span| span.content.as_ref()).collect();
-            assert_eq!(text, "██▓");
+            assert_eq!(text, "██░");
             (bar[0].style.fg, bar[1].style.fg, bar[2].style.fg)
         };
+        // The dropped run keeps its own color.
         assert_eq!(
             colors(started),
-            (Some(SPARK_COLORS[0]), Some(SPARK_COLORS[1]), None)
+            (
+                Some(SPARK_COLORS[0]),
+                Some(SPARK_COLORS[1]),
+                Some(Color::Gray)
+            )
         );
         let later = started + Duration::from_millis(100);
         assert_eq!(
             colors(later),
-            (Some(SPARK_COLORS[1]), Some(SPARK_COLORS[2]), None)
+            (
+                Some(SPARK_COLORS[1]),
+                Some(SPARK_COLORS[2]),
+                Some(Color::Gray)
+            )
         );
     }
 

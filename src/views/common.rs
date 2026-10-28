@@ -3,7 +3,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
 use crate::app::{App, GroupSelectionState, VisibleGroup};
-use crate::cache::{Epic, Status, StatusRules, Ticket};
+use crate::cache::{Epic, Status, StatusKind, StatusRules, Ticket};
 use crate::delight::Delight;
 use crate::subtasks::Family;
 use unicode_width::UnicodeWidthStr;
@@ -41,14 +41,14 @@ pub fn highlight_row(lines: &mut [Line<'_>], index: Option<usize>, width: u16) {
     }
 }
 
-/// Color for a status name: dark gray when it's dropped, green when it's done, otherwise by the
-/// built-in status it reads as, and magenta for workflow statuses the app doesn't know.
+/// Color for a status name: gray when it's dropped (readable on the selected row's dark gray, as
+/// `muted` is), green when it's done, otherwise by the built-in status it reads as, and magenta
+/// for workflow statuses the app doesn't know.
 pub fn status_color(status: &str, rules: &StatusRules) -> Color {
-    if rules.is_dropped(status) {
-        return Color::DarkGray;
-    }
-    if rules.is_done(status) {
-        return Color::Green;
+    match rules.kind(status) {
+        StatusKind::Dropped => return Color::Gray,
+        StatusKind::Done => return Color::Green,
+        StatusKind::Active => {}
     }
     match Status::from_str(status) {
         Status::NeedsTriage => Color::Reset,
@@ -62,48 +62,33 @@ pub fn status_color(status: &str, rules: &StatusRules) -> Color {
     }
 }
 
-/// An epic's children counted by status: done statuses first, then active ones, then dropped
-/// ones, each in display order. The order its progress bar and counts show them in.
-pub fn epic_status_counts(epic: &Epic, rules: &StatusRules) -> Vec<(String, usize)> {
-    let mut counts: Vec<(String, usize)> = rules
-        .group(&epic.children)
-        .into_iter()
-        .map(|(status, tickets)| (status, tickets.len()))
-        .collect();
-    // The sort is stable, so each kind keeps display order.
-    counts.sort_by_key(
-        |(status, _)| match (rules.is_done(status), rules.is_dropped(status)) {
-            (_, true) => 2,
-            (true, false) => 0,
-            (false, false) => 1,
-        },
-    );
-    counts
-}
+/// Cells in an epic's progress bar, in the Epics headers and the epic detail.
+pub const EPIC_BAR_WIDTH: usize = 24;
 
-/// An epic's progress bar, `width` cells: a run per status in
-/// `epic_status_counts`' order, as wide as its share of the children (see `share_cells`), `█`
-/// when the status is done, `░` when it's dropped and `▓` otherwise, in the status's color. An
-/// epic with no children draws `░` in `style`.
+/// A cell of an epic's progress bar for a done child; `Delight::rainbow_bar` recolors them.
+pub const DONE_CELL: &str = "█";
+
+/// An epic's progress bar, `width` cells: a run per status in `Epic::status_counts`' order, as
+/// wide as its share of the children (see `share_cells`), `DONE_CELL` when the status is done,
+/// `░` when it's dropped and `▓` when it's active, in the status's color. An epic with no
+/// children draws `·` in `style`.
 pub fn epic_bar(
     epic: &Epic,
     rules: &StatusRules,
     width: usize,
     style: Style,
 ) -> Vec<Span<'static>> {
-    let counts = epic_status_counts(epic, rules);
+    let counts = epic.status_counts(rules);
     let sizes: Vec<usize> = counts.iter().map(|(_, count)| *count).collect();
     let mut spans = Vec::new();
     if counts.is_empty() {
-        spans.push(Span::styled("░".repeat(width), style));
+        spans.push(Span::styled("·".repeat(width), style));
     }
     for ((status, _), cells) in counts.iter().zip(share_cells(&sizes, width)) {
-        let mark = if rules.is_dropped(status) {
-            "░"
-        } else if rules.is_done(status) {
-            "█"
-        } else {
-            "▓"
+        let mark = match rules.kind(status) {
+            StatusKind::Done => DONE_CELL,
+            StatusKind::Active => "▓",
+            StatusKind::Dropped => "░",
         };
         spans.push(Span::styled(
             mark.repeat(cells),
@@ -130,8 +115,8 @@ fn share_cells(counts: &[usize], width: usize) -> Vec<usize> {
     }
     for at in 0..counts.len() {
         if counts[at] > 0 && cells[at] == 0 {
-            let widest = (0..cells.len()).max_by_key(|&run| cells[run]).unwrap_or(at);
-            if cells[widest] > 1 {
+            let widest = (0..cells.len()).max_by_key(|&run| cells[run]);
+            if let Some(widest) = widest.filter(|&run| cells[run] > 1) {
                 cells[widest] -= 1;
                 cells[at] += 1;
             }
@@ -554,24 +539,6 @@ pub fn age(updated: i64, now: i64) -> String {
 mod tests {
     use super::*;
 
-    fn epic(statuses: &[(&str, usize)]) -> Epic {
-        let children = statuses
-            .iter()
-            .flat_map(|(status, count)| (0..*count).map(move |_| status))
-            .enumerate()
-            .map(|(at, status)| Ticket {
-                key: format!("DEMO-{at}"),
-                status: status.to_string(),
-                ..Ticket::default()
-            })
-            .collect();
-        Epic {
-            key: "DEMO-1".into(),
-            summary: "Demo epic".into(),
-            children,
-        }
-    }
-
     fn rules() -> StatusRules {
         let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
         StatusRules::new(
@@ -601,35 +568,37 @@ mod tests {
 
     #[test]
     fn epic_bar_puts_done_first_and_dropped_last() {
-        let rules = rules();
-        let epic = epic(&[("In Progress", 3), ("Won't Do", 10), ("Done", 108)]);
-        assert_eq!(
-            epic_status_counts(&epic, &rules),
-            vec![
-                ("Done".to_string(), 108),
-                ("In Progress".to_string(), 3),
-                ("Won't Do".to_string(), 10),
-            ]
+        let epic = Epic::for_test(
+            "DEMO-1",
+            &[("In Progress", 3), ("Won't Do", 10), ("Done", 108)],
         );
-        let bar = epic_bar(&epic, &rules, 24, Style::default());
+        let bar = epic_bar(&epic, &rules(), EPIC_BAR_WIDTH, Style::default());
         let text: String = bar.iter().map(|span| span.content.as_ref()).collect();
-        assert_eq!(text, format!("{}▓{}", "█".repeat(21), "░".repeat(2)));
+        assert_eq!(text, format!("{}▓{}", DONE_CELL.repeat(21), "░".repeat(2)));
         let colors: Vec<_> = bar.iter().map(|span| span.style.fg).collect();
         assert_eq!(
             colors,
-            vec![
-                Some(Color::Green),
-                Some(Color::Yellow),
-                Some(Color::DarkGray)
-            ]
+            vec![Some(Color::Green), Some(Color::Yellow), Some(Color::Gray)]
         );
     }
 
     #[test]
+    fn a_dropped_status_stays_readable_on_the_selected_row() {
+        // Rows draw a selected status cell on dark gray, so its text can't be dark gray too.
+        assert_eq!(status_color("Won't Do", &rules()), Color::Gray);
+        assert_eq!(status_color("Done", &rules()), Color::Green);
+    }
+
+    #[test]
     fn an_empty_epic_draws_an_empty_bar() {
-        let bar = epic_bar(&epic(&[]), &rules(), 24, Style::default());
+        let bar = epic_bar(
+            &Epic::for_test("DEMO-1", &[]),
+            &rules(),
+            24,
+            Style::default(),
+        );
         let text: String = bar.iter().map(|span| span.content.as_ref()).collect();
-        assert_eq!(text, "░".repeat(24));
+        assert_eq!(text, "·".repeat(24));
     }
 
     #[test]

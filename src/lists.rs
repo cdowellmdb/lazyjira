@@ -468,8 +468,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(4, 3), (3, 1), (0, 0)]
         );
-        assert_eq!(epics[0].progress_pct(&rules), 75.0);
-        assert_eq!(epics[2].progress_pct(&rules), 0.0);
+        assert_eq!(epics[0].percent_done(&rules), Some(75));
+        assert_eq!(epics[2].percent_done(&rules), None);
         assert_eq!(epics[1].children[2].parent_key.as_deref(), Some("DEMO-4"));
     }
 

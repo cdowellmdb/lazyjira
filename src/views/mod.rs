@@ -595,70 +595,40 @@ mod tests {
     }
 
     #[test]
-    fn epic_percent_done_rounds_down_so_only_a_finished_epic_shows_100() {
+    fn epic_headers_show_percent_done_without_the_dropped_children() {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::Epics;
-        let epic = |done: usize, open: usize| Epic {
-            key: "EPIC-9".into(),
-            summary: "Epic".into(),
-            children: (0..done + open)
-                .map(|at| {
-                    let status = if at < done { "Closed" } else { "In Progress" };
-                    Ticket::for_test(&format!("DEMO-{at}"), status)
-                })
-                .collect(),
-        };
-        app.cache.epics = vec![epic(199, 1)];
-        let rows = draw(&app, Tab::Epics, 120);
-        assert!(
-            line_with(&rows, "  99% done · 200 tickets").is_some(),
-            "{rows:?}"
-        );
-        app.cache.epics = vec![epic(200, 0)];
-        let rows = draw(&app, Tab::Epics, 120);
-        assert!(
-            line_with(&rows, "100% done · 200 tickets").is_some(),
-            "{rows:?}"
-        );
-        app.cache.epics = vec![epic(0, 0)];
-        let rows = draw(&app, Tab::Epics, 120);
-        assert!(line_with(&rows, "0 tickets").is_some(), "{rows:?}");
-        assert!(line_with(&rows, "% done").is_none(), "{rows:?}");
-    }
-
-    #[test]
-    fn epic_progress_leaves_dropped_children_out_of_the_percentage() {
-        let mut app = App::new();
-        app.loading = false;
-        app.active_tab = Tab::Epics;
-        let epic = |statuses: &[(&str, usize)]| Epic {
-            key: "EPIC-9".into(),
-            summary: "Epic".into(),
-            children: statuses
+        let header = |app: &mut App, children: &[(&str, usize)]| {
+            app.cache.epics = vec![Epic::for_test("EPIC-9", children)];
+            let rows = draw(app, Tab::Epics, 160);
+            let header = rows
                 .iter()
-                .flat_map(|(status, count)| (0..*count).map(move |_| *status))
-                .enumerate()
-                .map(|(at, status)| Ticket::for_test(&format!("DEMO-{at}"), status))
-                .collect(),
+                .position(|(row, _)| row.contains("EPIC-9"))
+                .unwrap()
+                + 1;
+            rows[header].0.clone()
         };
         // 108 of the 111 not dropped is 97.3%, shown rounded down.
-        app.cache.epics = vec![epic(&[
-            ("Won't Do", 10),
-            ("In Progress", 3),
-            ("Closed", 108),
-        ])];
-        let rows = draw(&app, Tab::Epics, 160);
-        let header = "97% done · 121 tickets: 108 Closed · 3 In Progress · 10 Won't Do";
-        assert!(line_with(&rows, header).is_some(), "{rows:?}");
-        // With every child dropped, nothing is left to measure.
-        app.cache.epics = vec![epic(&[("Won't Do", 2)])];
-        let rows = draw(&app, Tab::Epics, 160);
-        assert!(
-            line_with(&rows, "  2 tickets: 2 Won't Do").is_some(),
-            "{rows:?}"
+        let line = header(
+            &mut app,
+            &[("Won't Do", 10), ("In Progress", 3), ("Closed", 108)],
         );
-        assert!(line_with(&rows, "% done").is_none(), "{rows:?}");
+        assert!(
+            line.contains("97% done · 121 tickets: 108 Closed · 3 In Progress · 10 Won't Do"),
+            "{line}"
+        );
+        let line = header(&mut app, &[("Closed", 199), ("In Progress", 1)]);
+        assert!(line.contains("  99% done · 200 tickets"), "{line}");
+        let line = header(&mut app, &[("Closed", 200)]);
+        assert!(line.contains("  100% done · 200 tickets"), "{line}");
+        // With no child in scope, there's nothing to measure.
+        let line = header(&mut app, &[("Won't Do", 2)]);
+        assert!(line.contains("  2 tickets: 2 Won't Do"), "{line}");
+        assert!(!line.contains("% done"), "{line}");
+        let line = header(&mut app, &[]);
+        assert!(line.contains("  0 tickets"), "{line}");
+        assert!(!line.contains("% done"), "{line}");
     }
 
     #[test]

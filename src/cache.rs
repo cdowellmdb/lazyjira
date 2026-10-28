@@ -92,8 +92,8 @@ impl Status {
 ///
 /// A name the config doesn't list takes the place of a listed name `Status::from_str` reads
 /// the same way, so with the default config "Open" sits with To Do and "Resolved" with Done.
-/// Failing that, a name that reads as `Status::Closed` is done and goes last, and anything
-/// else is active.
+/// Failing that, a name that reads as `Status::Closed` is done and goes after the configured
+/// done ones, and anything else is active.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusRules {
     /// Each configured name, by `name_key`.
@@ -102,15 +102,23 @@ pub struct StatusRules {
     built_in: HashMap<Status, Placement>,
     /// Where names the config doesn't list go: after the active ones, before the done ones.
     unlisted: usize,
-    /// Where an unlisted done name goes: after every configured one.
+    /// Where an unlisted done name goes: after every configured done one, before the dropped.
     last: usize,
+}
+
+/// What a status says about a ticket's work: still to do, done, or dropped (done work nobody
+/// did, which an epic's progress leaves out).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusKind {
+    Active,
+    Done,
+    Dropped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Placement {
     rank: usize,
-    done: bool,
-    dropped: bool,
+    kind: StatusKind,
 }
 
 impl StatusRules {
@@ -120,40 +128,15 @@ impl StatusRules {
             let rank = listed.len();
             listed.entry(name_key(name)).or_insert(Placement {
                 rank,
-                done: false,
-                dropped: false,
+                kind: StatusKind::Active,
             });
         }
         let unlisted = listed.len();
         let mut next = unlisted + 1;
-        for name in Self::names(done) {
-            let key = name_key(name);
-            if !listed.get(&key).is_some_and(|p: &Placement| p.done) {
-                listed.insert(
-                    key,
-                    Placement {
-                        rank: next,
-                        done: true,
-                        dropped: false,
-                    },
-                );
-                next += 1;
-            }
-        }
-        for name in Self::names(dropped) {
-            let key = name_key(name);
-            if !listed.get(&key).is_some_and(|p: &Placement| p.dropped) {
-                listed.insert(
-                    key,
-                    Placement {
-                        rank: next,
-                        done: true,
-                        dropped: true,
-                    },
-                );
-                next += 1;
-            }
-        }
+        Self::list(&mut listed, done, StatusKind::Done, &mut next);
+        let last = next;
+        next += 1;
+        Self::list(&mut listed, dropped, StatusKind::Dropped, &mut next);
 
         let mut built_in = HashMap::new();
         for name in Self::names(active)
@@ -169,7 +152,24 @@ impl StatusRules {
             listed,
             built_in,
             unlisted,
-            last: next,
+            last,
+        }
+    }
+
+    /// Lists `names` as `kind` from rank `next` on. A name already listed as an earlier kind
+    /// takes this one; one already listed as this kind keeps its first place.
+    fn list(
+        listed: &mut HashMap<String, Placement>,
+        names: &[String],
+        kind: StatusKind,
+        next: &mut usize,
+    ) {
+        for name in Self::names(names) {
+            let key = name_key(name);
+            if !listed.get(&key).is_some_and(|p| p.kind == kind) {
+                listed.insert(key, Placement { rank: *next, kind });
+                *next += 1;
+            }
         }
     }
 
@@ -194,8 +194,11 @@ impl StatusRules {
             } else {
                 self.unlisted
             },
-            done: status == Status::Closed,
-            dropped: false,
+            kind: if status == Status::Closed {
+                StatusKind::Done
+            } else {
+                StatusKind::Active
+            },
         }
     }
 
@@ -206,12 +209,12 @@ impl StatusRules {
 
     /// Whether the status named `name` is done (hidden by `d`, counted as epic progress).
     pub fn is_done(&self, name: &str) -> bool {
-        self.place(name).done
+        self.kind(name) != StatusKind::Active
     }
 
-    /// Whether the status named `name` is dropped: done, but left out of an epic's progress.
-    pub fn is_dropped(&self, name: &str) -> bool {
-        self.place(name).dropped
+    /// Whether the status named `name` is active, done or dropped. Dropped is done too.
+    pub fn kind(&self, name: &str) -> StatusKind {
+        self.place(name).kind
     }
 
     /// Groups tickets by status name in display order. Done groups are in `order_done`'s order;
@@ -374,6 +377,24 @@ impl Ticket {
 }
 
 #[cfg(test)]
+impl Epic {
+    /// An epic whose children are `count` bare tickets in each `(status, count)`, keyed
+    /// `DEMO-0` on.
+    pub fn for_test(key: &str, children: &[(&str, usize)]) -> Self {
+        Epic {
+            key: key.to_string(),
+            summary: key.to_string(),
+            children: children
+                .iter()
+                .flat_map(|(status, count)| std::iter::repeat_n(*status, *count))
+                .enumerate()
+                .map(|(at, status)| Ticket::for_test(&format!("DEMO-{at}"), status))
+                .collect(),
+        }
+    }
+}
+
+#[cfg(test)]
 impl Ticket {
     /// A bare ticket in the status Jira calls `status`.
     pub fn for_test(key: &str, status: &str) -> Self {
@@ -406,23 +427,43 @@ impl Epic {
             .count()
     }
 
-    /// The children done and not dropped, out of those not dropped: dropped work is neither
-    /// progress nor left to do.
-    pub fn progress(&self, rules: &StatusRules) -> (usize, usize) {
-        let dropped = self
-            .children
-            .iter()
-            .filter(|t| rules.is_dropped(&t.status))
-            .count();
-        (self.done_count(rules) - dropped, self.total() - dropped)
+    /// The children counted by status: done statuses first, then active, then dropped, each in
+    /// display order. The order an epic's progress bar and counts show them in.
+    pub fn status_counts(&self, rules: &StatusRules) -> Vec<(String, usize)> {
+        let mut counts: Vec<(String, usize)> = rules
+            .group(&self.children)
+            .into_iter()
+            .map(|(status, tickets)| (status, tickets.len()))
+            .collect();
+        // The sort is stable, so each kind keeps display order.
+        counts.sort_by_key(|(status, _)| match rules.kind(status) {
+            StatusKind::Done => 0,
+            StatusKind::Active => 1,
+            StatusKind::Dropped => 2,
+        });
+        counts
     }
 
-    pub fn progress_pct(&self, rules: &StatusRules) -> f64 {
+    /// The children done, out of those not dropped: dropped work is neither progress nor left
+    /// to do.
+    pub fn progress(&self, rules: &StatusRules) -> (usize, usize) {
+        let count = |kind| {
+            self.children
+                .iter()
+                .filter(|t| rules.kind(&t.status) == kind)
+                .count()
+        };
+        (
+            count(StatusKind::Done),
+            self.total() - count(StatusKind::Dropped),
+        )
+    }
+
+    /// `progress` as a whole percentage, rounded down so only a finished epic shows 100; `None`
+    /// when no child is in scope.
+    pub fn percent_done(&self, rules: &StatusRules) -> Option<usize> {
         let (done, scope) = self.progress(rules);
-        if scope == 0 {
-            return 0.0;
-        }
-        done as f64 / scope as f64 * 100.0
+        (scope > 0).then(|| done * 100 / scope)
     }
 }
 
@@ -484,7 +525,7 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_email, Status, StatusRules, Ticket, MOVE_SHORTCUTS};
+    use super::{normalize_email, Epic, Status, StatusKind, StatusRules, Ticket, MOVE_SHORTCUTS};
 
     #[test]
     fn the_move_shortcut_hint_lists_exactly_the_shortcut_keys() {
@@ -622,11 +663,12 @@ mod tests {
         );
         for dropped in ["won't do", "Cancelled", "Won't Fix"] {
             assert!(rules.is_done(dropped), "{dropped} should be done");
-            assert!(rules.is_dropped(dropped), "{dropped} should be dropped");
+            assert_eq!(rules.kind(dropped), StatusKind::Dropped, "{dropped}");
         }
-        for kept in ["Done", "Resolved", "In Progress", "On Deck"] {
-            assert!(!rules.is_dropped(kept), "{kept} shouldn't be dropped");
-        }
+        assert_eq!(rules.kind("Done"), StatusKind::Done);
+        assert_eq!(rules.kind("Resolved"), StatusKind::Done);
+        assert_eq!(rules.kind("In Progress"), StatusKind::Active);
+        assert_eq!(rules.kind("On Deck"), StatusKind::Active);
         assert_eq!(
             group_names(
                 &rules,
@@ -634,34 +676,63 @@ mod tests {
             ),
             ["In Progress", "On Deck", "Done", "Won't Do", "Won't Fix"]
         );
+
+        // An unlisted Closed-like name is done, so it goes before the dropped ones too.
+        let rules = StatusRules::new(&[], &names(&["Denied"]), &names(&["Won't Do"]));
+        assert_eq!(
+            group_names(&rules, &["Won't Do", "Resolved", "Denied"]),
+            ["Denied", "Resolved", "Won't Do"]
+        );
+    }
+
+    fn dropping_rules() -> StatusRules {
+        StatusRules::new(
+            &names(&["In Progress"]),
+            &names(&["Done"]),
+            &names(&["Won't Do"]),
+        )
+    }
+
+    #[test]
+    fn epic_status_counts_go_done_then_active_then_dropped() {
+        let epic = Epic::for_test(
+            "DEMO-1",
+            &[("In Progress", 3), ("Won't Do", 10), ("Done", 108)],
+        );
+        assert_eq!(
+            epic.status_counts(&dropping_rules()),
+            vec![
+                ("Done".to_string(), 108),
+                ("In Progress".to_string(), 3),
+                ("Won't Do".to_string(), 10),
+            ]
+        );
     }
 
     #[test]
     fn epic_progress_leaves_dropped_children_out() {
-        let rules = StatusRules::new(
-            &names(&["In Progress"]),
-            &names(&["Done"]),
-            &names(&["Won't Do"]),
-        );
-        let epic = |statuses: &[&str]| super::Epic {
-            key: "DEMO-1".into(),
-            summary: "Epic".into(),
-            children: statuses
-                .iter()
-                .enumerate()
-                .map(|(i, status)| Ticket::for_test(&format!("DEMO-{}", i + 2), status))
-                .collect(),
-        };
-        let mixed = epic(&["Done", "Done", "Done", "In Progress", "Won't Do"]);
+        let rules = dropping_rules();
+        let epic = |children: &[(&str, usize)]| Epic::for_test("DEMO-1", children);
+        let mixed = epic(&[("Done", 3), ("In Progress", 1), ("Won't Do", 1)]);
         assert_eq!(mixed.progress(&rules), (3, 4));
-        assert_eq!(mixed.progress_pct(&rules), 75.0);
+        assert_eq!(mixed.percent_done(&rules), Some(75));
         // Finished, as far as moves and confetti go, counts dropped children as done.
-        let finished = epic(&["Done", "Won't Do"]);
+        let finished = epic(&[("Done", 1), ("Won't Do", 1)]);
         assert_eq!(finished.done_count(&rules), finished.total());
-        assert_eq!(finished.progress(&rules), (1, 1));
-        let all_dropped = epic(&["Won't Do", "Won't Do"]);
+        assert_eq!(finished.percent_done(&rules), Some(100));
+        let all_dropped = epic(&[("Won't Do", 2)]);
         assert_eq!(all_dropped.progress(&rules), (0, 0));
-        assert_eq!(all_dropped.progress_pct(&rules), 0.0);
+        assert_eq!(all_dropped.percent_done(&rules), None);
+        assert_eq!(epic(&[]).percent_done(&rules), None);
+    }
+
+    #[test]
+    fn percent_done_rounds_down_so_only_a_finished_epic_shows_100() {
+        let rules = dropping_rules();
+        let epic = |done, open| Epic::for_test("DEMO-1", &[("Done", done), ("In Progress", open)]);
+        assert_eq!(epic(1999, 1).percent_done(&rules), Some(99));
+        assert_eq!(epic(2000, 0).percent_done(&rules), Some(100));
+        assert_eq!(epic(0, 1).percent_done(&rules), Some(0));
     }
 
     #[test]
