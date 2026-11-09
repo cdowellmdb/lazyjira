@@ -10,13 +10,13 @@ use std::ops::ControlFlow;
 
 use anyhow::{anyhow, Result};
 
-use crate::bounded::for_each_bounded;
+use crate::bounded::{for_each_bounded, try_in_order};
 use crate::cache::Ticket;
 use crate::jira_rest::describe;
 use crate::jql::{is_key, key_chunks};
 
-/// How many of a read's searches run at once: a project with 400 epics needs about fifty,
-/// which one after another is a minute, and a few at a time is easy on Jira.
+/// How many of a read's searches run at once: a detail prefetch of 400 tickets needs eight,
+/// and a few at a time is easy on Jira.
 const SEARCHES_AT_ONCE: usize = 4;
 
 /// Runs `search` on each of `jqls`, `SEARCHES_AT_ONCE` at a time, and gives each answer to `done`
@@ -40,38 +40,15 @@ async fn search_each<S, F>(
     .await
 }
 
-/// The tickets every one of `jqls` finds, in the order of the queries. A search that fails stops
-/// the queued ones from being sent, and the first failure in query order fails them all (a query
-/// that wasn't sent has no answer to fail with).
-async fn search_in_order<S, F>(jqls: Vec<String>, search: S) -> Result<Vec<Ticket>>
+/// The tickets every one of `jqls` finds, in the order of the queries, `SEARCHES_AT_ONCE` at a
+/// time. A search that fails stops the queued ones from being sent, and the first failure in
+/// query order fails them all (see `bounded::try_in_order`).
+pub async fn search_in_order<S, F>(jqls: Vec<String>, search: S) -> Result<Vec<Ticket>>
 where
     S: Fn(String) -> F,
     F: Future<Output = Result<Vec<Ticket>>> + Send + 'static,
 {
-    let mut answers = Vec::new();
-    search_each(jqls, search, |at, found| {
-        let flow = match found {
-            Ok(_) => ControlFlow::Continue(()),
-            Err(_) => ControlFlow::Break(()),
-        };
-        answers.push((at, found));
-        flow
-    })
-    .await;
-    answers.sort_by_key(|(at, _)| *at);
-    let found = answers
-        .into_iter()
-        .map(|(_, found)| found)
-        .collect::<Result<Vec<_>>>()?;
-    Ok(found.concat())
-}
-
-/// Every ticket `jqls` find (see `search_in_order`), asking Jira for `fields`.
-pub async fn search_all(jqls: Vec<String>, fields: &'static [&'static str]) -> Result<Vec<Ticket>> {
-    search_in_order(jqls, |jql| async move {
-        crate::jira_rest::search(&jql, fields).await
-    })
-    .await
+    Ok(try_in_order(SEARCHES_AT_ONCE, jqls, search).await?.concat())
 }
 
 /// What a detail adds to a list row's fields: what the detail overlay shows. `enrich_ticket`

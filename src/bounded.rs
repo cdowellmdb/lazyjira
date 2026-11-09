@@ -1,9 +1,11 @@
-//! Running many Jira calls a few at a time, for the reads (`jira_search`) and the bulk actions.
+//! Running many Jira calls a few at a time, for the reads (`jira_search`'s searches and
+//! `jira_rest`'s pages) and the bulk actions.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::ops::ControlFlow;
 
+use anyhow::{anyhow, Result};
 use tokio::task::{JoinError, JoinSet};
 
 /// Runs `task` on each of `items`, at most `limit` at a time, and hands each output to `done`
@@ -46,6 +48,31 @@ pub async fn for_each_bounded<I, T, F, Fut>(
         let at = position.remove(&id).expect("every task has a position");
         stopped |= done(at, output).is_break();
     }
+}
+
+/// The outputs of `task` on each of `items`, in the order of the items, however they finish,
+/// with at most `limit` running at once (see `for_each_bounded`). A task that fails, or panics,
+/// stops the waiting ones from starting, and the first failure in item order fails them all (an
+/// item that never started has no failure to report).
+pub async fn try_in_order<I, T, F, Fut>(limit: usize, items: Vec<I>, task: F) -> Result<Vec<T>>
+where
+    F: Fn(I) -> Fut,
+    Fut: Future<Output = Result<T>> + Send + 'static,
+    T: Send + 'static,
+{
+    let mut outputs = Vec::new();
+    for_each_bounded(limit, items, task, |at, joined| {
+        let output = joined.unwrap_or_else(|e| Err(anyhow!("A search task failed: {e}")));
+        let flow = match output {
+            Ok(_) => ControlFlow::Continue(()),
+            Err(_) => ControlFlow::Break(()),
+        };
+        outputs.push((at, output));
+        flow
+    })
+    .await;
+    outputs.sort_by_key(|(at, _)| *at);
+    outputs.into_iter().map(|(_, output)| output).collect()
 }
 
 #[cfg(test)]

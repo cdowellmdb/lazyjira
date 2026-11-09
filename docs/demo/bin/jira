@@ -121,6 +121,8 @@ def matches(ticket, clause):
     m = re.fullmatch(r'"epic link"\s+in\s*\((.*)\)', clause, re.I)
     if m:
         return (ticket["epic"] or "").lower() in values(m.group(1))
+    if re.fullmatch(r'"epic link"\s+is\s+not\s+empty', lower):
+        return ticket["epic"] is not None
     if re.fullmatch(r"issuetype\s+in\s+subTaskIssueTypes\(\)", clause, re.I):
         return ticket["type"] == "Sub-task"
 
