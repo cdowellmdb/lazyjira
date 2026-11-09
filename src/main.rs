@@ -25,13 +25,14 @@ mod subtasks;
 mod theme;
 mod transitions;
 mod views;
+mod wake;
 mod widgets;
 
 use anyhow::{Context, Result};
 use crossterm::{
     event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -40,7 +41,6 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::collections::HashSet;
 use std::io;
 use std::process::Command;
-use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::bulk_actions::{BulkAction, BulkCall, BulkSummary, BulkTarget};
@@ -53,6 +53,7 @@ use app::{
     TicketSyncStage,
 };
 use cache_refresh::CacheRefreshPhase;
+use wake::Wake;
 
 /// Results of background work. `requested_at` is `app.moves.now()` when a Jira read was
 /// requested, so a read that predates a confirmed move can't undo it.
@@ -481,12 +482,16 @@ async fn main() -> Result<()> {
     spawn_epics_refresh(&mut app, &bg_tx, &config);
     queue_detail_prefetch(&mut app, &bg_tx);
 
+    // Created after setup, which reads the terminal itself.
+    let mut events = EventStream::new();
     let mut draw_needed = true;
+    // The background message that ended the last wait.
+    let mut woke_with = None;
 
     // Main loop
     loop {
         let mut state_changed = false;
-        while let Ok(message) = bg_rx.try_recv() {
+        while let Some(message) = wake::arrived(&mut woke_with, &mut bg_rx) {
             state_changed = true;
             match message {
                 BackgroundMessage::EpicsRefreshed {
@@ -685,29 +690,28 @@ async fn main() -> Result<()> {
             draw_needed = false;
         }
 
-        // About 30 frames a second while confetti falls.
-        let wait = if app.delight.animating() { 33 } else { 120 };
-        if event::poll(Duration::from_millis(wait))? {
-            match event::read()? {
-                Event::Key(key) if key.kind != KeyEventKind::Release => {
-                    handle_key(&mut app, key, &bg_tx, &mut config).await;
-                    draw_needed = true;
-                }
-                Event::Paste(text) => {
-                    handle_paste(&mut app, &text);
-                    draw_needed = true;
-                }
-                Event::Mouse(mouse) => {
-                    mouse::handle(&mut app, mouse, &bg_tx, &mut config).await;
-                    draw_needed = true;
-                }
-                Event::Resize(_, _) => draw_needed = true,
-                _ => {}
+        match wake::next(&mut events, &mut bg_rx, app.delight.animating()).await? {
+            Wake::Input(Event::Key(key)) if key.kind != KeyEventKind::Release => {
+                handle_key(&mut app, key, &bg_tx, &mut config).await;
+                draw_needed = true;
             }
+            Wake::Input(Event::Paste(text)) => {
+                handle_paste(&mut app, &text);
+                draw_needed = true;
+            }
+            Wake::Input(Event::Mouse(mouse)) => {
+                mouse::handle(&mut app, mouse, &bg_tx, &mut config).await;
+                draw_needed = true;
+            }
+            Wake::Input(Event::Resize(_, _)) => draw_needed = true,
+            Wake::Input(_) | Wake::Frame => {}
+            Wake::Background(message) => woke_with = Some(message),
         }
 
         if app.external_editor_requested {
             app.external_editor_requested = false;
+            // Only a key or click asks for the editor, and after either the stream has no
+            // thread waiting on the terminal, which the editor needs to itself.
             if let Err(error) = edit_externally(&mut terminal, &mut app) {
                 app.flash = Some(format!("Editor failed: {error:#}"));
             }
