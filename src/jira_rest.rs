@@ -17,6 +17,7 @@ use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::bounded::try_in_order;
 use crate::cache::Ticket;
 use crate::jira_issue::{parse_search_page, ticket_from_issue};
 use crate::transitions::{parse_transitions, Transition};
@@ -237,14 +238,14 @@ impl JiraRest {
         let epic_link = epic_link_field();
         let fields = &with_epic_link(fields, epic_link.as_deref());
         read_pages(
-            |start_at| async move {
-                let response = self
+            |start_at| {
+                let request = self
                     .request(Method::POST, "search")
-                    .json(&search_body(jql, fields, start_at))
-                    .send()
-                    .await
-                    .context("Couldn't reach Jira")?;
-                successful_body(response).await
+                    .json(&search_body(jql, fields, start_at));
+                async move {
+                    let response = request.send().await.context("Couldn't reach Jira")?;
+                    successful_body(response).await
+                }
             },
             epic_link.as_deref(),
         )
@@ -257,20 +258,60 @@ fn with_epic_link<'a>(fields: &[&'a str], epic_link: Option<&'a str>) -> Vec<&'a
     fields.iter().copied().chain(epic_link).collect()
 }
 
-/// Everything a search matches, a page at a time. `fetch(start_at)` asks Jira for the page that
-/// starts there and returns its body.
-async fn read_pages<F, Fut>(mut fetch: F, epic_link: Option<&str>) -> Result<Vec<Ticket>>
+/// How many of a search's pages are asked for at once, after the first.
+const PAGES_AT_ONCE: usize = 4;
+
+/// Everything a search matches. `fetch(start_at)` asks Jira for the page that starts there and
+/// returns its body. The first page says how many tickets match and how long a page is (the
+/// server can cap one below `SEARCH_PAGE_SIZE`), so the rest are asked for by that length, each
+/// once, `PAGES_AT_ONCE` at a time instead of one after another, and read in page order. A page
+/// that fails fails the search. An empty page ends it, and a page shorter than the first with
+/// matches still after it means pages aren't that length after all: the search reads on from
+/// where that page ended, one page after another (`read_pages_from`).
+async fn read_pages<F, Fut>(fetch: F, epic_link: Option<&str>) -> Result<Vec<Ticket>>
 where
-    F: FnMut(usize) -> Fut,
+    F: Fn(usize) -> Fut,
+    Fut: Future<Output = Result<String>> + Send + 'static,
+{
+    let first = parse_search_page(&fetch(0).await?, epic_link)?;
+    let mut found = first.tickets;
+    // An empty first page has no length to step by, and nothing after it.
+    if first.sent == 0 {
+        return Ok(found);
+    }
+    let later_starts: Vec<usize> = (first.sent..first.total).step_by(first.sent).collect();
+    let bodies = try_in_order(PAGES_AT_ONCE, later_starts.clone(), &fetch).await?;
+    for (start_at, body) in later_starts.into_iter().zip(bodies) {
+        let page = parse_search_page(&body, epic_link)?;
+        found.extend(page.tickets);
+        if page.sent == 0 {
+            break;
+        }
+        let ended_at = start_at + page.sent;
+        if page.sent < first.sent && ended_at < page.total {
+            found.extend(read_pages_from(ended_at, &fetch, epic_link).await?);
+            break;
+        }
+    }
+    Ok(found)
+}
+
+/// What a search matches from `start_at` on, a page at a time: each page starts after what the
+/// server sent for the last, whatever its length, and an empty page ends the search rather than
+/// being asked for again.
+async fn read_pages_from<F, Fut>(
+    mut start_at: usize,
+    fetch: &F,
+    epic_link: Option<&str>,
+) -> Result<Vec<Ticket>>
+where
+    F: Fn(usize) -> Fut,
     Fut: Future<Output = Result<String>>,
 {
     let mut found = Vec::new();
-    let mut start_at = 0;
     loop {
         let page = parse_search_page(&fetch(start_at).await?, epic_link)?;
         found.extend(page.tickets);
-        // The next page starts after what the server sent, since it can cap a page below
-        // `SEARCH_PAGE_SIZE`; an empty page ends the search rather than being asked for again.
         if page.sent == 0 || start_at + page.sent >= page.total {
             return Ok(found);
         }
@@ -278,7 +319,7 @@ where
     }
 }
 
-/// What a page asks for. A server that allows fewer is followed by what it sends, see
+/// What a page asks for. A server that allows fewer sets the page length by what it sends, see
 /// `read_pages`; the instance this was measured on takes 500. Pages of 100 cost three
 /// round-trips for a team of 270 tickets, 500 only one.
 const SEARCH_PAGE_SIZE: usize = 500;
@@ -433,17 +474,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_search_asks_for_the_next_page_where_the_last_one_ended() {
-        // Jira capping pages at 50 of 120 matches: three pages, in order, none repeated.
+    async fn a_search_asks_for_each_later_page_once_by_the_first_pages_length() {
+        // Jira capping pages at 50 of 120 matches: three pages, none repeated, read in order.
         let (asked, keys) = read(|start| Ok(page_body(start, 120, (120 - start).min(50))))
             .await
             .unwrap();
         assert_eq!(asked, [0, 50, 100]);
-        assert_eq!(keys.len(), 120);
-        assert_eq!(
-            (keys[0].as_str(), keys[119].as_str()),
-            ("DEMO-1", "DEMO-120")
-        );
+        let all: Vec<String> = (1..=120).map(|n| format!("DEMO-{n}")).collect();
+        assert_eq!(keys, all);
 
         // Exactly one full page of matches is one request, not a second empty one.
         let (asked, keys) = read(|start| Ok(page_body(start, 500, 500))).await.unwrap();
@@ -454,6 +492,73 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!((asked, keys.len()), (vec![0, 500], 501));
+    }
+
+    /// Reads a search of `total` matches, 50 to a page, from a Jira that takes 10 ms a page,
+    /// returning how long the read took and the most pages that were out at once.
+    async fn timed_read(total: usize) -> (Duration, usize) {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        use std::sync::Arc;
+        let (running, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let started = tokio::time::Instant::now();
+        let found = read_pages(
+            |start| {
+                let (running, most) = (running.clone(), most.clone());
+                async move {
+                    most.fetch_max(running.fetch_add(1, SeqCst) + 1, SeqCst);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    running.fetch_sub(1, SeqCst);
+                    Ok(page_body(start, total, (total - start).min(50)))
+                }
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(found.len(), total);
+        (started.elapsed(), most.load(SeqCst))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pages_after_the_first_are_asked_for_four_at_a_time() {
+        let page = Duration::from_millis(10);
+        assert_eq!(timed_read(50).await, (page, 1));
+        // The first page alone, then exactly four more at once: two pages' time, not five.
+        assert_eq!(timed_read(250).await, (2 * page, 4));
+        // A fifth waits for one of the four to come back.
+        assert_eq!(timed_read(300).await, (3 * page, 4));
+    }
+
+    #[tokio::test]
+    async fn a_short_page_with_matches_after_it_is_read_on_from_where_it_ended() {
+        // 150 matches, 50 to a page, but the second page holds only 49 (DEMO-51 to DEMO-99):
+        // the search reads on from the 100th, a page at a time, and misses nothing.
+        let (asked, keys) = read(|start| {
+            let sent = if start == 50 { 49 } else { 50 };
+            Ok(page_body(start, 150, sent.min(150 - start)))
+        })
+        .await
+        .unwrap();
+        assert_eq!(asked, [0, 50, 100, 99, 149]);
+        let all: Vec<String> = (1..=150).map(|n| format!("DEMO-{n}")).collect();
+        assert_eq!(keys, all);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pages_are_read_in_page_order_however_they_come_back() {
+        // Three pages of 50; the later the page, the sooner Jira answers it.
+        let found = read_pages(
+            |start| async move {
+                tokio::time::sleep(Duration::from_millis(30 - start as u64 / 5)).await;
+                Ok(page_body(start, 150, 50))
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        let keys: Vec<String> = found.into_iter().map(|ticket| ticket.key).collect();
+        let all: Vec<String> = (1..=150).map(|n| format!("DEMO-{n}")).collect();
+        assert_eq!(keys, all);
     }
 
     #[tokio::test]
@@ -473,13 +578,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_empty_page_ends_the_search_and_a_missing_total_fails_it() {
-        // The total promises more than Jira has: stop rather than ask for the same page forever.
+    async fn an_empty_page_is_not_asked_for_again_and_a_missing_total_fails_the_search() {
+        // The total promises more than Jira has: the empty page ends the search, and is never
+        // asked for again.
         let (asked, keys) =
             read(|start| Ok(page_body(start, 120, if start == 0 { 50 } else { 0 })))
                 .await
                 .unwrap();
-        assert_eq!((asked, keys.len()), (vec![0, 50], 50));
+        assert_eq!((asked, keys.len()), (vec![0, 50, 100], 50));
+        // A last page that is short because a ticket left the search is the whole answer.
+        let (asked, keys) = read(|start| match start {
+            0 => Ok(page_body(0, 150, 50)),
+            _ => Ok(page_body(start, 149, (149 - start).min(50))),
+        })
+        .await
+        .unwrap();
+        assert_eq!((asked, keys.len()), (vec![0, 50, 100], 149));
+        // An empty first page is the whole answer, whatever the total says.
+        let (asked, keys) = read(|start| Ok(page_body(start, 120, 0))).await.unwrap();
+        assert_eq!((asked, keys.len()), (vec![0], 0));
 
         // No total: an error, not the first page passed off as the whole list.
         let error = read(|_| Ok(r#"{"issues": []}"#.to_string()))

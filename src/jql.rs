@@ -4,7 +4,7 @@
 
 use crate::config::AppConfig;
 
-/// How many keys one `key in (…)`, `parent in (…)` or `"Epic Link" in (…)` search holds.
+/// How many keys one `key in (…)` or `parent in (…)` search holds.
 pub const KEYS_PER_SEARCH: usize = 50;
 
 /// Whether `key` looks like a Jira key, safe to put in a JQL list.
@@ -72,38 +72,41 @@ pub fn lists_jql(config: &AppConfig, assignee_emails: &[&str], scope: TicketFetc
     )
 }
 
-/// The searches that find the sub-tasks among `keys` and under them, `KEYS_PER_SEARCH` keys to a
-/// search, each key once. A key that isn't shaped like a ticket key is left out.
-pub fn subtasks_jqls(keys: &[String]) -> Vec<String> {
-    let mut keys = keys.to_vec();
-    keys.sort();
-    keys.dedup();
-    key_chunks(&keys)
-        .into_iter()
-        .map(|chunk| {
-            let list = chunk.join(",");
-            format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
-        })
-        .collect()
+/// Every sub-task in the project, in one search. Jira doesn't link a sub-task to its parent's
+/// epic, so the epics read finds them here and places them by `parent`. The order keeps pages
+/// stable while tickets change underneath them.
+pub fn subtasks_jql(project: &str) -> String {
+    format!(
+        "project = {} AND issuetype in subTaskIssueTypes() ORDER BY key",
+        quote(project)
+    )
 }
 
-/// The searches that find the children of `epic_keys`, `KEYS_PER_SEARCH` epics to a search. A
-/// child names its epic through the Epic Link field (company-managed projects, when jira-cli's
-/// config knows the field) or `parent` (team-managed). A key that isn't shaped like a ticket
-/// key is left out. The order keeps pages stable while tickets change underneath them.
-pub fn epic_children_jqls(project: &str, epic_keys: &[String], has_epic_link: bool) -> Vec<String> {
+/// Every ticket in the project that names an epic through the Epic Link field (company-managed
+/// projects), in one search. Asking for the children of 50 epics by key took Jira about a second
+/// a search where it was measured, and had to wait for the epics' keys; this waits for nothing.
+/// It also finds the children of other projects' epics, which belong to no epic here. Only for
+/// when jira-cli's config knows the field. The order keeps pages stable while tickets change
+/// underneath them.
+pub fn children_by_epic_link_jql(project: &str) -> String {
+    format!(
+        "project = {} AND \"Epic Link\" is not EMPTY ORDER BY key",
+        quote(project)
+    )
+}
+
+/// The searches that find the tickets naming one of `epic_keys` as their `parent` (team-managed
+/// projects), `KEYS_PER_SEARCH` epics to a search: Jira Server can't ask for every ticket with a
+/// parent. A key that isn't shaped like a ticket key is left out. The order keeps pages stable
+/// while tickets change underneath them.
+pub fn children_by_parent_jqls(project: &str, epic_keys: &[String]) -> Vec<String> {
     key_chunks(epic_keys)
         .into_iter()
         .map(|chunk| {
-            let list = chunk.join(",");
-            let link = if has_epic_link {
-                format!("\"Epic Link\" in ({list}) OR ")
-            } else {
-                String::new()
-            };
             format!(
-                "project = {} AND ({link}parent in ({list})) ORDER BY key",
-                quote(project)
+                "project = {} AND parent in ({}) ORDER BY key",
+                quote(project),
+                chunk.join(",")
             )
         })
         .collect()
@@ -261,63 +264,58 @@ mod tests {
     }
 
     #[test]
-    fn epic_children_are_searched_fifty_epics_at_a_time() {
-        // Exactly 50 epics: one search holding all of them.
-        let one = epic_children_jqls("DEMO", &epic_keys(50), true);
-        assert_eq!(one.len(), 1);
-        assert_eq!(one[0], {
-            let list = epic_keys(50).join(",");
-            format!(
-                "project = \"DEMO\" AND (\"Epic Link\" in ({list}) OR parent in ({list})) \
-                 ORDER BY key"
-            )
-        });
-        // 51 epics: a second search that holds only the 51st.
-        let two = epic_children_jqls("DEMO", &epic_keys(51), true);
-        assert_eq!(two.len(), 2);
-        assert_eq!(two[0], one[0]);
+    fn epic_link_children_and_sub_tasks_are_each_one_project_wide_search() {
         assert_eq!(
-            two[1],
-            "project = \"DEMO\" AND (\"Epic Link\" in (DEMO-51) OR parent in (DEMO-51)) \
-             ORDER BY key"
+            children_by_epic_link_jql("DEMO"),
+            "project = \"DEMO\" AND \"Epic Link\" is not EMPTY ORDER BY key"
         );
-        assert!(epic_children_jqls("DEMO", &[], true).is_empty());
+        assert_eq!(
+            subtasks_jql("DEMO"),
+            "project = \"DEMO\" AND issuetype in subTaskIssueTypes() ORDER BY key"
+        );
     }
 
     #[test]
-    fn without_an_epic_link_field_only_the_parent_link_is_searched() {
+    fn children_by_parent_are_searched_fifty_epics_at_a_time() {
+        let search =
+            |list: String| format!("project = \"DEMO\" AND parent in ({list}) ORDER BY key");
+        // Exactly 50 epics: one search holding all of them.
+        let one = children_by_parent_jqls("DEMO", &epic_keys(50));
+        assert_eq!(one, [search(epic_keys(50).join(","))]);
+        // 51 epics: a second search that holds only the 51st.
         assert_eq!(
-            epic_children_jqls("DEMO", &epic_keys(2), false),
-            ["project = \"DEMO\" AND (parent in (DEMO-1,DEMO-2)) ORDER BY key"]
+            children_by_parent_jqls("DEMO", &epic_keys(51)),
+            [one[0].clone(), search("DEMO-51".to_string())]
         );
+        assert!(children_by_parent_jqls("DEMO", &[]).is_empty());
     }
 
     #[test]
     fn epic_keys_that_are_not_shaped_like_keys_stay_out_of_the_query() {
         let keys = vec!["DEMO-1".to_string(), "x\") OR 1=1".to_string()];
         assert_eq!(
-            epic_children_jqls("DEMO", &keys, false),
-            ["project = \"DEMO\" AND (parent in (DEMO-1)) ORDER BY key"]
+            children_by_parent_jqls("DEMO", &keys),
+            ["project = \"DEMO\" AND parent in (DEMO-1) ORDER BY key"]
         );
         // A chunk with nothing left to ask about sends no search.
-        assert!(epic_children_jqls("DEMO", &["no good".to_string()], false).is_empty());
+        assert!(children_by_parent_jqls("DEMO", &["no good".to_string()]).is_empty());
     }
 
     #[test]
     fn a_malformed_epic_key_takes_no_place_in_a_search() {
         let search =
-            |list: String| format!("project = \"DEMO\" AND (parent in ({list})) ORDER BY key");
+            |list: String| format!("project = \"DEMO\" AND parent in ({list}) ORDER BY key");
         // 50 usable keys and a malformed one: still one search of exactly the 50 epics.
         let mut keys = epic_keys(50);
         keys.insert(10, "no good".to_string());
         assert_eq!(
-            epic_children_jqls("DEMO", &keys, false),
+            children_by_parent_jqls("DEMO", &keys),
             [search(epic_keys(50).join(","))]
         );
         // The 51st usable key starts the second search, alone.
         keys.push("DEMO-51".to_string());
         assert_eq!(
-            epic_children_jqls("DEMO", &keys, false),
+            children_by_parent_jqls("DEMO", &keys),
             [
                 search(epic_keys(50).join(",")),
                 search("DEMO-51".to_string())
@@ -348,67 +346,6 @@ mod tests {
     }
 
     #[test]
-    fn sub_tasks_are_searched_fifty_keys_at_a_time() {
-        let sub_task_search = |list: String| {
-            format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
-        };
-        // Zero-padded, so the order the searches sort the keys into is the order of the numbers.
-        let padded = |range: std::ops::RangeInclusive<u32>| -> Vec<String> {
-            range.map(|n| format!("DEMO-{n:03}")).collect()
-        };
-        // Exactly 50 keys: one search holding all of them.
-        let fifty = subtasks_jqls(&padded(1..=50));
-        assert_eq!(fifty, [sub_task_search(padded(1..=50).join(","))]);
-        // 51 keys: a second search that holds only the 51st, however the keys arrive: each
-        // key is searched once, even when it is given twice and out of order.
-        let mut shuffled = padded(1..=51);
-        shuffled.reverse();
-        shuffled.extend(padded(1..=51));
-        assert_eq!(
-            subtasks_jqls(&shuffled),
-            [
-                sub_task_search(padded(1..=50).join(",")),
-                sub_task_search("DEMO-051".to_string())
-            ]
-        );
-        // Anything that isn't shaped like a key stays out; nothing left, no search.
-        let keys = vec!["DEMO-1".to_string(), "x\") OR 1=1".to_string()];
-        assert_eq!(
-            subtasks_jqls(&keys),
-            [sub_task_search("DEMO-1".to_string())]
-        );
-        assert!(subtasks_jqls(&["no good".to_string()]).is_empty());
-        assert!(subtasks_jqls(&[]).is_empty());
-    }
-
-    #[test]
-    fn a_malformed_key_takes_no_place_in_a_sub_task_search() {
-        let sub_task_search = |list: String| {
-            format!("(key in ({list}) OR parent in ({list})) AND issuetype in subTaskIssueTypes()")
-        };
-        let padded = |range: std::ops::RangeInclusive<u32>| -> Vec<String> {
-            range.map(|n| format!("DEMO-{n:03}")).collect()
-        };
-        // 50 usable keys and a malformed one, which sorts first: still one search of exactly
-        // the 50.
-        let mut keys = padded(1..=50);
-        keys.insert(10, "!no good".to_string());
-        assert_eq!(
-            subtasks_jqls(&keys),
-            [sub_task_search(padded(1..=50).join(","))]
-        );
-        // The 51st usable key starts the second search, alone.
-        keys.push("DEMO-051".to_string());
-        assert_eq!(
-            subtasks_jqls(&keys),
-            [
-                sub_task_search(padded(1..=50).join(",")),
-                sub_task_search("DEMO-051".to_string())
-            ]
-        );
-    }
-
-    #[test]
     fn jql_built_from_config_cannot_be_broken_by_a_quote_in_it() {
         let mut config = test_config();
         config.jira.team_name = r#"Team "A""#.into();
@@ -425,8 +362,16 @@ mod tests {
             r#"project = "A\"B" AND (type = Bug) ORDER BY created DESC"#
         );
         assert_eq!(
-            epic_children_jqls(r#"A"B"#, &epic_keys(1), false),
-            [r#"project = "A\"B" AND (parent in (DEMO-1)) ORDER BY key"#]
+            children_by_parent_jqls(r#"A"B"#, &epic_keys(1)),
+            [r#"project = "A\"B" AND parent in (DEMO-1) ORDER BY key"#]
+        );
+        assert_eq!(
+            children_by_epic_link_jql(r#"A"B"#),
+            r#"project = "A\"B" AND "Epic Link" is not EMPTY ORDER BY key"#
+        );
+        assert_eq!(
+            subtasks_jql(r#"A"B"#),
+            r#"project = "A\"B" AND issuetype in subTaskIssueTypes() ORDER BY key"#
         );
     }
 }

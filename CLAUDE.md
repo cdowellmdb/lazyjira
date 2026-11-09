@@ -41,9 +41,9 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/jira_search.rs** — Searching Jira a few queries at a time (`search_in_order`) and reading ticket details through those searches (`fetch_ticket_detail` for one fresh read, `fetch_ticket_details` for batched prefetch)
 - **src/lists.rs** — What a read found, shaped without I/O: `bucket_tickets` splits one search into My Work/Team/Unassigned, `group_by_epic` puts children under their epics, and `attach_epics_to_tickets` and `reconcile_epic_child_statuses` keep tickets and epics in step
 - **src/local_cache.rs** — The files kept between runs in `~/.cache/lazyjira/` (snapshot, epics, details, the current user's email) and `DetailCache`, the in-memory copy of the details that list reads hydrate from
-- **src/bounded.rs** — Runs tasks a few at a time (`for_each_bounded`): the reads' searches and the bulk actions' Jira calls share it
-- **src/jira_rest.rs** — Jira REST client using jira-cli's config and `JIRA_API_TOKEN`: the paginated `search` (JQL + fields in, tickets out), `issue` (one issue, read itself rather than through the search index), moves (list a ticket's transitions, send one by id), and a ticket's browser URL
-- **src/jql.rs** — The JQL of the list, epic, sub-task and saved-filter reads, built safely: `quote` for a value, `key_chunks` and `is_key` so only ticket-key-shaped text reaches a list, `KEYS_PER_SEARCH`, and the builders `lists_jql`, `scoped_jql`, `epics_jql`, `epic_children_jqls` and `subtasks_jqls`
+- **src/bounded.rs** — Runs tasks a few at a time (`for_each_bounded`, and `try_in_order` for their outputs in order): the reads' searches, a search's pages and the bulk actions' Jira calls share it
+- **src/jira_rest.rs** — Jira REST client using jira-cli's config and `JIRA_API_TOKEN`: the paginated `search` (JQL + fields in, tickets out; pages after the first are read a few at a time), `issue` (one issue, read itself rather than through the search index), moves (list a ticket's transitions, send one by id), and a ticket's browser URL
+- **src/jql.rs** — The JQL of the list, epic, sub-task and saved-filter reads, built safely: `quote` for a value, `key_chunks` and `is_key` so only ticket-key-shaped text reaches a list, `KEYS_PER_SEARCH`, and the builders `lists_jql`, `scoped_jql`, `epics_jql`, `children_by_epic_link_jql`, `children_by_parent_jqls` and `subtasks_jql`
 - **src/jira_issue.rs** — Pure parser from Jira's issue JSON (`{key, fields}`: a search result or a single issue) to a `Ticket`, including comments as activity
 - **src/subtasks.rs** — Sub-task hierarchy: `nest` orders rows so a sub-task follows its parent, `is_nested` tells renderers which rows are drawn under one, and `add_to_epics` adds the sub-tasks under an epic's children to that epic
 - **src/transitions.rs** — Transition model and parsing, and the rules for matching shortcuts and resolutions
@@ -59,8 +59,8 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 
 Read the named section of [docs/architecture.md](docs/architecture.md) before changing:
 
-- **Epic reads, epic progress or how many searches run at once**: "Epics come from batched searches"
-- **My Work, Team or Unassigned reads, saved filters (`scoped_jql`), list JQL, or email matching**: "Lists come from one Jira search"
+- **Epic reads, epic progress or how many searches run at once**: "Epics come from project-wide searches"
+- **My Work, Team or Unassigned reads, saved filters (`scoped_jql`), list JQL, how a search's pages are read, or email matching**: "Lists come from one Jira search"
 - **Ticket details, their cache or prefetch**: "Detail data uses JSON + local cache"
 - **Cache files, their location or format**: "Local caches"
 - **Status order, done-ness or `[statuses]`**: "Statuses"

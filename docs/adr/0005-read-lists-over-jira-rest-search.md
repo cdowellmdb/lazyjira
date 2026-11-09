@@ -8,4 +8,6 @@ JQL that jira-cli used to scope silently (`project = "KEY"`) is now added by laz
 
 Team groups by exact email, so emails are normalized (lower case) where they enter the app. A ticket is placed on the roster by email, else by the assignee's display name, because Jira can hide an assignee's email; an assignee that can't be placed joins Team instead of the ticket being dropped. "Jira search" here is this REST call, not the local text filter that CONTEXT.md calls Search.
 
+**Update:** epics no longer cost a search per 50 epics and per 50 children. Measured on that instance (416 epics, 2,278 children with their sub-tasks), `"Epic Link" in (50 keys)` took about a second a search, and the 44 searches of a refresh 7.5 to 9 seconds. A refresh now sends three reads at once: the epic list, every ticket in the project with an Epic Link, and every sub-task in the project, placing what belongs to an epic and leaving out the rest. Jira Server rejects `parent is not EMPTY`, so children that name their epic through `parent` are still searched 50 epics at a time. A search's pages after the first are asked for four at a time. The same refresh takes 1.7 to 2.4 seconds on warm connections (16 requests), where it took 7.5.
+
 Recorded from [the search](../../src/jira_rest.rs), [its parser](../../src/jira_issue.rs) and [the reads](../../src/jira_reads.rs).
