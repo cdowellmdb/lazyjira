@@ -24,7 +24,8 @@ Tests never reach Jira: `jira_client::run_cmd` and `jira_rest` refuse to run und
 
 When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira transport, status interpretation, or move consistency, read the corresponding decision in [docs/adr/](docs/adr/).
 
-- **src/main.rs** — Entry point, terminal setup, event loop, key handling, `--dev` flags
+- **src/main.rs** — Entry point, terminal setup, event loop, key handling
+- **src/cli.rs** — Command-line flags, handled before config load and terminal setup: `--help`, `--version`, and the `--dev` rebuilds from source
 - **src/app.rs** — App state, tab management, selection tracking, cache mutations
 - **src/cache_refresh.rs** — What a list refresh's result does to App and the follow-ups it returns for main.rs
 - **src/cache.rs** — Data types (Ticket, Epic, TeamMember, Status, Cache)
