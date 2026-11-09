@@ -25,6 +25,7 @@ Tests never reach Jira: `jira_client::run_cmd` and `jira_rest` refuse to run und
 When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira transport, status interpretation, or move consistency, read the corresponding decision in [docs/adr/](docs/adr/).
 
 - **src/main.rs** — Entry point, terminal setup, event loop, key handling
+- **src/wake.rs** — What ends the event loop's wait between frames (`wake::next`): terminal input, a background message, or the next confetti frame
 - **src/cli.rs** — Command-line flags, handled before config load and terminal setup: `--help`, `--version`, and the `--dev` rebuilds from source
 - **src/app.rs** — App state, tab management, selection tracking, cache mutations
 - **src/cache_refresh.rs** — What a list refresh's result does to App and the follow-ups it returns for main.rs
@@ -66,6 +67,7 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 - **Moves, the move picker, adding a Jira read, or writing a ticket's status**: "Moves use Jira's transitions" and "Moves wait for Jira"
 - **Grouped rows, selection, tab switching, cache mutation helpers, mouse targets or form fields**: "Visible rows"
 - **Sub-tasks, parents or folding**: "Sub-tasks nest under their parent"
+- **The event loop, or anything that should change the screen without a key press**: "The event loop sleeps until woken"
 - **Colors or themes**: "Themes recolor the finished frame"
 - **Confetti, the quit receipt, stale marks or spooky season**: the `delight.rs` bullet of "Current UX behavior"
 - **Columns, marks, Team including the current user, done-group folding, done ordering (`order_done`) or the detail overlay's scrolling**: "Current UX behavior"
@@ -81,7 +83,8 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 
 ## Dependencies
 
-- `ratatui` 0.29 + `crossterm` 0.28 — TUI rendering
+- `ratatui` 0.29 + `crossterm` 0.28 (`event-stream`) — TUI rendering and terminal input as a stream
+- `futures-core` — the `Stream` trait that stream implements
 - `tui-textarea` — text input in forms
 - `unicode-width` — column widths when wrapping rendered markup
 - `tokio` — async runtime for parallel CLI calls
