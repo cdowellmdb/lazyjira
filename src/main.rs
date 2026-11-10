@@ -2508,10 +2508,18 @@ mod tests {
         assert!(app.filter_results.is_empty());
         assert_eq!(app.flash.as_deref(), Some("Running filter 'one'..."));
 
-        // Running it again is a new run, so the first run's answer won't be shown.
+        // Running it again is a new run, so the first run's answer won't be shown. The run's
+        // answer carries the id the app keeps (the query itself is refused under test).
         let first_run = app.filter_request;
-        press(&mut app, &mut config, KeyCode::Enter).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        handle_key(&mut app, KeyEvent::from(KeyCode::Enter), &tx, &mut config).await;
         assert_ne!(app.filter_request, first_run);
+        match rx.recv().await {
+            Some(BackgroundMessage::FilterResults { request, .. }) => {
+                assert_eq!(request, app.filter_request)
+            }
+            _ => panic!("the run should answer with filter results"),
+        }
 
         // With no results to move to, Tab goes on to the next tab.
         press(&mut app, &mut config, KeyCode::Tab).await;
