@@ -658,9 +658,7 @@ async fn main() -> Result<()> {
                             app.flash = Some(format!("Filter returned {} tickets", count));
                         }
                         Err(e) => {
-                            app.filter_results.clear();
-                            app.collapsed_filters.clear();
-                            app.mark_cache_changed();
+                            app.clear_filter_results();
                             app.prune_selection_to_visible();
                             app.flash = Some(format!("Filter query failed: {}", e));
                         }
@@ -1890,9 +1888,7 @@ fn handle_filter_keys(
             // Run the selected filter
             if let Some(filter) = config.filters.get(app.filter_sidebar_idx) {
                 app.filter_loading = true;
-                app.filter_results.clear();
-                app.collapsed_filters.clear();
-                app.mark_cache_changed();
+                app.clear_filter_results();
                 app.flash = Some(format!("Running filter '{}'...", filter.name));
 
                 let tx = bg_tx.clone();
@@ -2446,11 +2442,13 @@ mod tests {
         let mut config = sample_config();
         press(&mut app, &mut config, KeyCode::Char('Z')).await;
 
-        assert!(app.collapsed_filters.contains("Ready for Work"));
-        assert!(!app.collapsed_filters.contains("In Progress"));
+        assert!(app.is_collapsed(Tab::Filters, "Ready for Work"));
+        assert!(!app.is_collapsed(Tab::Filters, "In Progress"));
 
         press(&mut app, &mut config, KeyCode::Char('Z')).await;
-        assert!(app.collapsed_filters.is_empty());
+        for status in ["In Progress", "Ready for Work"] {
+            assert!(!app.is_collapsed(Tab::Filters, status), "{status}");
+        }
     }
 
     #[tokio::test]
@@ -2460,14 +2458,13 @@ mod tests {
         app.active_tab = Tab::Filters;
         app.filter_focus = FilterFocus::Results;
         app.filter_results = vec![ticket("DEMO-74", "Grouped", "In Progress")];
-        app.collapsed_filters.insert("In Progress".to_string());
-        app.mark_cache_changed();
+        app.toggle_group_collapse("In Progress");
         app.selected_index = 0;
 
         let mut config = sample_config();
         press(&mut app, &mut config, KeyCode::Enter).await;
 
-        assert!(!app.collapsed_filters.contains("In Progress"));
+        assert!(!app.is_collapsed(Tab::Filters, "In Progress"));
         assert!(app.detail_ticket_key.is_none());
     }
 
@@ -2647,7 +2644,9 @@ mod tests {
             press(&mut app, &mut config, KeyCode::Char(code)).await;
             assert_eq!(app.selected_ticket_count(), 0, "{code}");
             assert!(app.bulk_state.is_none(), "{code}");
-            assert!(app.collapsed_filters.is_empty(), "{code}");
+            for status in ["In Progress", "To Do"] {
+                assert!(!app.is_collapsed(Tab::Filters, status), "{code}");
+            }
             assert!(app.flash.is_none(), "{code}");
         }
 

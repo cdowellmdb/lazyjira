@@ -345,14 +345,10 @@ pub struct App {
     pub filter_loading: bool,
     /// State for filter create/edit modal.
     pub filter_edit: Option<FilterEditState>,
-    /// Collapsed groups per tab (group identifiers).
-    pub collapsed_my_work: HashSet<String>,
-    pub collapsed_team: HashSet<String>,
-    pub collapsed_epics: HashSet<String>,
+    /// The ids of each tab's folded groups, by `Tab::index`.
+    collapsed_groups: [HashSet<String>; 5],
     /// Parents whose sub-tasks are folded away, wherever they're drawn under them.
     pub collapsed_parents: HashSet<String>,
-    pub collapsed_unassigned: HashSet<String>,
-    pub collapsed_filters: HashSet<String>,
     /// The done statuses My Work has folded, until its first full-scope read is applied; `None`
     /// after, when no read folds anything. A failed read changes nothing.
     my_work_done_folded: Option<HashSet<String>>,
@@ -416,12 +412,8 @@ impl App {
             filter_results: Vec::new(),
             filter_loading: false,
             filter_edit: None,
-            collapsed_my_work: HashSet::new(),
-            collapsed_team: HashSet::new(),
-            collapsed_epics: HashSet::new(),
+            collapsed_groups: Default::default(),
             collapsed_parents: HashSet::new(),
-            collapsed_unassigned: HashSet::new(),
-            collapsed_filters: HashSet::new(),
             my_work_done_folded: Some(HashSet::new()),
             epics_i_care_about_rank: HashMap::new(),
             status_rules: crate::cache::StatusRules::default(),
@@ -571,20 +563,27 @@ impl App {
         };
         for ticket in &self.cache.my_tickets {
             if self.status_rules.is_done(&ticket.status) && folded.insert(ticket.status.clone()) {
-                self.collapsed_my_work.insert(ticket.status.clone());
+                self.collapsed_groups[Tab::MyWork.index()].insert(ticket.status.clone());
             }
         }
     }
 
     /// Shows a filter query's results (requested at `requested_at`), with their done groups folded.
     pub fn show_filter_results(&mut self, tickets: Vec<crate::cache::Ticket>, requested_at: u64) {
-        self.collapsed_filters = tickets
+        self.collapsed_groups[Tab::Filters.index()] = tickets
             .iter()
             .filter(|ticket| self.status_rules.is_done(&ticket.status))
             .map(|ticket| ticket.status.clone())
             .collect();
         self.filter_results = tickets;
         self.reapply_moves_since(requested_at);
+        self.mark_cache_changed();
+    }
+
+    /// Empties the filter results, for a query that is starting or has failed.
+    pub fn clear_filter_results(&mut self) {
+        self.filter_results.clear();
+        self.collapsed_groups[Tab::Filters.index()].clear();
         self.mark_cache_changed();
     }
 
@@ -930,6 +929,31 @@ impl App {
                 .any(|label| Self::contains_case_insensitive(label, search))
     }
 
+    /// What the search keeps of one group, whose header reads `header`: every ticket when a
+    /// header text matches, else the tickets that match, and `None` when that leaves the group
+    /// none. With no search it keeps every ticket. Every tab's rows come through here; a tab
+    /// grouped by status passes its tickets as one group with no header.
+    fn kept_by_search<'a>(
+        &self,
+        header: &[&str],
+        tickets: Vec<&'a crate::cache::Ticket>,
+    ) -> Option<Vec<&'a crate::cache::Ticket>> {
+        let Some(search) = self.normalized_search() else {
+            return Some(tickets);
+        };
+        if header
+            .iter()
+            .any(|text| Self::contains_case_insensitive(text, &search))
+        {
+            return Some(tickets);
+        }
+        let kept: Vec<_> = tickets
+            .into_iter()
+            .filter(|ticket| Self::ticket_matches_search(ticket, &search))
+            .collect();
+        (!kept.is_empty()).then_some(kept)
+    }
+
     fn is_unassigned_team_ticket(ticket: &crate::cache::Ticket) -> bool {
         ticket.assignee_email.as_deref() == Some(UNASSIGNED_TEAM_EMAIL)
             || ticket.assignee.as_deref() == Some(UNASSIGNED_TEAM_NAME)
@@ -974,7 +998,6 @@ impl App {
         &self,
         is_shown: impl Fn(&str) -> bool,
     ) -> Vec<(&crate::cache::Epic, Vec<&crate::cache::Ticket>)> {
-        let search = self.normalized_search();
         let mut visible = Vec::new();
         let mut epics: Vec<_> = self
             .cache
@@ -998,32 +1021,9 @@ impl App {
                 .iter()
                 .filter(|t| is_shown(&t.status))
                 .collect();
-            match &search {
-                Some(s) => {
-                    let epic_matches = Self::contains_case_insensitive(&epic.key, s)
-                        || Self::contains_case_insensitive(&epic.summary, s);
-                    if epic_matches {
-                        let mut children = shown;
-                        self.status_rules.sort_tickets(&mut children);
-                        visible.push((epic, children));
-                        continue;
-                    }
-
-                    let mut matching_children: Vec<_> = shown
-                        .into_iter()
-                        .filter(|t| Self::ticket_matches_search(t, s))
-                        .collect();
-                    self.status_rules.sort_tickets(&mut matching_children);
-
-                    if !matching_children.is_empty() {
-                        visible.push((epic, matching_children));
-                    }
-                }
-                None => {
-                    let mut children = shown;
-                    self.status_rules.sort_tickets(&mut children);
-                    visible.push((epic, children));
-                }
+            if let Some(mut children) = self.kept_by_search(&[&epic.key, &epic.summary], shown) {
+                self.status_rules.sort_tickets(&mut children);
+                visible.push((epic, children));
             }
         }
         visible
@@ -1031,7 +1031,6 @@ impl App {
 
     /// Unassigned tickets grouped by epic.
     pub(crate) fn unassigned_visible_by_epic(&self) -> Vec<VisibleGroup<'_, (String, String)>> {
-        let search = self.normalized_search();
         let mut grouped: HashMap<(String, String), Vec<&crate::cache::Ticket>> = HashMap::new();
 
         for ticket in &self.cache.team_tickets {
@@ -1068,47 +1067,21 @@ impl App {
                 .then_with(|| a.1.cmp(&b.1))
         });
 
-        let mut visible = Vec::new();
-        for (epic_key, epic_summary, tickets) in groups {
-            match &search {
-                Some(s) => {
-                    let epic_matches = Self::contains_case_insensitive(&epic_key, s)
-                        || Self::contains_case_insensitive(&epic_summary, s);
-                    if epic_matches {
-                        visible.push((epic_key, epic_summary, tickets));
-                        continue;
-                    }
-
-                    let filtered: Vec<_> = tickets
-                        .into_iter()
-                        .filter(|t| Self::ticket_matches_search(t, s))
-                        .collect();
-                    if !filtered.is_empty() {
-                        visible.push((epic_key, epic_summary, filtered));
-                    }
-                }
-                None => visible.push((epic_key, epic_summary, tickets)),
-            }
-        }
-
         self.index_groups(
             Tab::Unassigned,
-            visible
-                .into_iter()
-                .map(|(key, summary, tickets)| (key.clone(), (key, summary), nest(tickets))),
+            groups.into_iter().filter_map(|(key, summary, tickets)| {
+                let kept = self.kept_by_search(&[&key, &summary], tickets)?;
+                Some((key.clone(), (key, summary), nest(kept)))
+            }),
         )
     }
 
     pub(crate) fn filters_visible_by_status(&self) -> Vec<VisibleGroup<'_, String>> {
-        let search = self.normalized_search();
+        let kept = self.kept_by_search(&[], self.filter_results.iter().collect());
         self.index_groups(
             Tab::Filters,
             self.status_rules
-                .group(self.filter_results.iter().filter(|ticket| {
-                    search
-                        .as_deref()
-                        .is_none_or(|s| Self::ticket_matches_search(ticket, s))
-                }))
+                .group(kept.unwrap_or_default())
                 .into_iter()
                 .map(|(status, tickets)| (status.clone(), status, nest(tickets))),
         )
@@ -1145,14 +1118,14 @@ impl App {
         &self,
         shown: impl Fn(&str) -> bool,
     ) -> Vec<(String, Vec<&crate::cache::Ticket>)> {
-        let search = self.normalized_search();
+        let tickets = self
+            .cache
+            .my_tickets
+            .iter()
+            .filter(|ticket| shown(&ticket.status))
+            .collect();
         self.status_rules
-            .group(self.cache.my_tickets.iter().filter(|ticket| {
-                shown(&ticket.status)
-                    && search
-                        .as_deref()
-                        .is_none_or(|s| Self::ticket_matches_search(ticket, s))
-            }))
+            .group(self.kept_by_search(&[], tickets).unwrap_or_default())
     }
 
     /// Team members and visible tickets in the exact order used by the Team tab.
@@ -1178,9 +1151,7 @@ impl App {
     /// The Team tab's members and tickets for the current search, keeping the statuses
     /// `shown` accepts.
     fn team_tickets_by_member(&self, shown: impl Fn(&str) -> bool) -> Vec<TeamMemberTickets<'_>> {
-        let search = self.normalized_search();
-        let search = search.as_deref();
-        let has_search = search.is_some();
+        let has_search = self.normalized_search().is_some();
         let mut visible = Vec::new();
         let mut tickets_by_email: HashMap<&str, Vec<&crate::cache::Ticket>> = HashMap::new();
         for ticket in &self.cache.team_tickets {
@@ -1198,36 +1169,21 @@ impl App {
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
 
-            let member_match = search.is_some_and(|s| {
-                Self::contains_case_insensitive(&member.name, s)
-                    || Self::contains_case_insensitive(&member.email, s)
-            });
-            let mut any_match = !has_search;
-            let mut active = Vec::new();
-            let mut done = Vec::new();
-            for ticket in member_tickets.iter().copied() {
-                let matches_search = match search {
-                    Some(s) => member_match || Self::ticket_matches_search(ticket, s),
-                    None => true,
-                };
-                if !matches_search {
-                    continue;
-                }
-                any_match = true;
-                if !shown(&ticket.status) {
-                    continue;
-                }
-                if self.status_rules.is_done(&ticket.status) {
-                    done.push(ticket);
-                } else {
-                    active.push(ticket);
-                }
-            }
-
-            if has_search && !any_match {
+            // The search is asked before `shown` is: a member whose matches are all hidden
+            // stays, with no rows. A searched member with no ticket at all is left out, even
+            // one the search names.
+            let Some(kept) =
+                self.kept_by_search(&[&member.name, &member.email], member_tickets.to_vec())
+            else {
+                continue;
+            };
+            if has_search && kept.is_empty() {
                 continue;
             }
-
+            let (mut done, active): (Vec<_>, Vec<_>) = kept
+                .into_iter()
+                .filter(|ticket| shown(&ticket.status))
+                .partition(|ticket| self.status_rules.is_done(&ticket.status));
             self.status_rules.order_done(&mut done);
             visible.push((member, active, done));
         }
@@ -1278,13 +1234,7 @@ impl App {
     }
 
     pub fn is_collapsed(&self, tab: Tab, group_id: &str) -> bool {
-        match tab {
-            Tab::MyWork => self.collapsed_my_work.contains(group_id),
-            Tab::Team => self.collapsed_team.contains(group_id),
-            Tab::Epics => self.collapsed_epics.contains(group_id),
-            Tab::Unassigned => self.collapsed_unassigned.contains(group_id),
-            Tab::Filters => self.collapsed_filters.contains(group_id),
-        }
+        self.collapsed_groups[tab.index()].contains(group_id)
     }
 
     /// Get the group ID for the currently selected item (whether header or ticket).
@@ -1404,13 +1354,7 @@ impl App {
     }
 
     pub fn toggle_group_collapse(&mut self, group_id: &str) {
-        let set = match self.active_tab {
-            Tab::MyWork => &mut self.collapsed_my_work,
-            Tab::Team => &mut self.collapsed_team,
-            Tab::Epics => &mut self.collapsed_epics,
-            Tab::Unassigned => &mut self.collapsed_unassigned,
-            Tab::Filters => &mut self.collapsed_filters,
-        };
+        let set = &mut self.collapsed_groups[self.active_tab.index()];
         let collapsing = !set.remove(group_id);
         if collapsing {
             set.insert(group_id.to_string());
@@ -1480,54 +1424,37 @@ impl App {
         }
     }
 
+    /// `Z`: folds every group but the cursor's, or unfolds them all when the tab has any folded.
     pub fn toggle_all_groups_collapse(&mut self) {
         let current_group = self.selected_group_id();
-        let (set, all_ids) = match self.active_tab {
-            Tab::MyWork => {
-                let ids: Vec<String> = self
-                    .my_work_visible_by_status()
+        let all_ids: Vec<String> = match self.active_tab {
+            Tab::Team => self
+                .sorted_team_members()
+                .iter()
+                .filter(|m| m.email != UNASSIGNED_TEAM_EMAIL)
+                .map(|m| m.email.clone())
+                .collect(),
+            Tab::Epics => self.cache.epics.iter().map(|e| e.key.clone()).collect(),
+            Tab::MyWork | Tab::Unassigned | Tab::Filters => {
+                self.ensure_visible_keys_cache();
+                let cache = self.visible_keys_cache.borrow();
+                cache
+                    .items
                     .iter()
-                    .map(|group| group.id.clone())
-                    .collect();
-                (&mut self.collapsed_my_work, ids)
-            }
-            Tab::Team => {
-                let ids: Vec<String> = self
-                    .sorted_team_members()
-                    .iter()
-                    .filter(|m| m.email != UNASSIGNED_TEAM_EMAIL)
-                    .map(|m| m.email.clone())
-                    .collect();
-                (&mut self.collapsed_team, ids)
-            }
-            Tab::Epics => {
-                let ids: Vec<String> = self.cache.epics.iter().map(|e| e.key.clone()).collect();
-                (&mut self.collapsed_epics, ids)
-            }
-            Tab::Unassigned => {
-                let ids: Vec<String> = self
-                    .unassigned_visible_by_epic()
-                    .iter()
-                    .map(|group| group.id.clone())
-                    .collect();
-                (&mut self.collapsed_unassigned, ids)
-            }
-            Tab::Filters => {
-                let ids: Vec<String> = self
-                    .filters_visible_by_status()
-                    .iter()
-                    .map(|group| group.header.clone())
-                    .collect();
-                (&mut self.collapsed_filters, ids)
+                    .filter_map(|item| match item {
+                        VisibleItem::GroupHeader(id) => Some(id.clone()),
+                        VisibleItem::Ticket(_) => None,
+                    })
+                    .collect()
             }
         };
+        let set = &mut self.collapsed_groups[self.active_tab.index()];
         if set.is_empty() {
-            // Collapse all except the current group
-            for id in &all_ids {
-                if current_group.as_deref() != Some(id) {
-                    set.insert(id.clone());
-                }
-            }
+            set.extend(
+                all_ids
+                    .into_iter()
+                    .filter(|id| current_group.as_ref() != Some(id)),
+            );
         } else {
             set.clear();
         }
@@ -2356,24 +2283,6 @@ mod tests {
     }
 
     #[test]
-    fn my_work_search_matches_labels() {
-        let mut app = App::new();
-        app.active_tab = Tab::MyWork;
-        app.loading = false;
-
-        let mut t = ticket("DEMO-1", "Refactor parser");
-        t.status = "In Progress".to_string();
-        t.labels = vec!["metis".to_string(), "backend".to_string()];
-        app.cache.my_tickets = vec![t];
-
-        app.search = Some("metis".to_string());
-        // H(In Progress) + T(DEMO-1)
-        assert_eq!(app.item_count(), 2);
-        app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("DEMO-1".to_string()));
-    }
-
-    #[test]
     fn my_work_groups_workflow_statuses_before_done() {
         let mut app = my_work_app(&[
             ("DEMO-2000", "Stalled"),
@@ -2472,8 +2381,8 @@ mod tests {
         app.toggle_group_collapse("On Deck");
         app.selected_index = 0;
         app.toggle_all_groups_collapse();
-        assert!(app.collapsed_my_work.contains("On Deck"));
-        assert!(!app.collapsed_my_work.contains("In Progress"));
+        assert!(app.is_collapsed(Tab::MyWork, "On Deck"));
+        assert!(!app.is_collapsed(Tab::MyWork, "In Progress"));
     }
 
     #[test]
@@ -2659,29 +2568,6 @@ mod tests {
     }
 
     #[test]
-    fn team_search_matches_labels() {
-        let mut app = App::new();
-        app.active_tab = Tab::Team;
-        app.loading = false;
-        app.cache.team_members = vec![crate::cache::TeamMember {
-            name: "Dev".to_string(),
-            email: "dev@example.com".to_string(),
-        }];
-
-        let mut t = ticket("DEMO-2", "Triage regression");
-        t.status = "Needs Triage".to_string();
-        t.labels = vec!["infra".to_string()];
-        t.assignee_email = Some("dev@example.com".to_string());
-        app.cache.team_tickets = vec![t];
-
-        app.search = Some("infra".to_string());
-        // H(dev@example.com) + T(DEMO-2)
-        assert_eq!(app.item_count(), 2);
-        app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("DEMO-2".to_string()));
-    }
-
-    #[test]
     fn team_focus_and_done_toggles_treat_workflow_statuses_as_active() {
         let mut app = App::new();
         app.active_tab = Tab::Team;
@@ -2709,25 +2595,6 @@ mod tests {
         assert_eq!(app.item_count(), 2);
         app.selected_index = 1;
         assert_eq!(app.selected_ticket_key(), Some("DEMO-1".to_string()));
-    }
-
-    #[test]
-    fn epics_search_matches_child_labels() {
-        let mut app = epics_app(vec![Epic {
-            key: "DEMO-500".to_string(),
-            summary: "Platform".to_string(),
-            children: {
-                let mut t = ticket("DEMO-55", "Improve cache");
-                t.labels = vec!["perf".to_string()];
-                vec![t]
-            },
-        }]);
-
-        app.search = Some("perf".to_string());
-        // H(DEMO-500) + T(DEMO-55)
-        assert_eq!(app.item_count(), 2);
-        app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("DEMO-55".to_string()));
     }
 
     #[test]
@@ -2827,41 +2694,6 @@ mod tests {
     }
 
     #[test]
-    fn unassigned_search_matches_epic_and_ticket_fields() {
-        let mut app = App::new();
-        app.active_tab = Tab::Unassigned;
-        app.loading = false;
-
-        let mut t1 = ticket("DEMO-101", "Upgrade parser error handling");
-        t1.assignee = Some("Unassigned".to_string());
-        t1.assignee_email = Some("__unassigned__".to_string());
-        t1.epic_key = Some("DEMO-501".to_string());
-        t1.epic_name = Some("Parser Platform".to_string());
-        t1.labels = vec!["infra".to_string()];
-
-        let mut t2 = ticket("DEMO-102", "Refactor retries");
-        t2.assignee = Some("Unassigned".to_string());
-        t2.assignee_email = Some("__unassigned__".to_string());
-        t2.epic_key = Some("DEMO-502".to_string());
-        t2.epic_name = Some("Runner".to_string());
-        t2.labels = vec!["perf".to_string()];
-
-        app.cache.team_tickets = vec![t1, t2];
-
-        app.search = Some("parser".to_string());
-        // H(DEMO-501) + T(DEMO-101)
-        assert_eq!(app.item_count(), 2);
-        app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("DEMO-101".to_string()));
-
-        app.search = Some("perf".to_string());
-        // H(DEMO-502) + T(DEMO-102)
-        assert_eq!(app.item_count(), 2);
-        app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("DEMO-102".to_string()));
-    }
-
-    #[test]
     fn toggle_selection_at_cursor_toggles_ticket_membership() {
         let mut app = App::new();
         app.active_tab = Tab::MyWork;
@@ -2936,22 +2768,6 @@ mod tests {
         let app = filters_app(vec![in_progress, ready]);
 
         assert_eq!(app.item_count(), 4);
-    }
-
-    #[test]
-    fn filters_search_keeps_only_matching_results() {
-        let mut in_progress = ticket("DEMO-40", "Grouped");
-        in_progress.status = "In Progress".to_string();
-        let mut ready = ticket("DEMO-41", "Queued");
-        ready.status = "Ready for Work".to_string();
-
-        let mut app = filters_app(vec![in_progress, ready]);
-        app.search = Some("demo-41".to_string());
-
-        // H(Ready for Work) + T(DEMO-41)
-        assert_eq!(app.item_count(), 2);
-        app.selected_index = 1;
-        assert_eq!(app.selected_ticket_key(), Some("DEMO-41".to_string()));
     }
 
     #[test]
@@ -3096,6 +2912,189 @@ mod tests {
             Some("sam.chen@example.com")
         );
         assert_eq!(app.team_visible_tickets_by_member()[0].total, 1);
+    }
+
+    /// An app where every tab lists two tickets in one group: DEMO-1 (labelled `needle`) and
+    /// DEMO-2, or DEMO-3 (labelled `needle`) and DEMO-4 in Unassigned. The group is the member
+    /// Sam (dev@example.com) in Team, the epic DEMO-900 "Platform" in Epics and Unassigned, and a
+    /// status elsewhere.
+    fn app_with_a_needle_on_every_tab(status: &str) -> App {
+        let in_epic = |key: &str, email: &str, labels: &[&str]| {
+            let mut t = ticket(key, "Summary");
+            t.status = status.to_string();
+            t.assignee_email = Some(email.to_string());
+            t.epic_key = Some("DEMO-900".to_string());
+            t.epic_name = Some("Platform".to_string());
+            t.labels = labels.iter().map(|label| label.to_string()).collect();
+            t
+        };
+        let needle = in_epic("DEMO-1", "dev@example.com", &["needle"]);
+        let other = in_epic("DEMO-2", "dev@example.com", &[]);
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![needle.clone(), other.clone()];
+        app.cache.team_members = vec![member("Sam", "dev@example.com")];
+        app.cache.team_tickets = vec![
+            needle.clone(),
+            other.clone(),
+            in_epic("DEMO-3", super::UNASSIGNED_TEAM_EMAIL, &["needle"]),
+            in_epic("DEMO-4", super::UNASSIGNED_TEAM_EMAIL, &[]),
+        ];
+        app.cache.epics = vec![Epic {
+            key: "DEMO-900".to_string(),
+            summary: "Platform".to_string(),
+            children: vec![needle.clone(), other.clone()],
+        }];
+        app.filter_results = vec![needle, other];
+        app
+    }
+
+    /// What `tab` lists for `search`: its group headers, and its ticket keys in order.
+    fn listed(app: &mut App, tab: Tab, search: &str) -> (usize, Vec<String>) {
+        app.active_tab = tab;
+        app.search = Some(search.to_string());
+        let (items, _) = app.compute_visible_items_for_tab(tab);
+        let keys: Vec<String> = items
+            .iter()
+            .filter_map(|item| match item {
+                super::VisibleItem::Ticket(key) => Some(key.clone()),
+                super::VisibleItem::GroupHeader(_) => None,
+            })
+            .collect();
+        (items.len() - keys.len(), keys)
+    }
+
+    #[test]
+    fn every_tab_keeps_only_the_tickets_the_search_matches() {
+        for &tab in Tab::all() {
+            let mut app = app_with_a_needle_on_every_tab("In Progress");
+            let [needle, other] = if tab == Tab::Unassigned {
+                ["DEMO-3", "DEMO-4"].map(String::from)
+            } else {
+                ["DEMO-1", "DEMO-2"].map(String::from)
+            };
+            assert_eq!(
+                listed(&mut app, tab, ""),
+                (1, vec![needle.clone(), other]),
+                "{tab:?}: no search"
+            );
+            assert_eq!(
+                listed(&mut app, tab, "NEEDLE"),
+                (1, vec![needle]),
+                "{tab:?}"
+            );
+            // A search nothing matches leaves no group either.
+            assert_eq!(listed(&mut app, tab, "zzz"), (0, vec![]), "{tab:?}");
+        }
+    }
+
+    #[test]
+    fn a_group_the_search_names_keeps_all_its_tickets() {
+        for (tab, search, kept) in [
+            (Tab::Team, "dev@example", ["DEMO-1", "DEMO-2"]),
+            (Tab::Team, "SAM", ["DEMO-1", "DEMO-2"]),
+            (Tab::Epics, "platform", ["DEMO-1", "DEMO-2"]),
+            (Tab::Epics, "demo-900", ["DEMO-1", "DEMO-2"]),
+            (Tab::Unassigned, "platform", ["DEMO-3", "DEMO-4"]),
+            (Tab::Unassigned, "demo-900", ["DEMO-3", "DEMO-4"]),
+        ] {
+            let mut app = app_with_a_needle_on_every_tab("In Progress");
+            assert_eq!(
+                listed(&mut app, tab, search),
+                (1, kept.map(String::from).to_vec()),
+                "{tab:?}: {search}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_search_whose_only_matches_are_hidden_keeps_the_member_but_drops_the_epic() {
+        let mut app = app_with_a_needle_on_every_tab("Done");
+        app.show_done = false;
+        // Team asks the search first: Sam has a match, so Sam stays, with no row to show.
+        assert_eq!(listed(&mut app, Tab::Team, "needle"), (1, vec![]));
+        // Epics hides done children first, so the search finds nothing in the epic.
+        assert_eq!(listed(&mut app, Tab::Epics, "needle"), (0, vec![]));
+    }
+
+    #[test]
+    fn a_search_leaves_out_a_member_with_no_tickets_even_one_it_names() {
+        let mut app = app_with_a_needle_on_every_tab("In Progress");
+        app.cache
+            .team_members
+            .push(member("Idle", "idle@example.com"));
+        assert_eq!(listed(&mut app, Tab::Team, "").0, 2);
+        assert_eq!(listed(&mut app, Tab::Team, "idle"), (0, vec![]));
+        // An epic the search names stays, even with no children.
+        app.cache.epics[0].children.clear();
+        assert_eq!(listed(&mut app, Tab::Epics, "platform"), (1, vec![]));
+    }
+
+    #[test]
+    fn folding_all_groups_on_team_and_epics_folds_the_ones_a_search_hides_too() {
+        let labelled = |key: &str, email: &str, label: &str| {
+            let mut t = ticket(key, "Summary");
+            t.status = "In Progress".to_string();
+            t.assignee_email = Some(email.to_string());
+            t.labels = vec![label.to_string()];
+            t
+        };
+        let ann = labelled("DEMO-1", "ann@example.com", "needle");
+        let bob = labelled("DEMO-2", "bob@example.com", "needle");
+        let cid = labelled("DEMO-3", "cid@example.com", "other");
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.team_members = vec![
+            member("Ann", "ann@example.com"),
+            member("Bob", "bob@example.com"),
+            member("Cid", "cid@example.com"),
+        ];
+        app.cache.team_tickets = vec![ann.clone(), bob.clone(), cid.clone()];
+        app.cache.epics = [("DEMO-901", ann), ("DEMO-902", bob), ("DEMO-903", cid)]
+            .map(|(key, child)| Epic {
+                key: key.to_string(),
+                summary: "Epic".to_string(),
+                children: vec![child],
+            })
+            .to_vec();
+
+        for (tab, [cursor, shown, hidden]) in [
+            (
+                Tab::Team,
+                ["ann@example.com", "bob@example.com", "cid@example.com"],
+            ),
+            (Tab::Epics, ["DEMO-901", "DEMO-902", "DEMO-903"]),
+        ] {
+            // The search hides the third group; the cursor is on the first one's header.
+            app.active_tab = tab;
+            app.search = Some("needle".to_string());
+            app.selected_index = 0;
+            app.mark_cache_changed();
+
+            app.toggle_all_groups_collapse();
+            assert!(app.is_collapsed(tab, shown), "{tab:?}");
+            assert!(!app.is_collapsed(tab, cursor), "{tab:?}");
+            assert!(app.is_collapsed(tab, hidden), "{tab:?}");
+
+            // With a group folded, the next one unfolds them all.
+            app.toggle_all_groups_collapse();
+            assert!(!app.is_collapsed(tab, shown), "{tab:?}");
+            assert!(!app.is_collapsed(tab, hidden), "{tab:?}");
+        }
+    }
+
+    #[test]
+    fn clearing_the_filter_results_leaves_no_rows_and_no_folded_groups() {
+        let mut done = ticket("DEMO-1", "Finished");
+        done.status = "Done".to_string();
+        let mut app = filters_app(vec![]);
+        app.show_filter_results(vec![done], 0);
+        assert!(app.is_collapsed(Tab::Filters, "Done"));
+        assert_eq!(app.item_count(), 1);
+
+        app.clear_filter_results();
+        assert!(!app.is_collapsed(Tab::Filters, "Done"));
+        assert_eq!(app.item_count(), 0);
     }
 
     fn member(name: &str, email: &str) -> crate::cache::TeamMember {
