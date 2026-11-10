@@ -1424,37 +1424,26 @@ impl App {
         }
     }
 
-    /// `Z`: folds every group but the cursor's, or unfolds them all when the tab has any folded.
+    /// `Z`: folds every group the tab shows except the cursor's. When the tab already has a
+    /// folded group, shown or not, it unfolds them all instead.
     pub fn toggle_all_groups_collapse(&mut self) {
         let current_group = self.selected_group_id();
-        let all_ids: Vec<String> = match self.active_tab {
-            Tab::Team => self
-                .sorted_team_members()
-                .iter()
-                .filter(|m| m.email != UNASSIGNED_TEAM_EMAIL)
-                .map(|m| m.email.clone())
-                .collect(),
-            Tab::Epics => self.cache.epics.iter().map(|e| e.key.clone()).collect(),
-            Tab::MyWork | Tab::Unassigned | Tab::Filters => {
-                self.ensure_visible_keys_cache();
-                let cache = self.visible_keys_cache.borrow();
-                cache
-                    .items
-                    .iter()
-                    .filter_map(|item| match item {
-                        VisibleItem::GroupHeader(id) => Some(id.clone()),
-                        VisibleItem::Ticket(_) => None,
-                    })
-                    .collect()
-            }
-        };
+        self.ensure_visible_keys_cache();
+        let others_shown: Vec<String> = self
+            .visible_keys_cache
+            .borrow()
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                VisibleItem::GroupHeader(id) if current_group.as_ref() != Some(id) => {
+                    Some(id.clone())
+                }
+                VisibleItem::GroupHeader(_) | VisibleItem::Ticket(_) => None,
+            })
+            .collect();
         let set = &mut self.collapsed_groups[self.active_tab.index()];
         if set.is_empty() {
-            set.extend(
-                all_ids
-                    .into_iter()
-                    .filter(|id| current_group.as_ref() != Some(id)),
-            );
+            set.extend(others_shown);
         } else {
             set.clear();
         }
@@ -3030,18 +3019,19 @@ mod tests {
         assert_eq!(listed(&mut app, Tab::Epics, "platform"), (1, vec![]));
     }
 
-    #[test]
-    fn folding_all_groups_on_team_and_epics_folds_the_ones_a_search_hides_too() {
-        let labelled = |key: &str, email: &str, label: &str| {
+    /// Three members (Ann, Bob, Cid) and three epics (DEMO-901 to 903), each with one ticket.
+    /// Ann's and Bob's are In Progress and labelled `needle`; Cid's is To Do and isn't.
+    fn three_groups_app() -> App {
+        let assigned = |key: &str, email: &str, status: &str, label: &str| {
             let mut t = ticket(key, "Summary");
-            t.status = "In Progress".to_string();
+            t.status = status.to_string();
             t.assignee_email = Some(email.to_string());
             t.labels = vec![label.to_string()];
             t
         };
-        let ann = labelled("DEMO-1", "ann@example.com", "needle");
-        let bob = labelled("DEMO-2", "bob@example.com", "needle");
-        let cid = labelled("DEMO-3", "cid@example.com", "other");
+        let ann = assigned("DEMO-1", "ann@example.com", "In Progress", "needle");
+        let bob = assigned("DEMO-2", "bob@example.com", "In Progress", "needle");
+        let cid = assigned("DEMO-3", "cid@example.com", "To Do", "other");
         let mut app = App::new();
         app.loading = false;
         app.cache.team_members = vec![
@@ -3057,29 +3047,78 @@ mod tests {
                 children: vec![child],
             })
             .to_vec();
+        app
+    }
 
-        for (tab, [cursor, shown, hidden]) in [
-            (
-                Tab::Team,
-                ["ann@example.com", "bob@example.com", "cid@example.com"],
-            ),
-            (Tab::Epics, ["DEMO-901", "DEMO-902", "DEMO-903"]),
-        ] {
-            // The search hides the third group; the cursor is on the first one's header.
-            app.active_tab = tab;
-            app.search = Some("needle".to_string());
-            app.selected_index = 0;
-            app.mark_cache_changed();
+    const MEMBERS: [&str; 3] = ["ann@example.com", "bob@example.com", "cid@example.com"];
+    const EPICS: [&str; 3] = ["DEMO-901", "DEMO-902", "DEMO-903"];
 
-            app.toggle_all_groups_collapse();
-            assert!(app.is_collapsed(tab, shown), "{tab:?}");
-            assert!(!app.is_collapsed(tab, cursor), "{tab:?}");
-            assert!(app.is_collapsed(tab, hidden), "{tab:?}");
+    /// The first group's header row, and its one ticket's row.
+    const HEADER: usize = 0;
+    const TICKET: usize = 1;
 
-            // With a group folded, the next one unfolds them all.
-            app.toggle_all_groups_collapse();
-            assert!(!app.is_collapsed(tab, shown), "{tab:?}");
-            assert!(!app.is_collapsed(tab, hidden), "{tab:?}");
+    /// Presses `Z` on `tab` with the cursor on `row`, a row of the first group.
+    fn fold_all_from_the_first_group(app: &mut App, tab: Tab, row: usize) {
+        app.active_tab = tab;
+        app.selected_index = row;
+        app.mark_cache_changed();
+        app.toggle_all_groups_collapse();
+    }
+
+    #[test]
+    fn folding_all_groups_folds_the_groups_shown_except_the_cursors() {
+        // With nothing hidden, every group but the cursor's folds, wherever in its group the
+        // cursor is.
+        for (tab, [cursor, second, third]) in [(Tab::Team, MEMBERS), (Tab::Epics, EPICS)] {
+            for row in [HEADER, TICKET] {
+                let mut app = three_groups_app();
+                fold_all_from_the_first_group(&mut app, tab, row);
+                assert!(!app.is_collapsed(tab, cursor), "{tab:?} row {row}");
+                assert!(app.is_collapsed(tab, second), "{tab:?} row {row}");
+                assert!(app.is_collapsed(tab, third), "{tab:?} row {row}");
+
+                // With a group folded, the next press unfolds them all.
+                app.toggle_all_groups_collapse();
+                assert!(!app.is_collapsed(tab, second), "{tab:?} row {row}");
+                assert!(!app.is_collapsed(tab, third), "{tab:?} row {row}");
+            }
+        }
+    }
+
+    #[test]
+    fn folding_all_groups_leaves_alone_the_ones_the_tab_hides() {
+        type Hide = fn(&mut App);
+        let search: Hide = |app| app.search = Some("needle".to_string());
+        let focus: Hide = |app| app.status_focus = Some("In Progress".to_string());
+        let pin: Hide =
+            |app| app.set_epics_i_care_about(vec!["DEMO-901".to_string(), "DEMO-902".to_string()]);
+        // Each way of hiding leaves the first two groups shown and hides the third.
+        let cases = [
+            (Tab::Team, MEMBERS, search),
+            (Tab::Epics, EPICS, search),
+            (Tab::Epics, EPICS, focus),
+            (Tab::Epics, EPICS, pin),
+        ];
+        for (case, (tab, [cursor, shown, hidden], hide)) in cases.into_iter().enumerate() {
+            let mut app = three_groups_app();
+            hide(&mut app);
+            fold_all_from_the_first_group(&mut app, tab, HEADER);
+            assert!(!app.is_collapsed(tab, cursor), "case {case}");
+            assert!(app.is_collapsed(tab, shown), "case {case}");
+            assert!(!app.is_collapsed(tab, hidden), "case {case}");
+        }
+    }
+
+    #[test]
+    fn a_folded_group_the_tab_hides_still_makes_z_unfold_them_all() {
+        let mut app = three_groups_app();
+        app.active_tab = Tab::Team;
+        app.toggle_group_collapse("cid@example.com");
+        app.search = Some("needle".to_string());
+
+        fold_all_from_the_first_group(&mut app, Tab::Team, HEADER);
+        for member in MEMBERS {
+            assert!(!app.is_collapsed(Tab::Team, member), "{member}");
         }
     }
 
