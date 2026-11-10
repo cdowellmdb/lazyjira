@@ -245,7 +245,9 @@ pub fn apply(app: &mut App, message: BackgroundMessage) -> FollowUp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{Tab, TicketSyncStage};
+    use crate::app::{DetailMode, Tab, TicketSyncStage};
+    use crate::bulk_actions::{BulkAction, BulkState, BulkTarget};
+    use crate::move_picker::JiraCall;
 
     fn app_with_my_ticket(key: &str, status: &str) -> App {
         let mut app = App::new();
@@ -354,6 +356,11 @@ mod tests {
         let ticket = &app.cache.my_tickets[0];
         assert_eq!(ticket.status, "In Progress");
         assert_eq!(ticket.description.as_deref(), Some("The body"));
+        // The detail is kept for the next list read to hydrate from.
+        let mut read = Cache::empty();
+        read.my_tickets = vec![Ticket::for_test("DEMO-1", "To Do")];
+        app.details.hydrate(&mut read);
+        assert_eq!(read.my_tickets[0].description.as_deref(), Some("The body"));
         // The fetch has ended, so another can begin.
         assert!(app.begin_detail_fetch("DEMO-1"));
 
@@ -457,6 +464,20 @@ mod tests {
             BackgroundMessage::BulkUploadCompleted(upload_summary(2, 1)),
         );
         assert!(app.bulk_upload_state.is_none());
+
+        // So does the preview of another upload opened since.
+        app.bulk_upload_state = Some(BulkUploadState::Preview {
+            preview: upload_preview(3, 0),
+            selected: 0,
+        });
+        apply(
+            &mut app,
+            BackgroundMessage::BulkUploadCompleted(upload_summary(2, 1)),
+        );
+        assert!(matches!(
+            app.bulk_upload_state,
+            Some(BulkUploadState::Preview { .. })
+        ));
     }
 
     #[test]
@@ -562,6 +583,10 @@ mod tests {
         app.active_tab = Tab::Filters;
         app.filter_loading = true;
         app.selected_index = 3;
+        // A ticket selected in the results on screen, which the new results don't have.
+        app.show_filter_results(vec![Ticket::for_test("DEMO-9", "To Do")], 0);
+        app.select_all_visible_tickets();
+        assert_eq!(app.selected_ticket_count(), 1);
         let results = BackgroundMessage::FilterResults {
             requested_at: app.moves.now(),
             result: Ok(vec![
@@ -576,8 +601,11 @@ mod tests {
         assert_eq!(app.filter_focus, FilterFocus::Results);
         assert_eq!(app.selected_index, 0);
         assert!(app.is_collapsed(Tab::Filters, "Done"));
+        assert_eq!(app.selected_ticket_count(), 0);
         assert_eq!(app.flash.as_deref(), Some("Filter returned 2 tickets"));
 
+        app.select_all_visible_tickets();
+        assert_eq!(app.selected_ticket_count(), 1);
         app.filter_loading = true;
         let failed = BackgroundMessage::FilterResults {
             requested_at: app.moves.now(),
@@ -587,6 +615,136 @@ mod tests {
         assert!(!app.filter_loading);
         assert!(app.filter_results.is_empty());
         assert!(!app.is_collapsed(Tab::Filters, "Done"));
+        assert_eq!(app.selected_ticket_count(), 0);
         assert_eq!(app.flash.as_deref(), Some("Filter query failed: bad JQL"));
+    }
+
+    #[test]
+    fn an_answer_requested_before_a_confirmed_move_does_not_undo_it() {
+        let mut app = app_with_my_ticket("DEMO-1", "To Do");
+        let before_the_move = app.moves.now();
+        assert!(app.moves.start("DEMO-1", "In Progress"));
+        let moved = BackgroundMessage::TicketMoved {
+            key: "DEMO-1".to_string(),
+            result: Ok(()),
+        };
+        apply(&mut app, moved);
+        let as_jira_had_it = || Ticket::for_test("DEMO-1", "To Do");
+
+        let detail = BackgroundMessage::TicketDetailFetched {
+            key: "DEMO-1".to_string(),
+            requested_at: before_the_move,
+            result: Ok(as_jira_had_it()),
+        };
+        apply(&mut app, detail);
+        assert_eq!(app.cache.my_tickets[0].status, "In Progress");
+
+        let mut lists = Cache::empty();
+        lists.my_tickets = vec![as_jira_had_it()];
+        let refreshed = BackgroundMessage::CacheRefreshed {
+            request: app.begin_cache_refresh(),
+            phase: CacheRefreshPhase::Full,
+            requested_at: before_the_move,
+            result: Ok(lists),
+        };
+        apply(&mut app, refreshed);
+        assert_eq!(app.cache.my_tickets[0].status, "In Progress");
+
+        let epics = BackgroundMessage::EpicsRefreshed {
+            request: app.epic_refresh_request,
+            requested_at: before_the_move,
+            result: Ok(vec![Epic {
+                children: vec![as_jira_had_it()],
+                ..Epic::for_test("DEMO-100", &[])
+            }]),
+        };
+        apply(&mut app, epics);
+        assert_eq!(app.cache.epics[0].children[0].status, "In Progress");
+
+        let results = BackgroundMessage::FilterResults {
+            requested_at: before_the_move,
+            result: Ok(vec![as_jira_had_it()]),
+        };
+        apply(&mut app, results);
+        assert_eq!(app.filter_results[0].status, "In Progress");
+    }
+
+    #[test]
+    fn the_quit_receipt_counts_what_was_created_and_commented() {
+        let mut app = App::new();
+        app.delight.enabled = true;
+        apply(
+            &mut app,
+            BackgroundMessage::TicketCreated(Ok("DEMO-9".to_string())),
+        );
+        apply(
+            &mut app,
+            BackgroundMessage::CommentAdded(Ok("DEMO-9".to_string())),
+        );
+        apply(
+            &mut app,
+            BackgroundMessage::BulkUploadCompleted(upload_summary(2, 1)),
+        );
+
+        let receipt = app.delight.receipt().expect("a receipt");
+        assert!(receipt.contains("💬 1"), "{receipt}");
+        assert!(receipt.contains("✚ 3 created"), "{receipt}");
+    }
+
+    #[test]
+    fn the_move_pickers_and_the_bulk_result_get_their_answers() {
+        // The single-ticket move picker opens on the transitions it asked for.
+        let mut app = app_with_my_ticket("DEMO-1", "To Do");
+        app.open_detail("DEMO-1".to_string());
+        let Some(JiraCall::FetchTransitions { key, request }) = move_picker::open(&mut app) else {
+            panic!("the picker should ask Jira for transitions");
+        };
+        let transitions = BackgroundMessage::TransitionsFetched {
+            key,
+            request,
+            result: Ok(vec![]),
+        };
+        assert_eq!(apply(&mut app, transitions), FollowUp::default());
+        assert!(matches!(app.detail_mode, DetailMode::MovePicker(_)));
+
+        // The bulk move's destination picker opens on the transitions it asked for.
+        app.bulk_state = Some(BulkState::MoveLoading {
+            targets: vec!["DEMO-1".to_string()],
+            request: 7,
+        });
+        let fetched = BackgroundMessage::BulkTransitionsFetched {
+            request: 7,
+            fetched: vec![],
+        };
+        assert_eq!(apply(&mut app, fetched), FollowUp::default());
+        assert!(matches!(
+            app.bulk_state,
+            Some(BulkState::MoveStatusPicker { .. })
+        ));
+
+        // A finished bulk action says how it went.
+        let summary = BulkSummary {
+            action: BulkAction::Assign,
+            target: BulkTarget::Assign {
+                member_email: "ann@example.com".to_string(),
+                member_name: "Ann".to_string(),
+            },
+            total: 1,
+            attempted: 1,
+            succeeded: 0,
+            failed: 1,
+            successful_keys: vec![],
+            failed_details: vec![("DEMO-1".to_string(), "boom".to_string())],
+            skipped: vec![],
+        };
+        let completed = BackgroundMessage::BulkCompleted {
+            request: 8,
+            summary,
+        };
+        assert_eq!(apply(&mut app, completed), FollowUp::default());
+        assert_eq!(
+            app.flash.as_deref(),
+            Some("Bulk assign complete: 0 succeeded, 1 failed, 0 skipped")
+        );
     }
 }
