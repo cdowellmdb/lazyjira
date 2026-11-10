@@ -191,7 +191,7 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 | `U` | Open bulk CSV upload |
 | `c` | Create ticket (not on Filters) |
 | `S` | Settings: teammates, pinned epics, Done visibility, starting tab, theme |
-| `z/Z` | Fold the current group, or a parent's sub-tasks when a parent or one of its sub-tasks is selected / fold all the groups shown but the current one, or unfold them all when any is folded |
+| `z/Z` | Fold the current group, or a parent's sub-tasks when a parent or one of its sub-tasks is selected / fold all groups |
 | `d` | Toggle visibility of done statuses (`statuses.done` and `statuses.dropped`); not on Filters |
 | `f/F` | Focus the next / previous status in My Work, Team or Epics, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that). In Epics it filters the children, and hides epics with no child in that status |
 | `r` | Refresh |

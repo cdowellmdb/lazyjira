@@ -2446,7 +2446,9 @@ mod tests {
         assert!(!app.is_collapsed(Tab::Filters, "In Progress"));
 
         press(&mut app, &mut config, KeyCode::Char('Z')).await;
-        assert!(!app.is_collapsed(Tab::Filters, "Ready for Work"));
+        for status in ["In Progress", "Ready for Work"] {
+            assert!(!app.is_collapsed(Tab::Filters, status), "{status}");
+        }
     }
 
     #[tokio::test]
