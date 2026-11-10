@@ -1,4 +1,5 @@
 mod app;
+mod background;
 mod bounded;
 mod bulk_actions;
 mod bulk_plan;
@@ -43,8 +44,9 @@ use std::io;
 use std::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::bulk_actions::{BulkAction, BulkCall, BulkSummary, BulkTarget};
-use crate::bulk_plan::{BulkJob, BulkPlan, FetchedTransitions};
+use crate::background::BackgroundMessage;
+use crate::bulk_actions::{BulkAction, BulkCall, BulkTarget};
+use crate::bulk_plan::{BulkJob, BulkPlan};
 use crate::config::AppConfig;
 use crate::jira_rest::describe;
 use crate::move_picker::JiraCall;
@@ -54,62 +56,6 @@ use app::{
 };
 use cache_refresh::CacheRefreshPhase;
 use wake::Wake;
-
-/// Results of background work. `requested_at` is `app.moves.now()` when a Jira read was
-/// requested, so a read that predates a confirmed move can't undo it.
-enum BackgroundMessage {
-    EpicsRefreshed {
-        request: u64,
-        requested_at: u64,
-        result: std::result::Result<Vec<crate::cache::Epic>, String>,
-    },
-    CacheRefreshed {
-        request: u64,
-        phase: CacheRefreshPhase,
-        requested_at: u64,
-        result: std::result::Result<crate::cache::Cache, String>,
-    },
-    TicketDetailFetched {
-        key: String,
-        requested_at: u64,
-        result: std::result::Result<crate::cache::Ticket, String>,
-    },
-    /// Jira's transitions for the move picker. `request` is the picker's `MoveLoading` request.
-    TransitionsFetched {
-        key: String,
-        request: u64,
-        result: std::result::Result<Vec<crate::transitions::Transition>, String>,
-    },
-    /// Every selected ticket's transitions for a bulk move, for the bulk `MoveLoading` request.
-    BulkTransitionsFetched {
-        request: u64,
-        fetched: FetchedTransitions,
-    },
-    TicketMoved {
-        key: String,
-        result: std::result::Result<(), String>,
-    },
-    TicketCreated(std::result::Result<String, String>),
-    CommentAdded(std::result::Result<String, String>),
-    TicketAssigned {
-        key: String,
-        result: std::result::Result<(), String>,
-    },
-    TicketEdited {
-        key: String,
-        result: std::result::Result<(), String>,
-    },
-    BulkCompleted {
-        request: u64,
-        summary: BulkSummary,
-    },
-    BulkUploadPreviewReady(std::result::Result<BulkUploadPreview, String>),
-    BulkUploadCompleted(BulkUploadSummary),
-    FilterResults {
-        requested_at: u64,
-        result: std::result::Result<Vec<crate::cache::Ticket>, String>,
-    },
-}
 
 fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, config: &AppConfig) {
     let requested_at = app.moves.now();
@@ -493,177 +439,23 @@ async fn main() -> Result<()> {
         let mut state_changed = false;
         while let Some(message) = wake::arrived(&mut woke_with, &mut bg_rx) {
             state_changed = true;
-            match message {
-                BackgroundMessage::EpicsRefreshed {
-                    request,
-                    requested_at,
-                    result,
-                } => {
-                    if request != app.epic_refresh_request {
-                        continue;
-                    }
-                    app.epics_refreshing = false;
-                    match result {
-                        Ok(epics) => {
-                            app.replace_epics(epics, requested_at);
-                            app.flash = Some("Epic relationships refreshed".to_string());
-                        }
-                        Err(e) => {
-                            app.flash = Some(format!("Epic refresh failed: {}", e));
-                        }
-                    }
-                }
-                BackgroundMessage::CacheRefreshed {
-                    request,
-                    phase,
-                    requested_at,
-                    result,
-                } => {
-                    let follow_up = app.apply_cache_refresh(phase, request, requested_at, result);
-                    if follow_up.prefetch_details {
-                        queue_detail_prefetch(&mut app, &bg_tx);
-                    }
-                    if follow_up.save_snapshot {
-                        let saved =
-                            local_cache::save_full_cache_snapshot(&config.jira.project, &app.cache)
-                                .map_err(|e| e.to_string());
-                        app.snapshot_saved(phase, saved);
-                    }
-                    if let Some(next) = follow_up.next_phase {
-                        spawn_cache_refresh(&mut app, &bg_tx, next, &config);
-                    }
-                    if follow_up.refresh_epics {
-                        spawn_epics_refresh(&mut app, &bg_tx, &config);
-                    }
-                }
-                BackgroundMessage::TicketDetailFetched {
-                    key,
-                    requested_at,
-                    result,
-                } => {
-                    app.end_detail_fetch(&key);
-                    match result {
-                        Ok(detail) => {
-                            if app.enrich_ticket(&key, requested_at, &detail) {
-                                app.details.record(detail);
-                            }
-                        }
-                        Err(e) => app.fail_detail_fetch(&key, e),
-                    }
-                }
-                BackgroundMessage::TransitionsFetched {
-                    key,
-                    request,
-                    result,
-                } => move_picker::receive(&mut app, &key, request, result),
-                BackgroundMessage::BulkTransitionsFetched { request, fetched } => {
-                    bulk_actions::receive_transitions(&mut app, request, fetched)
-                }
-                BackgroundMessage::TicketMoved { key, result } => {
-                    let succeeded = result.is_ok();
-                    app.finish_move(&key, result);
-                    if succeeded {
-                        app.begin_detail_fetch(&key);
-                        spawn_ticket_detail_fetch(&bg_tx, key, app.moves.now());
-                    }
-                }
-                BackgroundMessage::TicketCreated(result) => {
-                    match result {
-                        Ok(key) => {
-                            app.flash = Some(format!("Created {}", key));
-                            app.delight.created(1);
-                            // Pick up the new ticket.
-                            start_manual_refresh(&mut app, &bg_tx, &config);
-                        }
-                        Err(e) => {
-                            app.flash = Some(format!("Create failed: {}", e));
-                        }
-                    }
-                }
-                BackgroundMessage::CommentAdded(result) => match result {
-                    Ok(key) => {
-                        app.flash = Some(format!("Comment added to {}", key));
-                        app.delight.commented();
-                    }
-                    Err(e) => {
-                        app.flash = Some(format!("Comment failed: {}", e));
-                    }
-                },
-                BackgroundMessage::TicketAssigned { key, result } => match result {
-                    Ok(()) => {
-                        app.flash = Some(format!("Assigned {}", key));
-                    }
-                    Err(e) => {
-                        app.flash = Some(format!("Assign failed for {}: {}", key, e));
-                    }
-                },
-                BackgroundMessage::TicketEdited { key, result } => match result {
-                    Ok(()) => {
-                        app.flash = Some(format!("Updated {}", key));
-                    }
-                    Err(e) => {
-                        app.flash = Some(format!("Edit failed for {}: {}", key, e));
-                    }
-                },
-                BackgroundMessage::BulkCompleted { request, summary } => {
-                    bulk_actions::complete(&mut app, request, summary);
-                }
-                BackgroundMessage::BulkUploadPreviewReady(result) => match result {
-                    Ok(preview) => {
-                        let total_rows = preview.total_rows;
-                        let invalid_rows = preview.invalid_rows;
-                        app.bulk_upload_state = Some(BulkUploadState::Preview {
-                            preview,
-                            selected: 0,
-                        });
-                        app.flash = Some(format!(
-                            "Preview ready: {} rows ({} invalid)",
-                            total_rows, invalid_rows
-                        ));
-                    }
-                    Err(e) => {
-                        if let Some(BulkUploadState::PathInput { loading, .. }) =
-                            app.bulk_upload_state.as_mut()
-                        {
-                            *loading = false;
-                        }
-                        app.flash = Some(format!("CSV preview failed: {}", e));
-                    }
-                },
-                BackgroundMessage::BulkUploadCompleted(summary) => {
-                    let succeeded = summary.succeeded;
-                    let failed = summary.failed;
-                    app.delight.created(succeeded);
-                    if matches!(app.bulk_upload_state, Some(BulkUploadState::Running { .. })) {
-                        app.bulk_upload_state = Some(BulkUploadState::Result { summary });
-                    }
-                    app.flash = Some(format!(
-                        "Bulk upload complete: {} succeeded, {} failed",
-                        succeeded, failed
-                    ));
-                    start_manual_refresh(&mut app, &bg_tx, &config);
-                }
-                BackgroundMessage::FilterResults {
-                    requested_at,
-                    result,
-                } => {
-                    app.filter_loading = false;
-                    match result {
-                        Ok(tickets) => {
-                            let count = tickets.len();
-                            app.show_filter_results(tickets, requested_at);
-                            app.prune_selection_to_visible();
-                            app.filter_focus = FilterFocus::Results;
-                            app.selected_index = 0;
-                            app.flash = Some(format!("Filter returned {} tickets", count));
-                        }
-                        Err(e) => {
-                            app.clear_filter_results();
-                            app.prune_selection_to_visible();
-                            app.flash = Some(format!("Filter query failed: {}", e));
-                        }
-                    }
-                }
+            let follow_up = background::apply(&mut app, message);
+            if follow_up.prefetch_details {
+                queue_detail_prefetch(&mut app, &bg_tx);
+            }
+            if let Some(phase) = follow_up.save_snapshot {
+                let saved = local_cache::save_full_cache_snapshot(&config.jira.project, &app.cache)
+                    .map_err(|e| e.to_string());
+                app.snapshot_saved(phase, saved);
+            }
+            if let Some(next) = follow_up.next_phase {
+                spawn_cache_refresh(&mut app, &bg_tx, next, &config);
+            }
+            if follow_up.refresh_epics {
+                spawn_epics_refresh(&mut app, &bg_tx, &config);
+            }
+            if let Some(key) = follow_up.fetch_detail {
+                spawn_ticket_detail_fetch(&bg_tx, key, app.moves.now());
             }
         }
 
@@ -1815,13 +1607,11 @@ fn start_manual_refresh(
     bg_tx: &UnboundedSender<BackgroundMessage>,
     config: &AppConfig,
 ) -> bool {
-    if app.loading {
-        return false;
+    let started = app.begin_manual_refresh();
+    if started {
+        spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
     }
-    app.loading = true;
-    app.ticket_sync_stage = None;
-    spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
-    true
+    started
 }
 
 /// The keys Filters has of its own, and the list keys it leaves out. Returns whether `key` is

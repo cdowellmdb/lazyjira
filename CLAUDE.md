@@ -26,9 +26,10 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 
 - **src/main.rs** — Entry point, terminal setup, event loop, key handling
 - **src/wake.rs** — What ends the event loop's wait between frames (`wake::next`): terminal input, a background message, or the next confetti frame
+- **src/background.rs** — The background messages (`BackgroundMessage`) and what each does to App: `apply` changes App and returns the `FollowUp` work for `main.rs` to start
 - **src/cli.rs** — Command-line flags, handled before config load and terminal setup: `--help`, `--version`, and the `--dev` rebuilds from source
 - **src/app.rs** — App state, tab management, selection tracking, cache mutations
-- **src/cache_refresh.rs** — What a list refresh's result does to App and the follow-ups it returns for main.rs
+- **src/cache_refresh.rs** — What a list refresh's result does to App and the `FollowUp` it returns through `background::apply`
 - **src/cache.rs** — Data types (Ticket, Epic, TeamMember, Status, Cache)
 - **src/config.rs** — `config.toml` schema, defaults, load/save
 - **src/settings.rs** — In-app team, epic, startup, and theme preferences
