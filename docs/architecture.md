@@ -50,6 +50,8 @@ App's grouped view methods return `VisibleGroup` values with header metadata, to
 
 Every grouped view method passes its tickets through `App::kept_by_search`, the one place that holds the search rule: a group whose header matches keeps all its tickets, any other group keeps the tickets that match, and a group left with none is dropped. A tab grouped by status passes its tickets as one group with no header. A new tab does the same; `every_tab_keeps_only_the_tickets_the_search_matches` runs over `Tab::all()` and fails for a tab that doesn't. Team asks the search before it hides done tickets, so a member whose only matches are hidden stays with no rows, while Epics hides first and drops such an epic.
 
+Each tab's folded group ids live in one private collection, `App::collapsed_groups`, indexed by `Tab::index`. Read it with `is_collapsed`; change it with `toggle_group_collapse`, `toggle_all_groups_collapse` (which folds the groups the tab shows, on every tab), `show_filter_results` and `clear_filter_results`.
+
 Use `App::switch_tab` to restore each tab's position, search, and status focus. Cache updates preserve the selected ticket occurrence and group through `mark_cache_changed`; use `replace_cache`, `replace_epics`, and the ticket update helpers so the old visible rows are retained before data changes.
 
 Renderers register mouse targets for the rows actually drawn, after scrolling. `ui` clears targets before each overlay, so covered controls cannot receive clicks. Mouse actions share keyboard handlers and preserve confirmation steps. Text fields use the existing `tui-textarea` dependency and `widgets::form` helpers.

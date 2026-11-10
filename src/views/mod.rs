@@ -384,7 +384,7 @@ mod tests {
             folded,
             labelled("DEMO-3", None, &[]),
         ];
-        app.collapsed_filters.insert("To Do".into());
+        app.toggle_group_collapse("To Do");
         let draw_with = |app: &mut App, search: Option<&str>| {
             app.search = search.map(String::from);
             app.mark_cache_changed();

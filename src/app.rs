@@ -345,14 +345,10 @@ pub struct App {
     pub filter_loading: bool,
     /// State for filter create/edit modal.
     pub filter_edit: Option<FilterEditState>,
-    /// Collapsed groups per tab (group identifiers).
-    pub collapsed_my_work: HashSet<String>,
-    pub collapsed_team: HashSet<String>,
-    pub collapsed_epics: HashSet<String>,
+    /// The ids of each tab's folded groups, by `Tab::index`.
+    collapsed_groups: [HashSet<String>; 5],
     /// Parents whose sub-tasks are folded away, wherever they're drawn under them.
     pub collapsed_parents: HashSet<String>,
-    pub collapsed_unassigned: HashSet<String>,
-    pub collapsed_filters: HashSet<String>,
     /// The done statuses My Work has folded, until its first full-scope read is applied; `None`
     /// after, when no read folds anything. A failed read changes nothing.
     my_work_done_folded: Option<HashSet<String>>,
@@ -416,12 +412,8 @@ impl App {
             filter_results: Vec::new(),
             filter_loading: false,
             filter_edit: None,
-            collapsed_my_work: HashSet::new(),
-            collapsed_team: HashSet::new(),
-            collapsed_epics: HashSet::new(),
+            collapsed_groups: Default::default(),
             collapsed_parents: HashSet::new(),
-            collapsed_unassigned: HashSet::new(),
-            collapsed_filters: HashSet::new(),
             my_work_done_folded: Some(HashSet::new()),
             epics_i_care_about_rank: HashMap::new(),
             status_rules: crate::cache::StatusRules::default(),
@@ -571,20 +563,27 @@ impl App {
         };
         for ticket in &self.cache.my_tickets {
             if self.status_rules.is_done(&ticket.status) && folded.insert(ticket.status.clone()) {
-                self.collapsed_my_work.insert(ticket.status.clone());
+                self.collapsed_groups[Tab::MyWork.index()].insert(ticket.status.clone());
             }
         }
     }
 
     /// Shows a filter query's results (requested at `requested_at`), with their done groups folded.
     pub fn show_filter_results(&mut self, tickets: Vec<crate::cache::Ticket>, requested_at: u64) {
-        self.collapsed_filters = tickets
+        self.collapsed_groups[Tab::Filters.index()] = tickets
             .iter()
             .filter(|ticket| self.status_rules.is_done(&ticket.status))
             .map(|ticket| ticket.status.clone())
             .collect();
         self.filter_results = tickets;
         self.reapply_moves_since(requested_at);
+        self.mark_cache_changed();
+    }
+
+    /// Empties the filter results, for a query that is starting or has failed.
+    pub fn clear_filter_results(&mut self) {
+        self.filter_results.clear();
+        self.collapsed_groups[Tab::Filters.index()].clear();
         self.mark_cache_changed();
     }
 
@@ -1235,13 +1234,7 @@ impl App {
     }
 
     pub fn is_collapsed(&self, tab: Tab, group_id: &str) -> bool {
-        match tab {
-            Tab::MyWork => self.collapsed_my_work.contains(group_id),
-            Tab::Team => self.collapsed_team.contains(group_id),
-            Tab::Epics => self.collapsed_epics.contains(group_id),
-            Tab::Unassigned => self.collapsed_unassigned.contains(group_id),
-            Tab::Filters => self.collapsed_filters.contains(group_id),
-        }
+        self.collapsed_groups[tab.index()].contains(group_id)
     }
 
     /// Get the group ID for the currently selected item (whether header or ticket).
@@ -1361,13 +1354,7 @@ impl App {
     }
 
     pub fn toggle_group_collapse(&mut self, group_id: &str) {
-        let set = match self.active_tab {
-            Tab::MyWork => &mut self.collapsed_my_work,
-            Tab::Team => &mut self.collapsed_team,
-            Tab::Epics => &mut self.collapsed_epics,
-            Tab::Unassigned => &mut self.collapsed_unassigned,
-            Tab::Filters => &mut self.collapsed_filters,
-        };
+        let set = &mut self.collapsed_groups[self.active_tab.index()];
         let collapsing = !set.remove(group_id);
         if collapsing {
             set.insert(group_id.to_string());
@@ -1437,54 +1424,26 @@ impl App {
         }
     }
 
+    /// `Z`: folds every group the tab shows except the cursor's, or unfolds them all when any
+    /// is folded.
     pub fn toggle_all_groups_collapse(&mut self) {
         let current_group = self.selected_group_id();
-        let (set, all_ids) = match self.active_tab {
-            Tab::MyWork => {
-                let ids: Vec<String> = self
-                    .my_work_visible_by_status()
-                    .iter()
-                    .map(|group| group.id.clone())
-                    .collect();
-                (&mut self.collapsed_my_work, ids)
-            }
-            Tab::Team => {
-                let ids: Vec<String> = self
-                    .sorted_team_members()
-                    .iter()
-                    .filter(|m| m.email != UNASSIGNED_TEAM_EMAIL)
-                    .map(|m| m.email.clone())
-                    .collect();
-                (&mut self.collapsed_team, ids)
-            }
-            Tab::Epics => {
-                let ids: Vec<String> = self.cache.epics.iter().map(|e| e.key.clone()).collect();
-                (&mut self.collapsed_epics, ids)
-            }
-            Tab::Unassigned => {
-                let ids: Vec<String> = self
-                    .unassigned_visible_by_epic()
-                    .iter()
-                    .map(|group| group.id.clone())
-                    .collect();
-                (&mut self.collapsed_unassigned, ids)
-            }
-            Tab::Filters => {
-                let ids: Vec<String> = self
-                    .filters_visible_by_status()
-                    .iter()
-                    .map(|group| group.header.clone())
-                    .collect();
-                (&mut self.collapsed_filters, ids)
-            }
-        };
-        if set.is_empty() {
-            // Collapse all except the current group
-            for id in &all_ids {
-                if current_group.as_deref() != Some(id) {
-                    set.insert(id.clone());
+        self.ensure_visible_keys_cache();
+        let shown: Vec<String> = self
+            .visible_keys_cache
+            .borrow()
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                VisibleItem::GroupHeader(id) if current_group.as_ref() != Some(id) => {
+                    Some(id.clone())
                 }
-            }
+                _ => None,
+            })
+            .collect();
+        let set = &mut self.collapsed_groups[self.active_tab.index()];
+        if set.is_empty() {
+            set.extend(shown);
         } else {
             set.clear();
         }
@@ -2411,8 +2370,8 @@ mod tests {
         app.toggle_group_collapse("On Deck");
         app.selected_index = 0;
         app.toggle_all_groups_collapse();
-        assert!(app.collapsed_my_work.contains("On Deck"));
-        assert!(!app.collapsed_my_work.contains("In Progress"));
+        assert!(app.is_collapsed(Tab::MyWork, "On Deck"));
+        assert!(!app.is_collapsed(Tab::MyWork, "In Progress"));
     }
 
     #[test]
@@ -3088,6 +3047,58 @@ mod tests {
         // An epic the search names stays, even with no children.
         app.cache.epics[0].children.clear();
         assert_eq!(listed(&mut app, Tab::Epics, "platform"), (1, vec![]));
+    }
+
+    #[test]
+    fn folding_all_groups_folds_the_groups_shown_except_the_cursors() {
+        let labelled = |key: &str, email: &str, label: &str| {
+            let mut t = ticket(key, "Summary");
+            t.status = "In Progress".to_string();
+            t.assignee_email = Some(email.to_string());
+            t.labels = vec![label.to_string()];
+            t
+        };
+        let ann = labelled("DEMO-1", "ann@example.com", "needle");
+        let bob = labelled("DEMO-2", "bob@example.com", "needle");
+        let cid = labelled("DEMO-3", "cid@example.com", "other");
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.team_members = vec![
+            member("Ann", "ann@example.com"),
+            member("Bob", "bob@example.com"),
+            member("Cid", "cid@example.com"),
+        ];
+        app.cache.team_tickets = vec![ann.clone(), bob.clone(), cid.clone()];
+        app.cache.epics = [("DEMO-901", ann), ("DEMO-902", bob), ("DEMO-903", cid)]
+            .map(|(key, child)| Epic {
+                key: key.to_string(),
+                summary: "Epic".to_string(),
+                children: vec![child],
+            })
+            .to_vec();
+
+        for (tab, [cursor, shown, hidden]) in [
+            (
+                Tab::Team,
+                ["ann@example.com", "bob@example.com", "cid@example.com"],
+            ),
+            (Tab::Epics, ["DEMO-901", "DEMO-902", "DEMO-903"]),
+        ] {
+            // The search hides the third group; the cursor is on the first one's header.
+            app.active_tab = tab;
+            app.search = Some("needle".to_string());
+            app.selected_index = 0;
+            app.mark_cache_changed();
+
+            app.toggle_all_groups_collapse();
+            assert!(app.is_collapsed(tab, shown), "{tab:?}");
+            assert!(!app.is_collapsed(tab, cursor), "{tab:?}");
+            assert!(!app.is_collapsed(tab, hidden), "{tab:?}");
+
+            // With a group folded, the next one unfolds them all.
+            app.toggle_all_groups_collapse();
+            assert!(!app.is_collapsed(tab, shown), "{tab:?}");
+        }
     }
 
     fn member(name: &str, email: &str) -> crate::cache::TeamMember {

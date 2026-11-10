@@ -324,8 +324,7 @@ mod tests {
                 children: vec![Ticket::for_test("DEMO-2", "Open")],
             },
         ];
-        app.collapsed_epics.insert("EPIC-1".into());
-        app.mark_cache_changed();
+        app.toggle_group_collapse("EPIC-1");
         let rows = draw(&app, Tab::Epics, 160);
         let header = &line_with(&rows, "SEL KEY").unwrap().0;
         let [status, assignee, summary] =
