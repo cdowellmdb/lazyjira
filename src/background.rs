@@ -788,12 +788,15 @@ mod tests {
         assert!(!app.filter_loading);
         assert_eq!(app.filter_results[0].key, "DEMO-2");
 
-        // Arriving last, the first run's answer or failure still doesn't replace the second's.
+        // Arriving last, the first run's answer or failure still doesn't replace the second's,
+        // or move the cursor off its ticket.
+        app.selected_index = 1;
         for stale in [
             answer(1, found("DEMO-1")),
             answer(1, Err("boom".to_string())),
         ] {
             apply(&mut app, stale);
+            assert_eq!(app.selected_index, 1);
             assert_eq!(app.filter_results.len(), 1);
             assert_eq!(app.filter_results[0].key, "DEMO-2");
             assert_eq!(app.flash.as_deref(), Some("Filter returned 1 tickets"));
