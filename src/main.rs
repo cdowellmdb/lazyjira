@@ -803,9 +803,13 @@ async fn handle_key(
         handle_detail_keys(app, key.code, bg_tx);
     } else if app.search.is_some() {
         handle_search_keys(app, key.code, key.modifiers, bg_tx).await;
-    } else if app.active_tab != Tab::Filters || !handle_filter_keys(app, key.code, bg_tx, config) {
-        // Filters takes its own keys first; every other key is a list key on any tab.
-        handle_main_keys(app, key.code, bg_tx, config).await;
+    } else {
+        // Filters takes its own keys first; the rest are the list keys of every tab.
+        let taken =
+            app.active_tab == Tab::Filters && handle_filter_keys(app, key.code, bg_tx, config);
+        if !taken {
+            handle_list_keys(app, key.code, bg_tx, config).await;
+        }
     }
     if show_done_before != app.show_done
         && config.preferences.show_done != app.show_done
@@ -1822,8 +1826,9 @@ fn start_manual_refresh(
     true
 }
 
-/// The keys Filters has of its own, and the list keys it leaves out. Returns whether it took
-/// `key`; any other key is a list key, for `handle_main_keys`.
+/// The keys Filters has of its own, and the list keys it leaves out. Returns whether `key` is
+/// dealt with; a key that isn't goes on to `handle_list_keys` (`/` moves the focus to the results
+/// on its way there).
 fn handle_filter_keys(
     app: &mut App,
     key: KeyCode,
@@ -1912,14 +1917,21 @@ fn handle_filter_keys(
         }
         // Filters has no create and always shows done statuses.
         KeyCode::Char('c' | 'd') => {}
-        // The keys that act on rows wait for the results to have the focus.
-        KeyCode::Char(' ' | 'A' | 'u' | 'B' | 'z' | 'Z') if sidebar => {}
+        // With the sidebar focused, only the list keys that act on no row go on: the others
+        // wait for the results to have the focus.
+        _ if sidebar
+            && !matches!(
+                key,
+                KeyCode::Tab
+                    | KeyCode::BackTab
+                    | KeyCode::Char('q' | 'S' | '?' | 'U' | 'r' | 'f' | 'F')
+            ) => {}
         _ => return false,
     }
     true
 }
 
-async fn handle_main_keys(
+async fn handle_list_keys(
     app: &mut App,
     key: KeyCode,
     bg_tx: &UnboundedSender<BackgroundMessage>,
@@ -2174,16 +2186,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn keybindings_regression_main_navigation_still_works() {
-        let mut app = App::new();
-        app.loading = false;
-        app.active_tab = Tab::MyWork;
-        app.cache.my_tickets = vec![ticket("DEMO-1", "A", "In Progress")];
-        press(&mut app, &mut sample_config(), KeyCode::Char('j')).await;
-        assert_eq!(app.selected_index, 1);
-    }
-
     #[test]
     fn presets_theme_every_cell_on_every_tab_and_overlay() {
         use ratatui::{backend::TestBackend, style::Color};
@@ -2367,19 +2369,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn uppercase_u_opens_bulk_upload_from_main_tabs() {
-        let mut app = App::new();
-        app.loading = false;
-        app.active_tab = Tab::MyWork;
-        press(&mut app, &mut sample_config(), KeyCode::Char('U')).await;
-
-        assert!(matches!(
-            app.bulk_upload_state,
-            Some(BulkUploadState::PathInput { .. })
-        ));
-    }
-
-    #[tokio::test]
     async fn enter_on_epic_header_opens_epic_detail_in_main_mode() {
         let mut app = App::new();
         app.loading = false;
@@ -2431,19 +2420,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn uppercase_u_opens_bulk_upload_from_filters() {
-        let mut app = App::new();
-        app.loading = false;
-        app.active_tab = Tab::Filters;
-        let mut config = sample_config();
-        press(&mut app, &mut config, KeyCode::Char('U')).await;
-        assert!(matches!(
-            app.bulk_upload_state,
-            Some(BulkUploadState::PathInput { .. })
-        ));
-    }
-
-    #[tokio::test]
     async fn slash_from_the_filters_sidebar_focuses_the_results_it_searches() {
         let mut app = App::new();
         app.loading = false;
@@ -2453,26 +2429,6 @@ mod tests {
 
         assert_eq!(app.search.as_deref(), Some(""));
         assert_eq!(app.filter_focus, FilterFocus::Results);
-    }
-
-    #[tokio::test]
-    async fn z_toggles_current_filter_group_from_results() {
-        let mut app = App::new();
-        app.loading = false;
-        app.active_tab = Tab::Filters;
-        app.filter_focus = FilterFocus::Results;
-        app.filter_results = vec![
-            ticket("DEMO-70", "Grouped", "In Progress"),
-            ticket("DEMO-71", "Grouped too", "In Progress"),
-        ];
-        app.mark_cache_changed();
-        app.selected_index = 1;
-
-        let mut config = sample_config();
-        press(&mut app, &mut config, KeyCode::Char('z')).await;
-
-        assert!(app.collapsed_filters.contains("In Progress"));
-        assert_eq!(app.selected_index, 0);
     }
 
     #[tokio::test]
@@ -2587,13 +2543,22 @@ mod tests {
             press(&mut app, &mut config, KeyCode::Char('A')).await;
             assert_eq!(app.selected_ticket_count(), 1, "{tab:?}: A");
 
-            press(&mut app, &mut config, KeyCode::Char('k')).await;
-            assert_eq!(app.selected_index, 0, "{tab:?}: k");
-            press(&mut app, &mut config, KeyCode::Char('j')).await;
-            assert_eq!(app.selected_index, 1, "{tab:?}: j");
+            for (code, row) in [
+                (KeyCode::Char('k'), 0),
+                (KeyCode::Char('j'), 1),
+                (KeyCode::Up, 0),
+                (KeyCode::Down, 1),
+            ] {
+                press(&mut app, &mut config, code).await;
+                assert_eq!(app.selected_index, row, "{tab:?}: {code:?}");
+            }
 
             press(&mut app, &mut config, KeyCode::Char('z')).await;
             assert!(app.is_collapsed(tab, &group), "{tab:?}: z");
+            assert_eq!(
+                app.selected_index, 0,
+                "{tab:?}: z leaves the cursor on the header"
+            );
             press(&mut app, &mut config, KeyCode::Char('z')).await;
             assert!(!app.is_collapsed(tab, &group), "{tab:?}: z again");
 
@@ -2613,24 +2578,68 @@ mod tests {
             press(&mut app, &mut config, KeyCode::Char('r')).await;
             assert!(app.loading, "{tab:?}: r");
             assert_eq!(app.flash.as_deref(), Some("Refreshing tickets..."));
-            press(&mut app, &mut config, KeyCode::Char('r')).await;
-            assert_eq!(app.flash.as_deref(), Some("Refresh already in progress"));
 
             press(&mut app, &mut config, KeyCode::Char('q')).await;
             assert!(app.should_quit, "{tab:?}: q");
+
+            let next = Tab::all()[(tab.index() + 1) % Tab::all().len()];
+            press(&mut app, &mut config, KeyCode::Tab).await;
+            assert_eq!(app.active_tab, next, "{tab:?}: Tab");
         }
+    }
+
+    #[tokio::test]
+    async fn r_starts_one_manual_refresh_and_a_second_r_starts_none() {
+        let mut app = App::new();
+        app.loading = false;
+        app.ticket_sync_stage = Some(TicketSyncStage::Full);
+        let mut config = sample_config();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let r = KeyEvent::from(KeyCode::Char('r'));
+
+        handle_key(&mut app, r, &tx, &mut config).await;
+        assert!(app.loading);
+        assert!(app.ticket_sync_stage.is_none());
+        let request = app.cache_refresh_request;
+
+        handle_key(&mut app, r, &tx, &mut config).await;
+        assert_eq!(app.cache_refresh_request, request);
+        assert_eq!(app.flash.as_deref(), Some("Refresh already in progress"));
+
+        // One read went out, the manual one. Tests never reach Jira, so it answers with an error.
+        drop(tx);
+        let mut sent = Vec::new();
+        while let Some(message) = rx.recv().await {
+            match message {
+                BackgroundMessage::CacheRefreshed { phase, request, .. } => {
+                    sent.push((phase, request))
+                }
+                _ => panic!("r sends only a cache refresh"),
+            }
+        }
+        assert_eq!(sent, vec![(CacheRefreshPhase::Manual, request)]);
     }
 
     #[tokio::test]
     async fn the_filters_sidebar_takes_its_own_keys_and_holds_back_the_row_keys() {
         let mut config = two_saved_filters();
         let mut app = app_with_a_ticket_on_every_tab(Tab::Filters);
+        // A second status group, so Z would have a group to fold.
+        app.filter_results
+            .push(ticket("DEMO-3", "Another status", "To Do"));
         app.filter_focus = FilterFocus::Sidebar;
 
-        // j and k walk the saved filters and stop at both ends.
-        for (code, idx) in [('j', 1), ('j', 1), ('k', 0), ('k', 0)] {
-            press(&mut app, &mut config, KeyCode::Char(code)).await;
-            assert_eq!(app.filter_sidebar_idx, idx, "{code}");
+        // j/k and Down/Up walk the saved filters and stop at both ends.
+        for (code, idx) in [
+            (KeyCode::Char('j'), 1),
+            (KeyCode::Char('j'), 1),
+            (KeyCode::Char('k'), 0),
+            (KeyCode::Char('k'), 0),
+            (KeyCode::Down, 1),
+            (KeyCode::Up, 0),
+        ] {
+            press(&mut app, &mut config, code).await;
+            assert_eq!(app.filter_sidebar_idx, idx, "{code:?}");
         }
 
         // The keys that act on rows wait for the results to have the focus.
@@ -2650,6 +2659,9 @@ mod tests {
         press(&mut app, &mut config, KeyCode::Char('x')).await;
         assert!(app.filter_edit.is_none());
         assert_eq!(config.filters.len(), 2);
+        // n starts a new filter from either pane.
+        press(&mut app, &mut config, KeyCode::Char('n')).await;
+        assert!(app.filter_edit.take().is_some());
 
         // Shift+Tab comes back to the sidebar, and from there leaves for the previous tab.
         press(&mut app, &mut config, KeyCode::BackTab).await;
@@ -2657,6 +2669,25 @@ mod tests {
         assert_eq!(app.active_tab, Tab::Filters);
         press(&mut app, &mut config, KeyCode::BackTab).await;
         assert_eq!(app.active_tab, Tab::Unassigned);
+    }
+
+    #[tokio::test]
+    async fn the_filters_sidebar_passes_on_the_keys_that_act_on_no_row() {
+        let mut config = sample_config();
+        let mut app = app_with_a_ticket_on_every_tab(Tab::Filters);
+        app.filter_focus = FilterFocus::Sidebar;
+
+        press(&mut app, &mut config, KeyCode::Char('?')).await;
+        assert!(std::mem::take(&mut app.show_keybindings));
+        press(&mut app, &mut config, KeyCode::Char('U')).await;
+        assert!(app.bulk_upload_state.take().is_some());
+        press(&mut app, &mut config, KeyCode::Char('S')).await;
+        assert!(app.settings.take().is_some());
+        press(&mut app, &mut config, KeyCode::Char('r')).await;
+        assert!(app.loading);
+        press(&mut app, &mut config, KeyCode::Char('q')).await;
+        assert!(app.should_quit);
+        assert_eq!(app.filter_focus, FilterFocus::Sidebar);
     }
 
     #[tokio::test]
@@ -2705,12 +2736,14 @@ mod tests {
             assert!(app.flash.is_none(), "{focus:?}");
 
             // Status focus answers as it does on Unassigned.
-            press(&mut app, &mut config, KeyCode::Char('f')).await;
-            assert_eq!(
-                app.flash.as_deref(),
-                Some("Status focus works in My Work, Team and Epics"),
-                "{focus:?}"
-            );
+            for code in ['f', 'F'] {
+                press(&mut app, &mut config, KeyCode::Char(code)).await;
+                assert_eq!(
+                    app.flash.as_deref(),
+                    Some("Status focus works in My Work, Team and Epics"),
+                    "{focus:?}: {code}"
+                );
+            }
         }
     }
 
