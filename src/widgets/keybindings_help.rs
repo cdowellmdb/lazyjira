@@ -63,7 +63,7 @@ const DETAIL: &[(&str, &str)] = &[
     ("o", "Open ticket after a failed move"),
     ("", "Filters tab"),
     ("j / k", "Navigate filters or results"),
-    ("Tab / S-Tab", "Results or next tab / sidebar"),
+    ("Tab / S-Tab", "Results or next tab / sidebar or prev tab"),
     ("Enter", "Run filter / open result"),
     ("Space · A/u · B", "Mark / select / bulk (results)"),
     ("z / Z", "Fold parent or status / all statuses"),

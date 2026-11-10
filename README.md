@@ -180,7 +180,7 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 | Key | Action |
 |-----|--------|
 | `Tab` | Next tab |
-| `Shift+Tab` | Previous tab (in Filters: back to sidebar) |
+| `Shift+Tab` | Previous tab (in Filters' results: back to the sidebar) |
 | `j/k`, `Up/Down` | Navigate |
 | `Enter` | Open ticket detail (or epic detail on an Epics header) |
 | `/` | Search tickets, labels, and team members. While searching, `Up/Down`, `Ctrl+j/k` or `Ctrl+n/p` move the selection, `Enter` opens it, and `Esc` exits |
@@ -257,7 +257,7 @@ A bulk move loads every selected ticket's transitions, then offers the statuses 
 |-----|--------|
 | `j/k`, `Up/Down` | Navigate within focused pane |
 | `Tab` | Switch to results / next tab |
-| `Shift+Tab` | Back to sidebar |
+| `Shift+Tab` | Back to sidebar (results) / previous tab (sidebar) |
 | `Enter` | Run filter (sidebar) / open ticket (results) |
 | `/` | Search the results, moving to the results pane. The title counts the results the search keeps, and a search that keeps none shows `No results match "…"` |
 | `n` | New filter |

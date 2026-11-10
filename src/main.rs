@@ -572,17 +572,8 @@ async fn main() -> Result<()> {
                         Ok(key) => {
                             app.flash = Some(format!("Created {}", key));
                             app.delight.created(1);
-                            // Trigger a manual refresh to pick up the new ticket
-                            if !app.loading {
-                                app.loading = true;
-                                app.ticket_sync_stage = None;
-                                spawn_cache_refresh(
-                                    &mut app,
-                                    &bg_tx,
-                                    CacheRefreshPhase::Manual,
-                                    &config,
-                                );
-                            }
+                            // Pick up the new ticket.
+                            start_manual_refresh(&mut app, &bg_tx, &config);
                         }
                         Err(e) => {
                             app.flash = Some(format!("Create failed: {}", e));
@@ -650,11 +641,7 @@ async fn main() -> Result<()> {
                         "Bulk upload complete: {} succeeded, {} failed",
                         succeeded, failed
                     ));
-                    if !app.loading {
-                        app.loading = true;
-                        app.ticket_sync_stage = None;
-                        spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::Manual, &config);
-                    }
+                    start_manual_refresh(&mut app, &bg_tx, &config);
                 }
                 BackgroundMessage::FilterResults {
                     requested_at,
@@ -816,10 +803,9 @@ async fn handle_key(
         handle_detail_keys(app, key.code, bg_tx);
     } else if app.search.is_some() {
         handle_search_keys(app, key.code, key.modifiers, bg_tx).await;
-    } else if app.active_tab == Tab::Filters {
-        handle_filter_keys(app, key.code, bg_tx, config);
-    } else {
-        handle_main_keys(app, key.code, key.modifiers, bg_tx, config).await;
+    } else if app.active_tab != Tab::Filters || !handle_filter_keys(app, key.code, bg_tx, config) {
+        // Filters takes its own keys first; every other key is a list key on any tab.
+        handle_main_keys(app, key.code, bg_tx, config).await;
     }
     if show_done_before != app.show_done
         && config.preferences.show_done != app.show_done
@@ -1397,19 +1383,7 @@ async fn handle_search_keys(
             app.search = None;
             app.clamp_selection();
         }
-        KeyCode::Enter => {
-            if let Some(group_id) = app.selected_header_group_id() {
-                if app.active_tab == Tab::Epics {
-                    app.open_epic_detail(group_id);
-                } else if app.is_collapsed(app.active_tab, &group_id) {
-                    app.toggle_group_collapse(&group_id);
-                }
-            } else if let Some(key) = app.selected_ticket_key() {
-                if let Some(key) = app.open_fresh_detail(key) {
-                    spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
-                }
-            }
-        }
+        KeyCode::Enter => open_selected_row(app, bg_tx),
         KeyCode::Backspace => {
             if let Some(ref mut s) = app.search {
                 s.pop();
@@ -1818,33 +1792,51 @@ fn handle_filter_edit_keys(
     }
 }
 
+/// Enter on the selected row: an epic's detail, a folded group unfolded, or a ticket's detail.
+fn open_selected_row(app: &mut App, bg_tx: &UnboundedSender<BackgroundMessage>) {
+    if let Some(group_id) = app.selected_header_group_id() {
+        if app.active_tab == Tab::Epics {
+            app.open_epic_detail(group_id);
+        } else if app.is_collapsed(app.active_tab, &group_id) {
+            app.toggle_group_collapse(&group_id);
+        }
+    } else if let Some(key) = app.selected_ticket_key() {
+        if let Some(key) = app.open_fresh_detail(key) {
+            spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
+        }
+    }
+}
+
+/// Starts a manual refresh unless a refresh is already running, and returns whether it did.
+fn start_manual_refresh(
+    app: &mut App,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+    config: &AppConfig,
+) -> bool {
+    if app.loading {
+        return false;
+    }
+    app.loading = true;
+    app.ticket_sync_stage = None;
+    spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
+    true
+}
+
+/// The keys Filters has of its own, and the list keys it leaves out. Returns whether it took
+/// `key`; any other key is a list key, for `handle_main_keys`.
 fn handle_filter_keys(
     app: &mut App,
     key: KeyCode,
     bg_tx: &UnboundedSender<BackgroundMessage>,
     config: &mut AppConfig,
-) {
+) -> bool {
+    let sidebar = app.filter_focus == FilterFocus::Sidebar;
     match key {
-        KeyCode::Char('q') => app.should_quit = true,
-        KeyCode::Char('S') => app.settings = Some(settings::Settings::new(config)),
-        KeyCode::Char('?') => app.toggle_keybindings(),
-        KeyCode::Tab => {
-            if app.filter_focus == FilterFocus::Sidebar {
-                if !app.filter_results.is_empty() {
-                    app.filter_focus = FilterFocus::Results;
-                    app.selected_index = 0;
-                } else {
-                    app.next_tab();
-                }
-            } else {
-                app.next_tab();
-            }
+        KeyCode::Tab if sidebar && !app.filter_results.is_empty() => {
+            app.filter_focus = FilterFocus::Results;
+            app.selected_index = 0;
         }
-        KeyCode::BackTab => {
-            if app.filter_focus == FilterFocus::Results {
-                app.filter_focus = FilterFocus::Sidebar;
-            }
-        }
+        KeyCode::BackTab if !sidebar => app.filter_focus = FilterFocus::Sidebar,
         KeyCode::Char('n') => {
             app.filter_edit = Some(app::FilterEditState {
                 focused_field: 0,
@@ -1853,22 +1845,18 @@ fn handle_filter_keys(
                 editing_idx: None,
             });
         }
-        KeyCode::Char('e') => {
-            if app.filter_focus == FilterFocus::Sidebar {
-                if let Some(filter) = config.filters.get(app.filter_sidebar_idx) {
-                    app.filter_edit = Some(app::FilterEditState {
-                        focused_field: 0,
-                        name: widgets::form::editor(&filter.name),
-                        jql: widgets::form::editor(&filter.jql),
-                        editing_idx: Some(app.filter_sidebar_idx),
-                    });
-                }
+        KeyCode::Char('e') if sidebar => {
+            if let Some(filter) = config.filters.get(app.filter_sidebar_idx) {
+                app.filter_edit = Some(app::FilterEditState {
+                    focused_field: 0,
+                    name: widgets::form::editor(&filter.name),
+                    jql: widgets::form::editor(&filter.jql),
+                    editing_idx: Some(app.filter_sidebar_idx),
+                });
             }
         }
-        KeyCode::Char('x') => {
-            if app.filter_focus == FilterFocus::Sidebar
-                && app.filter_sidebar_idx < config.filters.len()
-            {
+        KeyCode::Char('x') if sidebar => {
+            if app.filter_sidebar_idx < config.filters.len() {
                 let removed_name = config.filters.remove(app.filter_sidebar_idx).name;
                 match crate::config::save_config(config) {
                     Ok(()) => {
@@ -1885,121 +1873,55 @@ fn handle_filter_keys(
                 }
             }
         }
-        KeyCode::Char('U') => {
-            app.bulk_upload_state = Some(BulkUploadState::PathInput {
-                path: widgets::form::editor("").into(),
-                loading: false,
-            });
-        }
-        KeyCode::Char(' ') => {
-            if app.filter_focus == FilterFocus::Results {
-                app.toggle_selection_at_cursor();
+        KeyCode::Char('j') | KeyCode::Down if sidebar => {
+            if !config.filters.is_empty() && app.filter_sidebar_idx < config.filters.len() - 1 {
+                app.filter_sidebar_idx += 1;
             }
         }
-        KeyCode::Char('A') => {
-            if app.filter_focus == FilterFocus::Results {
-                app.select_all_visible_tickets();
-                app.flash = Some(format!(
-                    "Selected {} tickets",
-                    app.selected_visible_ticket_keys_in_order().len()
-                ));
-            }
+        KeyCode::Char('k') | KeyCode::Up if sidebar => {
+            app.filter_sidebar_idx = app.filter_sidebar_idx.saturating_sub(1);
         }
-        KeyCode::Char('u') => {
-            if app.filter_focus == FilterFocus::Results {
-                app.clear_selected_tickets();
-                app.flash = Some("Selection cleared".to_string());
-            }
-        }
-        KeyCode::Char('B') => {
-            if app.filter_focus == FilterFocus::Results {
-                bulk_actions::open(app);
-            }
-        }
-        KeyCode::Char('z') => {
-            if app.filter_focus == FilterFocus::Results {
-                app.toggle_fold_at_cursor();
-            }
-        }
-        KeyCode::Char('Z') => {
-            if app.filter_focus == FilterFocus::Results {
-                app.toggle_all_groups_collapse();
-            }
-        }
-        KeyCode::Char('j') | KeyCode::Down => match app.filter_focus {
-            FilterFocus::Sidebar => {
-                if !config.filters.is_empty() && app.filter_sidebar_idx < config.filters.len() - 1 {
-                    app.filter_sidebar_idx += 1;
-                }
-            }
-            FilterFocus::Results => app.move_selection_down(),
-        },
-        KeyCode::Char('k') | KeyCode::Up => match app.filter_focus {
-            FilterFocus::Sidebar => {
-                app.filter_sidebar_idx = app.filter_sidebar_idx.saturating_sub(1);
-            }
-            FilterFocus::Results => app.move_selection_up(),
-        },
-        KeyCode::Enter => match app.filter_focus {
-            FilterFocus::Sidebar => {
-                // Run the selected filter
-                if let Some(filter) = config.filters.get(app.filter_sidebar_idx) {
-                    app.filter_loading = true;
-                    app.filter_results.clear();
-                    app.collapsed_filters.clear();
-                    app.mark_cache_changed();
-                    app.flash = Some(format!("Running filter '{}'...", filter.name));
+        KeyCode::Enter if sidebar => {
+            // Run the selected filter
+            if let Some(filter) = config.filters.get(app.filter_sidebar_idx) {
+                app.filter_loading = true;
+                app.filter_results.clear();
+                app.collapsed_filters.clear();
+                app.mark_cache_changed();
+                app.flash = Some(format!("Running filter '{}'...", filter.name));
 
-                    let tx = bg_tx.clone();
-                    let cfg = config.clone();
-                    let jql = filter.jql.clone();
-                    let requested_at = app.moves.now();
-                    tokio::spawn(async move {
-                        let result = jira_reads::fetch_jql_query(&cfg, &jql)
-                            .await
-                            .map_err(|e| describe(&e));
-                        let _ = tx.send(BackgroundMessage::FilterResults {
-                            requested_at,
-                            result,
-                        });
+                let tx = bg_tx.clone();
+                let cfg = config.clone();
+                let jql = filter.jql.clone();
+                let requested_at = app.moves.now();
+                tokio::spawn(async move {
+                    let result = jira_reads::fetch_jql_query(&cfg, &jql)
+                        .await
+                        .map_err(|e| describe(&e));
+                    let _ = tx.send(BackgroundMessage::FilterResults {
+                        requested_at,
+                        result,
                     });
-                }
+                });
             }
-            FilterFocus::Results => {
-                if let Some(group_id) = app.selected_header_group_id() {
-                    if app.is_collapsed(Tab::Filters, &group_id) {
-                        app.toggle_group_collapse(&group_id);
-                    }
-                } else if let Some(key) = app.selected_ticket_key() {
-                    if let Some(key) = app.open_fresh_detail(key) {
-                        spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
-                    }
-                }
-            }
-        },
+        }
         KeyCode::Char('/') => {
             // The search narrows the results, and only focused results draw the selection.
             app.filter_focus = FilterFocus::Results;
-            app.search = Some(String::new());
+            return false;
         }
-        KeyCode::Char('r') => {
-            if app.loading {
-                app.flash = Some("Refresh already in progress".to_string());
-            } else {
-                app.loading = true;
-                app.ticket_sync_stage = None;
-                app.flash = Some("Refreshing tickets...".to_string());
-                spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
-            }
-        }
-        _ => {}
+        // Filters has no create and always shows done statuses.
+        KeyCode::Char('c' | 'd') => {}
+        // The keys that act on rows wait for the results to have the focus.
+        KeyCode::Char(' ' | 'A' | 'u' | 'B' | 'z' | 'Z') if sidebar => {}
+        _ => return false,
     }
+    true
 }
 
 async fn handle_main_keys(
     app: &mut App,
     key: KeyCode,
-    _modifiers: KeyModifiers,
     bg_tx: &UnboundedSender<BackgroundMessage>,
     config: &AppConfig,
 ) {
@@ -2045,14 +1967,11 @@ async fn handle_main_keys(
             }
         }
         KeyCode::Char('r') => {
-            if app.loading {
-                app.flash = Some("Refresh already in progress".to_string());
+            app.flash = Some(if start_manual_refresh(app, bg_tx, config) {
+                "Refreshing tickets...".to_string()
             } else {
-                app.loading = true;
-                app.ticket_sync_stage = None;
-                app.flash = Some("Refreshing tickets...".to_string());
-                spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
-            }
+                "Refresh already in progress".to_string()
+            });
         }
         KeyCode::Char('z') => app.toggle_fold_at_cursor(),
         KeyCode::Char('Z') => {
@@ -2077,19 +1996,7 @@ async fn handle_main_keys(
                 loading: false,
             });
         }
-        KeyCode::Enter => {
-            if let Some(group_id) = app.selected_header_group_id() {
-                if app.active_tab == Tab::Epics {
-                    app.open_epic_detail(group_id);
-                } else if app.is_collapsed(app.active_tab, &group_id) {
-                    app.toggle_group_collapse(&group_id);
-                }
-            } else if let Some(key) = app.selected_ticket_key() {
-                if let Some(key) = app.open_fresh_detail(key) {
-                    spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
-                }
-            }
-        }
+        KeyCode::Enter => open_selected_row(app, bg_tx),
         _ => {}
     }
 }
@@ -2119,19 +2026,11 @@ mod tests {
     #[tokio::test]
     async fn forms_render_after_resizing_and_keep_actions_visible_at_normal_sizes() {
         use ratatui::{backend::TestBackend, Terminal};
-        let config = sample_config();
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut config = sample_config();
         for (width, height) in [(160, 55), (80, 24), (80, 20), (40, 18), (8, 4)] {
             let mut app = App::new();
             app.loading = false;
-            handle_main_keys(
-                &mut app,
-                KeyCode::Char('c'),
-                KeyModifiers::NONE,
-                &tx,
-                &config,
-            )
-            .await;
+            press(&mut app, &mut config, KeyCode::Char('c')).await;
             for modal in ["Create", "Comment", "Settings"] {
                 if modal == "Comment" {
                     app.create_ticket = None;
@@ -2262,6 +2161,12 @@ mod tests {
         }
     }
 
+    /// Presses `code` the way the event loop does, through `handle_key`.
+    async fn press(app: &mut App, config: &mut AppConfig, code: KeyCode) {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        handle_key(app, KeyEvent::from(code), &tx, config).await;
+    }
+
     fn ticket(key: &str, summary: &str, status: &str) -> crate::cache::Ticket {
         crate::cache::Ticket {
             summary: summary.to_string(),
@@ -2275,15 +2180,7 @@ mod tests {
         app.loading = false;
         app.active_tab = Tab::MyWork;
         app.cache.my_tickets = vec![ticket("DEMO-1", "A", "In Progress")];
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        handle_main_keys(
-            &mut app,
-            KeyCode::Char('j'),
-            KeyModifiers::NONE,
-            &tx,
-            &sample_config(),
-        )
-        .await;
+        press(&mut app, &mut sample_config(), KeyCode::Char('j')).await;
         assert_eq!(app.selected_index, 1);
     }
 
@@ -2459,15 +2356,7 @@ mod tests {
         app.cache.my_tickets = vec![ticket("DEMO-1", "A", "In Progress")];
         app.selected_index = 1; // current ticket row
 
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        handle_main_keys(
-            &mut app,
-            KeyCode::Char('B'),
-            KeyModifiers::NONE,
-            &tx,
-            &sample_config(),
-        )
-        .await;
+        press(&mut app, &mut sample_config(), KeyCode::Char('B')).await;
 
         match app.bulk_state {
             Some(BulkState::ActionPicker { targets, .. }) => {
@@ -2482,15 +2371,7 @@ mod tests {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::MyWork;
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        handle_main_keys(
-            &mut app,
-            KeyCode::Char('U'),
-            KeyModifiers::NONE,
-            &tx,
-            &sample_config(),
-        )
-        .await;
+        press(&mut app, &mut sample_config(), KeyCode::Char('U')).await;
 
         assert!(matches!(
             app.bulk_upload_state,
@@ -2510,15 +2391,7 @@ mod tests {
         }];
         app.selected_index = 0;
 
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        handle_main_keys(
-            &mut app,
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-            &tx,
-            &sample_config(),
-        )
-        .await;
+        press(&mut app, &mut sample_config(), KeyCode::Enter).await;
 
         assert_eq!(app.detail_epic_key.as_deref(), Some("DEMO-500"));
         assert!(app.detail_ticket_key.is_none());
@@ -2537,8 +2410,7 @@ mod tests {
         }];
         app.selected_index = 0;
 
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        handle_search_keys(&mut app, KeyCode::Enter, KeyModifiers::NONE, &tx).await;
+        press(&mut app, &mut sample_config(), KeyCode::Enter).await;
 
         assert_eq!(app.detail_epic_key.as_deref(), Some("DEMO-501"));
         assert!(app.detail_ticket_key.is_none());
@@ -2558,35 +2430,33 @@ mod tests {
         assert!(app.bulk_upload_state.is_none());
     }
 
-    #[test]
-    fn uppercase_u_opens_bulk_upload_from_filters() {
+    #[tokio::test]
+    async fn uppercase_u_opens_bulk_upload_from_filters() {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::Filters;
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let mut config = sample_config();
-        handle_filter_keys(&mut app, KeyCode::Char('U'), &tx, &mut config);
+        press(&mut app, &mut config, KeyCode::Char('U')).await;
         assert!(matches!(
             app.bulk_upload_state,
             Some(BulkUploadState::PathInput { .. })
         ));
     }
 
-    #[test]
-    fn slash_from_the_filters_sidebar_focuses_the_results_it_searches() {
+    #[tokio::test]
+    async fn slash_from_the_filters_sidebar_focuses_the_results_it_searches() {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::Filters;
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let mut config = sample_config();
-        handle_filter_keys(&mut app, KeyCode::Char('/'), &tx, &mut config);
+        press(&mut app, &mut config, KeyCode::Char('/')).await;
 
         assert_eq!(app.search.as_deref(), Some(""));
         assert_eq!(app.filter_focus, FilterFocus::Results);
     }
 
-    #[test]
-    fn z_toggles_current_filter_group_from_results() {
+    #[tokio::test]
+    async fn z_toggles_current_filter_group_from_results() {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::Filters;
@@ -2598,16 +2468,15 @@ mod tests {
         app.mark_cache_changed();
         app.selected_index = 1;
 
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let mut config = sample_config();
-        handle_filter_keys(&mut app, KeyCode::Char('z'), &tx, &mut config);
+        press(&mut app, &mut config, KeyCode::Char('z')).await;
 
         assert!(app.collapsed_filters.contains("In Progress"));
         assert_eq!(app.selected_index, 0);
     }
 
-    #[test]
-    fn uppercase_z_toggles_all_filter_groups() {
+    #[tokio::test]
+    async fn uppercase_z_toggles_all_filter_groups() {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::Filters;
@@ -2618,19 +2487,18 @@ mod tests {
         ];
         app.mark_cache_changed();
 
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let mut config = sample_config();
-        handle_filter_keys(&mut app, KeyCode::Char('Z'), &tx, &mut config);
+        press(&mut app, &mut config, KeyCode::Char('Z')).await;
 
         assert!(app.collapsed_filters.contains("Ready for Work"));
         assert!(!app.collapsed_filters.contains("In Progress"));
 
-        handle_filter_keys(&mut app, KeyCode::Char('Z'), &tx, &mut config);
+        press(&mut app, &mut config, KeyCode::Char('Z')).await;
         assert!(app.collapsed_filters.is_empty());
     }
 
-    #[test]
-    fn enter_on_collapsed_filter_header_expands_group() {
+    #[tokio::test]
+    async fn enter_on_collapsed_filter_header_expands_group() {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::Filters;
@@ -2640,9 +2508,8 @@ mod tests {
         app.mark_cache_changed();
         app.selected_index = 0;
 
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let mut config = sample_config();
-        handle_filter_keys(&mut app, KeyCode::Enter, &tx, &mut config);
+        press(&mut app, &mut config, KeyCode::Enter).await;
 
         assert!(!app.collapsed_filters.contains("In Progress"));
         assert!(app.detail_ticket_key.is_none());
@@ -2660,11 +2527,191 @@ mod tests {
         app.mark_cache_changed();
         app.selected_index = 1;
 
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let mut config = sample_config();
-        handle_filter_keys(&mut app, KeyCode::Enter, &tx, &mut config);
+        press(&mut app, &mut config, KeyCode::Enter).await;
 
         assert_eq!(app.detail_ticket_key.as_deref(), Some("DEMO-75"));
+    }
+
+    /// An app showing `tab` with one active ticket on every tab, the cursor on that ticket's row
+    /// under its group header. Filters has the results focused.
+    fn app_with_a_ticket_on_every_tab(tab: Tab) -> App {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = tab;
+        app.filter_focus = FilterFocus::Results;
+        let mut mine = ticket("DEMO-1", "Mine", "In Progress");
+        mine.assignee = Some("Alex".into());
+        mine.assignee_email = Some("alex@example.com".into());
+        let mut unassigned = ticket("DEMO-2", "Nobody's", "In Progress");
+        unassigned.assignee = Some("Unassigned".into());
+        unassigned.assignee_email = Some("__unassigned__".into());
+        app.cache.my_tickets = vec![mine.clone()];
+        app.cache.team_members = vec![crate::cache::TeamMember {
+            name: "Alex".into(),
+            email: "alex@example.com".into(),
+        }];
+        app.cache.team_tickets = vec![mine.clone(), unassigned];
+        app.cache.epics = vec![crate::cache::Epic {
+            key: "DEMO-100".into(),
+            summary: "Epic".into(),
+            children: vec![mine.clone()],
+        }];
+        app.filter_results = vec![mine];
+        app.selected_index = 1;
+        app
+    }
+
+    fn two_saved_filters() -> AppConfig {
+        let filter = |name: &str| crate::config::SavedFilter {
+            name: name.into(),
+            jql: format!("labels = {name}"),
+        };
+        AppConfig {
+            filters: vec![filter("one"), filter("two")],
+            ..sample_config()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_list_keys_do_the_same_on_every_tab() {
+        for &tab in Tab::all() {
+            let mut config = sample_config();
+            let mut app = app_with_a_ticket_on_every_tab(tab);
+            let group = app.selected_group_id().unwrap();
+
+            press(&mut app, &mut config, KeyCode::Char(' ')).await;
+            assert_eq!(app.selected_ticket_count(), 1, "{tab:?}: Space");
+            press(&mut app, &mut config, KeyCode::Char('u')).await;
+            assert_eq!(app.selected_ticket_count(), 0, "{tab:?}: u");
+            press(&mut app, &mut config, KeyCode::Char('A')).await;
+            assert_eq!(app.selected_ticket_count(), 1, "{tab:?}: A");
+
+            press(&mut app, &mut config, KeyCode::Char('k')).await;
+            assert_eq!(app.selected_index, 0, "{tab:?}: k");
+            press(&mut app, &mut config, KeyCode::Char('j')).await;
+            assert_eq!(app.selected_index, 1, "{tab:?}: j");
+
+            press(&mut app, &mut config, KeyCode::Char('z')).await;
+            assert!(app.is_collapsed(tab, &group), "{tab:?}: z");
+            press(&mut app, &mut config, KeyCode::Char('z')).await;
+            assert!(!app.is_collapsed(tab, &group), "{tab:?}: z again");
+
+            // Folding left the cursor on the group header; B acts on the ticket under it.
+            press(&mut app, &mut config, KeyCode::Char('j')).await;
+            press(&mut app, &mut config, KeyCode::Char('B')).await;
+            assert!(app.bulk_state.take().is_some(), "{tab:?}: B");
+            press(&mut app, &mut config, KeyCode::Char('/')).await;
+            assert_eq!(app.search.take().as_deref(), Some(""), "{tab:?}: /");
+            press(&mut app, &mut config, KeyCode::Char('?')).await;
+            assert!(std::mem::take(&mut app.show_keybindings), "{tab:?}: ?");
+            press(&mut app, &mut config, KeyCode::Char('U')).await;
+            assert!(app.bulk_upload_state.take().is_some(), "{tab:?}: U");
+            press(&mut app, &mut config, KeyCode::Char('S')).await;
+            assert!(app.settings.take().is_some(), "{tab:?}: S");
+
+            press(&mut app, &mut config, KeyCode::Char('r')).await;
+            assert!(app.loading, "{tab:?}: r");
+            assert_eq!(app.flash.as_deref(), Some("Refreshing tickets..."));
+            press(&mut app, &mut config, KeyCode::Char('r')).await;
+            assert_eq!(app.flash.as_deref(), Some("Refresh already in progress"));
+
+            press(&mut app, &mut config, KeyCode::Char('q')).await;
+            assert!(app.should_quit, "{tab:?}: q");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_filters_sidebar_takes_its_own_keys_and_holds_back_the_row_keys() {
+        let mut config = two_saved_filters();
+        let mut app = app_with_a_ticket_on_every_tab(Tab::Filters);
+        app.filter_focus = FilterFocus::Sidebar;
+
+        // j and k walk the saved filters and stop at both ends.
+        for (code, idx) in [('j', 1), ('j', 1), ('k', 0), ('k', 0)] {
+            press(&mut app, &mut config, KeyCode::Char(code)).await;
+            assert_eq!(app.filter_sidebar_idx, idx, "{code}");
+        }
+
+        // The keys that act on rows wait for the results to have the focus.
+        for code in [' ', 'A', 'u', 'B', 'z', 'Z'] {
+            press(&mut app, &mut config, KeyCode::Char(code)).await;
+            assert_eq!(app.selected_ticket_count(), 0, "{code}");
+            assert!(app.bulk_state.is_none(), "{code}");
+            assert!(app.collapsed_filters.is_empty(), "{code}");
+            assert!(app.flash.is_none(), "{code}");
+        }
+
+        // Tab moves to the results' first row, where e and x have nothing to act on.
+        press(&mut app, &mut config, KeyCode::Tab).await;
+        assert_eq!(app.filter_focus, FilterFocus::Results);
+        assert_eq!((app.active_tab, app.selected_index), (Tab::Filters, 0));
+        press(&mut app, &mut config, KeyCode::Char('e')).await;
+        press(&mut app, &mut config, KeyCode::Char('x')).await;
+        assert!(app.filter_edit.is_none());
+        assert_eq!(config.filters.len(), 2);
+
+        // Shift+Tab comes back to the sidebar, and from there leaves for the previous tab.
+        press(&mut app, &mut config, KeyCode::BackTab).await;
+        assert_eq!(app.filter_focus, FilterFocus::Sidebar);
+        assert_eq!(app.active_tab, Tab::Filters);
+        press(&mut app, &mut config, KeyCode::BackTab).await;
+        assert_eq!(app.active_tab, Tab::Unassigned);
+    }
+
+    #[tokio::test]
+    async fn the_filters_sidebar_edits_deletes_and_runs_the_selected_filter() {
+        let mut config = two_saved_filters();
+        let mut app = app_with_a_ticket_on_every_tab(Tab::Filters);
+        app.filter_focus = FilterFocus::Sidebar;
+        app.filter_sidebar_idx = 1;
+
+        press(&mut app, &mut config, KeyCode::Char('e')).await;
+        let edit = app.filter_edit.take().expect("e edits the selected filter");
+        assert_eq!(edit.editing_idx, Some(1));
+        assert_eq!(edit.name.lines().join(""), "two");
+
+        press(&mut app, &mut config, KeyCode::Char('n')).await;
+        let new = app.filter_edit.take().expect("n starts a new filter");
+        assert_eq!(new.editing_idx, None);
+
+        press(&mut app, &mut config, KeyCode::Char('x')).await;
+        assert_eq!(config.filters.len(), 1);
+        assert_eq!(config.filters[0].name, "one");
+        assert_eq!(app.filter_sidebar_idx, 0);
+
+        press(&mut app, &mut config, KeyCode::Enter).await;
+        assert!(app.filter_loading);
+        assert!(app.filter_results.is_empty());
+        assert_eq!(app.flash.as_deref(), Some("Running filter 'one'..."));
+
+        // With no results to move to, Tab goes on to the next tab.
+        press(&mut app, &mut config, KeyCode::Tab).await;
+        assert_eq!(app.active_tab, Tab::MyWork);
+    }
+
+    #[tokio::test]
+    async fn filters_leaves_out_create_and_the_done_toggle() {
+        for focus in [FilterFocus::Sidebar, FilterFocus::Results] {
+            let mut config = sample_config();
+            let mut app = app_with_a_ticket_on_every_tab(Tab::Filters);
+            app.filter_focus = focus;
+            let show_done = app.show_done;
+
+            press(&mut app, &mut config, KeyCode::Char('c')).await;
+            assert!(app.create_ticket.is_none(), "{focus:?}");
+            press(&mut app, &mut config, KeyCode::Char('d')).await;
+            assert_eq!(app.show_done, show_done, "{focus:?}");
+            assert!(app.flash.is_none(), "{focus:?}");
+
+            // Status focus answers as it does on Unassigned.
+            press(&mut app, &mut config, KeyCode::Char('f')).await;
+            assert_eq!(
+                app.flash.as_deref(),
+                Some("Status focus works in My Work, Team and Epics"),
+                "{focus:?}"
+            );
+        }
     }
 
     #[tokio::test]
