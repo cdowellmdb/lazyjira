@@ -1,4 +1,5 @@
 use crate::app::{App, TicketSyncStage};
+use crate::background::FollowUp;
 use crate::cache::Cache;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,20 +20,18 @@ impl CacheRefreshPhase {
     }
 }
 
-/// The work `main.rs` starts after a cache refresh lands (`App::apply_cache_refresh`).
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct RefreshFollowUp {
-    /// The read to send next.
-    pub next_phase: Option<CacheRefreshPhase>,
-    /// Prefetch the details the new lists lack.
-    pub prefetch_details: bool,
-    /// Save the cache as the snapshot, then report it with `App::snapshot_saved`.
-    pub save_snapshot: bool,
-    /// Send an epics refresh.
-    pub refresh_epics: bool,
-}
-
 impl App {
+    /// Marks a manual refresh as started, unless a refresh is already running, and returns
+    /// whether it did. The caller sends the read.
+    pub fn begin_manual_refresh(&mut self) -> bool {
+        if self.loading {
+            return false;
+        }
+        self.loading = true;
+        self.ticket_sync_stage = None;
+        true
+    }
+
     /// Marks a new cache refresh as the one whose answer counts, and returns its request id.
     pub fn begin_cache_refresh(&mut self) -> u64 {
         self.cache_refresh_request = self.next_request_id();
@@ -48,23 +47,23 @@ impl App {
         request: u64,
         requested_at: u64,
         result: Result<Cache, String>,
-    ) -> RefreshFollowUp {
+    ) -> FollowUp {
         if request != self.cache_refresh_request
             || phase
                 .stage()
                 .is_some_and(|stage| self.ticket_sync_stage != Some(stage))
         {
-            return RefreshFollowUp::default();
+            return FollowUp::default();
         }
         match (phase, result) {
             (CacheRefreshPhase::ActiveOnly, Ok(cache)) => {
                 self.ticket_sync_stage = Some(TicketSyncStage::Full);
                 self.show_refreshed_lists(cache, requested_at, false);
                 self.flash = Some("Active tickets refreshed. Syncing recently done...".to_string());
-                RefreshFollowUp {
+                FollowUp {
                     next_phase: Some(CacheRefreshPhase::Full),
                     prefetch_details: true,
-                    ..RefreshFollowUp::default()
+                    ..FollowUp::default()
                 }
             }
             (CacheRefreshPhase::ActiveOnly, Err(e)) => {
@@ -73,40 +72,40 @@ impl App {
                     "Active refresh failed ({}). Trying full refresh...",
                     e
                 ));
-                RefreshFollowUp {
+                FollowUp {
                     next_phase: Some(CacheRefreshPhase::Full),
-                    ..RefreshFollowUp::default()
+                    ..FollowUp::default()
                 }
             }
             (CacheRefreshPhase::Full, Ok(cache)) => {
                 self.ticket_sync_stage = None;
                 self.show_refreshed_lists(cache, requested_at, true);
-                RefreshFollowUp {
+                FollowUp {
                     prefetch_details: true,
-                    save_snapshot: true,
-                    ..RefreshFollowUp::default()
+                    save_snapshot: Some(phase),
+                    ..FollowUp::default()
                 }
             }
             (CacheRefreshPhase::Full, Err(e)) => {
                 self.ticket_sync_stage = None;
                 self.flash = Some(format!("Full refresh failed: {}", e));
-                RefreshFollowUp::default()
+                FollowUp::default()
             }
             (CacheRefreshPhase::Manual, Ok(cache)) => {
                 self.loading = false;
                 self.ticket_sync_stage = None;
                 self.show_refreshed_lists(cache, requested_at, true);
-                RefreshFollowUp {
+                FollowUp {
                     prefetch_details: true,
-                    save_snapshot: true,
+                    save_snapshot: Some(phase),
                     refresh_epics: !self.epics_refreshing,
-                    ..RefreshFollowUp::default()
+                    ..FollowUp::default()
                 }
             }
             (CacheRefreshPhase::Manual, Err(e)) => {
                 self.loading = false;
                 self.flash = Some(format!("Refresh failed: {}", e));
-                RefreshFollowUp::default()
+                FollowUp::default()
             }
         }
     }
@@ -136,8 +135,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheRefreshPhase, RefreshFollowUp};
+    use super::CacheRefreshPhase;
     use crate::app::{App, Tab, TicketSyncStage};
+    use crate::background::FollowUp;
     use crate::cache::{Cache, Ticket};
 
     fn my_work_cache(tickets: &[(&str, &str)]) -> Cache {
@@ -194,7 +194,7 @@ mod tests {
                 let follow_up = app.apply_cache_refresh(phase, request, app.moves.now(), result);
 
                 let case = format!("{phase:?} {stage:?} superseded={superseded}");
-                assert_eq!(follow_up, RefreshFollowUp::default(), "{case}");
+                assert_eq!(follow_up, FollowUp::default(), "{case}");
                 assert_eq!(my_work_keys(&app), ["DEMO-1"], "{case}");
                 assert_eq!(app.loading, loading, "{case}");
                 assert_eq!(app.flash, None, "{case}");
@@ -217,10 +217,10 @@ mod tests {
 
         assert_eq!(
             follow_up,
-            RefreshFollowUp {
+            FollowUp {
                 next_phase: Some(CacheRefreshPhase::Full),
                 prefetch_details: true,
-                ..RefreshFollowUp::default()
+                ..FollowUp::default()
             }
         );
         assert_eq!(my_work_keys(&app), ["DEMO-2"]);
@@ -245,9 +245,9 @@ mod tests {
 
         assert_eq!(
             follow_up,
-            RefreshFollowUp {
+            FollowUp {
                 next_phase: Some(CacheRefreshPhase::Full),
-                ..RefreshFollowUp::default()
+                ..FollowUp::default()
             }
         );
         assert_eq!(my_work_keys(&app), ["DEMO-1"]);
@@ -275,10 +275,10 @@ mod tests {
 
         assert_eq!(
             follow_up,
-            RefreshFollowUp {
+            FollowUp {
                 prefetch_details: true,
-                save_snapshot: true,
-                ..RefreshFollowUp::default()
+                save_snapshot: Some(CacheRefreshPhase::Full),
+                ..FollowUp::default()
             }
         );
         assert_eq!(my_work_keys(&app), ["DEMO-1", "DEMO-2"]);
@@ -298,7 +298,7 @@ mod tests {
             Err("boom".into()),
         );
 
-        assert_eq!(follow_up, RefreshFollowUp::default());
+        assert_eq!(follow_up, FollowUp::default());
         assert_eq!(my_work_keys(&app), ["DEMO-1"]);
         assert_eq!(app.ticket_sync_stage, None);
         assert_eq!(app.flash.as_deref(), Some("Full refresh failed: boom"));
@@ -319,11 +319,11 @@ mod tests {
 
             assert_eq!(
                 follow_up,
-                RefreshFollowUp {
+                FollowUp {
                     prefetch_details: true,
-                    save_snapshot: true,
+                    save_snapshot: Some(CacheRefreshPhase::Manual),
                     refresh_epics: !epics_refreshing,
-                    ..RefreshFollowUp::default()
+                    ..FollowUp::default()
                 }
             );
             assert!(!app.loading);
@@ -344,7 +344,7 @@ mod tests {
             Err("boom".into()),
         );
 
-        assert_eq!(follow_up, RefreshFollowUp::default());
+        assert_eq!(follow_up, FollowUp::default());
         assert!(!app.loading);
         assert_eq!(my_work_keys(&app), ["DEMO-1"]);
         assert_eq!(app.cache_stale_age_secs, Some(180));
