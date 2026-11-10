@@ -1438,7 +1438,7 @@ impl App {
                 VisibleItem::GroupHeader(id) if current_group.as_ref() != Some(id) => {
                     Some(id.clone())
                 }
-                _ => None,
+                VisibleItem::GroupHeader(_) | VisibleItem::Ticket(_) => None,
             })
             .collect();
         let set = &mut self.collapsed_groups[self.active_tab.index()];
@@ -3053,28 +3053,35 @@ mod tests {
     const MEMBERS: [&str; 3] = ["ann@example.com", "bob@example.com", "cid@example.com"];
     const EPICS: [&str; 3] = ["DEMO-901", "DEMO-902", "DEMO-903"];
 
-    /// Presses `Z` on `tab` with the cursor on the first group's header.
-    fn fold_all_from_the_first_group(app: &mut App, tab: Tab) {
+    /// The first group's header row, and its one ticket's row.
+    const HEADER: usize = 0;
+    const TICKET: usize = 1;
+
+    /// Presses `Z` on `tab` with the cursor on `row`, a row of the first group.
+    fn fold_all_from_the_first_group(app: &mut App, tab: Tab, row: usize) {
         app.active_tab = tab;
-        app.selected_index = 0;
+        app.selected_index = row;
         app.mark_cache_changed();
         app.toggle_all_groups_collapse();
     }
 
     #[test]
     fn folding_all_groups_folds_the_groups_shown_except_the_cursors() {
-        // With nothing hidden, every group but the cursor's folds.
+        // With nothing hidden, every group but the cursor's folds, wherever in its group the
+        // cursor is.
         for (tab, [cursor, second, third]) in [(Tab::Team, MEMBERS), (Tab::Epics, EPICS)] {
-            let mut app = three_groups_app();
-            fold_all_from_the_first_group(&mut app, tab);
-            assert!(!app.is_collapsed(tab, cursor), "{tab:?}");
-            assert!(app.is_collapsed(tab, second), "{tab:?}");
-            assert!(app.is_collapsed(tab, third), "{tab:?}");
+            for row in [HEADER, TICKET] {
+                let mut app = three_groups_app();
+                fold_all_from_the_first_group(&mut app, tab, row);
+                assert!(!app.is_collapsed(tab, cursor), "{tab:?} row {row}");
+                assert!(app.is_collapsed(tab, second), "{tab:?} row {row}");
+                assert!(app.is_collapsed(tab, third), "{tab:?} row {row}");
 
-            // With a group folded, the next press unfolds them all.
-            app.toggle_all_groups_collapse();
-            assert!(!app.is_collapsed(tab, second), "{tab:?}");
-            assert!(!app.is_collapsed(tab, third), "{tab:?}");
+                // With a group folded, the next press unfolds them all.
+                app.toggle_all_groups_collapse();
+                assert!(!app.is_collapsed(tab, second), "{tab:?} row {row}");
+                assert!(!app.is_collapsed(tab, third), "{tab:?} row {row}");
+            }
         }
     }
 
@@ -3095,7 +3102,7 @@ mod tests {
         for (case, (tab, [cursor, shown, hidden], hide)) in cases.into_iter().enumerate() {
             let mut app = three_groups_app();
             hide(&mut app);
-            fold_all_from_the_first_group(&mut app, tab);
+            fold_all_from_the_first_group(&mut app, tab, HEADER);
             assert!(!app.is_collapsed(tab, cursor), "case {case}");
             assert!(app.is_collapsed(tab, shown), "case {case}");
             assert!(!app.is_collapsed(tab, hidden), "case {case}");
@@ -3109,7 +3116,7 @@ mod tests {
         app.toggle_group_collapse("cid@example.com");
         app.search = Some("needle".to_string());
 
-        fold_all_from_the_first_group(&mut app, Tab::Team);
+        fold_all_from_the_first_group(&mut app, Tab::Team, HEADER);
         for member in MEMBERS {
             assert!(!app.is_collapsed(Tab::Team, member), "{member}");
         }
