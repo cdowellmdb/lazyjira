@@ -640,14 +640,18 @@ mod tests {
         assert_eq!(app.cache.my_tickets[0].status, "In Progress");
 
         let mut lists = Cache::empty();
-        lists.my_tickets = vec![as_jira_had_it()];
+        lists.my_tickets = vec![Ticket {
+            summary: "From the list read".to_string(),
+            ..as_jira_had_it()
+        }];
         let refreshed = BackgroundMessage::CacheRefreshed {
             request: app.begin_cache_refresh(),
-            phase: CacheRefreshPhase::Full,
+            phase: CacheRefreshPhase::Manual,
             requested_at: before_the_move,
             result: Ok(lists),
         };
         apply(&mut app, refreshed);
+        assert_eq!(app.cache.my_tickets[0].summary, "From the list read");
         assert_eq!(app.cache.my_tickets[0].status, "In Progress");
 
         let epics = BackgroundMessage::EpicsRefreshed {
