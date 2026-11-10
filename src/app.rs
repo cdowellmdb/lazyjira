@@ -1100,10 +1100,15 @@ impl App {
     }
 
     pub(crate) fn filters_visible_by_status(&self) -> Vec<VisibleGroup<'_, String>> {
+        let search = self.normalized_search();
         self.index_groups(
             Tab::Filters,
             self.status_rules
-                .group(&self.filter_results)
+                .group(self.filter_results.iter().filter(|ticket| {
+                    search
+                        .as_deref()
+                        .is_none_or(|s| Self::ticket_matches_search(ticket, s))
+                }))
                 .into_iter()
                 .map(|(status, tickets)| (status.clone(), status, nest(tickets))),
         )
@@ -2931,6 +2936,22 @@ mod tests {
         let app = filters_app(vec![in_progress, ready]);
 
         assert_eq!(app.item_count(), 4);
+    }
+
+    #[test]
+    fn filters_search_keeps_only_matching_results() {
+        let mut in_progress = ticket("DEMO-40", "Grouped");
+        in_progress.status = "In Progress".to_string();
+        let mut ready = ticket("DEMO-41", "Queued");
+        ready.status = "Ready for Work".to_string();
+
+        let mut app = filters_app(vec![in_progress, ready]);
+        app.search = Some("demo-41".to_string());
+
+        // H(Ready for Work) + T(DEMO-41)
+        assert_eq!(app.item_count(), 2);
+        app.selected_index = 1;
+        assert_eq!(app.selected_ticket_key(), Some("DEMO-41".to_string()));
     }
 
     #[test]

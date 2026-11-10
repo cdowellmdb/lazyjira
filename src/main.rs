@@ -1977,7 +1977,11 @@ fn handle_filter_keys(
                 }
             }
         },
-        KeyCode::Char('/') => app.search = Some(String::new()),
+        KeyCode::Char('/') => {
+            // The search narrows the results, and only focused results draw the selection.
+            app.filter_focus = FilterFocus::Results;
+            app.search = Some(String::new());
+        }
         KeyCode::Char('r') => {
             if app.loading {
                 app.flash = Some("Refresh already in progress".to_string());
@@ -2566,6 +2570,19 @@ mod tests {
             app.bulk_upload_state,
             Some(BulkUploadState::PathInput { .. })
         ));
+    }
+
+    #[test]
+    fn slash_from_the_filters_sidebar_focuses_the_results_it_searches() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Filters;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut config = sample_config();
+        handle_filter_keys(&mut app, KeyCode::Char('/'), &tx, &mut config);
+
+        assert_eq!(app.search.as_deref(), Some(""));
+        assert_eq!(app.filter_focus, FilterFocus::Results);
     }
 
     #[test]
