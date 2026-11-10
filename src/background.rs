@@ -62,7 +62,9 @@ pub enum BackgroundMessage {
     },
     BulkUploadPreviewReady(Result<BulkUploadPreview, String>),
     BulkUploadCompleted(BulkUploadSummary),
+    /// A saved filter's tickets. `request` is the run's `App::filter_request`.
     FilterResults {
+        request: u64,
         requested_at: u64,
         result: Result<Vec<Ticket>, String>,
     },
@@ -218,9 +220,14 @@ pub fn apply(app: &mut App, message: BackgroundMessage) -> FollowUp {
             return FollowUp::manual_refresh(app);
         }
         BackgroundMessage::FilterResults {
+            request,
             requested_at,
             result,
         } => {
+            // The answer to a filter run that a newer run replaced changes nothing.
+            if request != app.filter_request {
+                return FollowUp::default();
+            }
             app.filter_loading = false;
             match result {
                 Ok(tickets) => {
@@ -588,6 +595,7 @@ mod tests {
         app.select_all_visible_tickets();
         assert_eq!(app.selected_ticket_count(), 1);
         let results = BackgroundMessage::FilterResults {
+            request: app.filter_request,
             requested_at: app.moves.now(),
             result: Ok(vec![
                 Ticket::for_test("DEMO-1", "Done"),
@@ -608,6 +616,7 @@ mod tests {
         assert_eq!(app.selected_ticket_count(), 1);
         app.filter_loading = true;
         let failed = BackgroundMessage::FilterResults {
+            request: app.filter_request,
             requested_at: app.moves.now(),
             result: Err("bad JQL".to_string()),
         };
@@ -666,6 +675,7 @@ mod tests {
         assert_eq!(app.cache.epics[0].children[0].status, "In Progress");
 
         let results = BackgroundMessage::FilterResults {
+            request: app.filter_request,
             requested_at: before_the_move,
             result: Ok(vec![as_jira_had_it()]),
         };
@@ -750,5 +760,43 @@ mod tests {
             app.flash.as_deref(),
             Some("Bulk assign complete: 0 succeeded, 1 failed, 0 skipped")
         );
+    }
+
+    #[test]
+    fn only_the_latest_filter_runs_answer_is_shown() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Filters;
+        app.filter_request = 2;
+        app.filter_loading = true;
+        let answer = |request, result| BackgroundMessage::FilterResults {
+            request,
+            requested_at: 0,
+            result,
+        };
+        let found = |key: &str| Ok(vec![Ticket::for_test(key, "To Do")]);
+
+        // The first run's answer arrives while the second is still out: nothing changes.
+        let stale = answer(1, found("DEMO-1"));
+        assert_eq!(apply(&mut app, stale), FollowUp::default());
+        assert!(app.filter_loading);
+        assert!(app.filter_results.is_empty());
+        assert_eq!(app.filter_focus, FilterFocus::Sidebar);
+        assert_eq!(app.flash, None);
+
+        apply(&mut app, answer(2, found("DEMO-2")));
+        assert!(!app.filter_loading);
+        assert_eq!(app.filter_results[0].key, "DEMO-2");
+
+        // Arriving last, the first run's answer or failure still doesn't replace the second's.
+        for stale in [
+            answer(1, found("DEMO-1")),
+            answer(1, Err("boom".to_string())),
+        ] {
+            apply(&mut app, stale);
+            assert_eq!(app.filter_results.len(), 1);
+            assert_eq!(app.filter_results[0].key, "DEMO-2");
+            assert_eq!(app.flash.as_deref(), Some("Filter returned 1 tickets"));
+        }
     }
 }

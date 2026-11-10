@@ -258,7 +258,7 @@ A bulk move loads every selected ticket's transitions, then offers the statuses 
 | `j/k`, `Up/Down` | Navigate within focused pane |
 | `Tab` | Switch to results / next tab |
 | `Shift+Tab` | Back to sidebar (results) / previous tab (sidebar) |
-| `Enter` | Run filter (sidebar) / open ticket (results) |
+| `Enter` | Run filter (sidebar) / open ticket (results). Running a filter while another is still loading shows only the newer one's results |
 | `/` | Search the results, moving to the results pane. The title counts the results the search keeps, and a search that keeps none shows `No results match "…"` |
 | `n` | New filter |
 | `e` | Edit filter |

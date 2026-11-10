@@ -343,6 +343,8 @@ pub struct App {
     pub filter_results: Vec<crate::cache::Ticket>,
     /// Whether a filter query is currently loading.
     pub filter_loading: bool,
+    /// The latest filter run's request id; only its answer is shown.
+    pub filter_request: u64,
     /// State for filter create/edit modal.
     pub filter_edit: Option<FilterEditState>,
     /// The ids of each tab's folded groups, by `Tab::index`.
@@ -411,6 +413,7 @@ impl App {
             filter_sidebar_idx: 0,
             filter_results: Vec::new(),
             filter_loading: false,
+            filter_request: 0,
             filter_edit: None,
             collapsed_groups: Default::default(),
             collapsed_parents: HashSet::new(),

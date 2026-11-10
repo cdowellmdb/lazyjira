@@ -1685,11 +1685,14 @@ fn handle_filter_keys(
                 let cfg = config.clone();
                 let jql = filter.jql.clone();
                 let requested_at = app.moves.now();
+                let request = app.next_request_id();
+                app.filter_request = request;
                 tokio::spawn(async move {
                     let result = jira_reads::fetch_jql_query(&cfg, &jql)
                         .await
                         .map_err(|e| describe(&e));
                     let _ = tx.send(BackgroundMessage::FilterResults {
+                        request,
                         requested_at,
                         result,
                     });
@@ -2504,6 +2507,11 @@ mod tests {
         assert!(app.filter_loading);
         assert!(app.filter_results.is_empty());
         assert_eq!(app.flash.as_deref(), Some("Running filter 'one'..."));
+
+        // Running it again is a new run, so the first run's answer won't be shown.
+        let first_run = app.filter_request;
+        press(&mut app, &mut config, KeyCode::Enter).await;
+        assert_ne!(app.filter_request, first_run);
 
         // With no results to move to, Tab goes on to the next tab.
         press(&mut app, &mut config, KeyCode::Tab).await;
