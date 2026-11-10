@@ -259,7 +259,7 @@ A bulk move loads every selected ticket's transitions, then offers the statuses 
 | `Tab` | Switch to results / next tab |
 | `Shift+Tab` | Back to sidebar |
 | `Enter` | Run filter (sidebar) / open ticket (results) |
-| `/` | Search the results, moving to the results pane. The title counts the results the search keeps |
+| `/` | Search the results, moving to the results pane. The title counts the results the search keeps, and a search that keeps none shows `No results match "…"` |
 | `n` | New filter |
 | `e` | Edit filter |
 | `x` | Delete filter |

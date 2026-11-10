@@ -398,6 +398,7 @@ mod tests {
         let rows = draw_with(&mut app, Some("needle"));
         assert!(line_with(&rows, " Results (2) ").is_some());
         assert!(line_with(&rows, "DEMO-1").is_some());
+        assert!(line_with(&rows, "DEMO-2").is_none());
         assert!(line_with(&rows, "DEMO-3").is_none());
 
         let rows = draw_with(&mut app, Some("zzz"));
@@ -409,6 +410,7 @@ mod tests {
         app.filter_results.clear();
         let rows = draw_with(&mut app, Some("zzz"));
         assert!(line_with(&rows, " Results ").is_some());
+        assert!(line_with(&rows, "Results (").is_none());
         assert!(line_with(&rows, "Select a filter and press Enter to run it").is_some());
         assert!(line_with(&rows, "No results match").is_none());
     }
