@@ -373,6 +373,47 @@ mod tests {
     }
 
     #[test]
+    fn filters_title_and_empty_state_follow_the_search() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Filters;
+        let mut folded = labelled("DEMO-2", None, &["needle"]);
+        folded.status = "To Do".into();
+        app.filter_results = vec![
+            labelled("DEMO-1", None, &["needle"]),
+            folded,
+            labelled("DEMO-3", None, &[]),
+        ];
+        app.collapsed_filters.insert("To Do".into());
+        let draw_with = |app: &mut App, search: Option<&str>| {
+            app.search = search.map(String::from);
+            app.mark_cache_changed();
+            draw(app, Tab::Filters, 120)
+        };
+
+        let rows = draw_with(&mut app, None);
+        assert!(line_with(&rows, " Results (3) ").is_some());
+
+        // The count is what the search keeps, a folded group's ticket included.
+        let rows = draw_with(&mut app, Some("needle"));
+        assert!(line_with(&rows, " Results (2) ").is_some());
+        assert!(line_with(&rows, "DEMO-1").is_some());
+        assert!(line_with(&rows, "DEMO-3").is_none());
+
+        let rows = draw_with(&mut app, Some("zzz"));
+        assert!(line_with(&rows, " Results (0) ").is_some());
+        assert!(line_with(&rows, "No results match \"zzz\"").is_some());
+        assert!(line_with(&rows, "SEL KEY").is_none());
+
+        // With no results at all, the search has nothing to explain.
+        app.filter_results.clear();
+        let rows = draw_with(&mut app, Some("zzz"));
+        assert!(line_with(&rows, " Results ").is_some());
+        assert!(line_with(&rows, "Select a filter and press Enter to run it").is_some());
+        assert!(line_with(&rows, "No results match").is_none());
+    }
+
+    #[test]
     fn team_draws_the_shared_line_once_under_the_first_column_headers() {
         let mut app = App::new();
         app.loading = false;

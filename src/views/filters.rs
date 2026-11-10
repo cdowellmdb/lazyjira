@@ -117,6 +117,9 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let mut lines = Vec::new();
     let mut selected_visual_line: Option<usize> = None;
     let mut mouse_rows = Vec::new();
+    let groups = app.filters_visible_by_status();
+    // How many results the search keeps, counting those in folded groups.
+    let kept: usize = groups.iter().map(|group| group.total).sum();
 
     if app.filter_loading {
         lines.push(Line::from(Span::styled(
@@ -128,8 +131,16 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             "  Select a filter and press Enter to run it",
             Style::default().fg(Color::DarkGray),
         )));
+    } else if groups.is_empty() {
+        // Every result is in a status group, so only a search leaves none.
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  No results match \"{}\"",
+                app.search.as_deref().unwrap_or_default()
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
     } else {
-        let groups = app.filters_visible_by_status();
         let key_w = KEY_WIDTH;
         let (status_w, summary_w) = results_column_widths(area, status_width(&groups));
 
@@ -254,7 +265,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let title = if app.filter_results.is_empty() {
         " Results ".to_string()
     } else {
-        format!(" Results ({}) ", app.filter_results.len())
+        format!(" Results ({kept}) ")
     };
 
     let block = panel().title(title).border_style(border_style);
