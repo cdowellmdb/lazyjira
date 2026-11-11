@@ -79,8 +79,6 @@ pub struct FollowUp {
     pub save_snapshot: Option<CacheRefreshPhase>,
     /// The cache refresh to send next.
     pub next_phase: Option<CacheRefreshPhase>,
-    /// Send an epics refresh.
-    pub refresh_epics: bool,
     /// Fetch this ticket's detail; `apply` has already marked the fetch as begun.
     pub fetch_detail: Option<String>,
 }

@@ -448,11 +448,10 @@ async fn main() -> Result<()> {
                     .map_err(|e| e.to_string());
                 app.snapshot_saved(phase, saved);
             }
-            if let Some(next) = follow_up.next_phase {
-                spawn_cache_refresh(&mut app, &bg_tx, next, &config);
-            }
-            if follow_up.refresh_epics {
-                spawn_epics_refresh(&mut app, &bg_tx, &config);
+            match follow_up.next_phase {
+                Some(CacheRefreshPhase::Manual) => spawn_manual_refresh(&mut app, &bg_tx, &config),
+                Some(next) => spawn_cache_refresh(&mut app, &bg_tx, next, &config),
+                None => {}
             }
             if let Some(key) = follow_up.fetch_detail {
                 spawn_ticket_detail_fetch(&bg_tx, key, app.moves.now());
@@ -1609,9 +1608,22 @@ fn start_manual_refresh(
 ) -> bool {
     let started = app.begin_manual_refresh();
     if started {
-        spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
+        spawn_manual_refresh(app, bg_tx, config);
     }
     started
+}
+
+/// Reads the lists and, unless a read of them is already out, the epics, both at once: the epics
+/// don't wait on the lists.
+fn spawn_manual_refresh(
+    app: &mut App,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+    config: &AppConfig,
+) {
+    spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
+    if !app.epics_refreshing {
+        spawn_epics_refresh(app, bg_tx, config);
+    }
 }
 
 /// The keys Filters has of its own, and the list keys it leaves out. Returns whether `key` is
@@ -2380,34 +2392,47 @@ mod tests {
 
     #[tokio::test]
     async fn r_starts_one_manual_refresh_and_a_second_r_starts_none() {
-        let mut app = App::new();
-        app.loading = false;
-        app.ticket_sync_stage = Some(TicketSyncStage::Full);
-        let mut config = sample_config();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let r = KeyEvent::from(KeyCode::Char('r'));
+        for epics_already_refreshing in [false, true] {
+            let mut app = App::new();
+            app.loading = false;
+            app.ticket_sync_stage = Some(TicketSyncStage::Full);
+            app.epics_refreshing = epics_already_refreshing;
+            let mut config = sample_config();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let r = KeyEvent::from(KeyCode::Char('r'));
 
-        handle_key(&mut app, r, &tx, &mut config).await;
-        assert!(app.loading);
-        assert!(app.ticket_sync_stage.is_none());
-        let request = app.cache_refresh_request;
+            handle_key(&mut app, r, &tx, &mut config).await;
+            assert!(app.loading);
+            assert!(app.ticket_sync_stage.is_none());
+            let request = app.cache_refresh_request;
+            let epics_request = app.epic_refresh_request;
 
-        handle_key(&mut app, r, &tx, &mut config).await;
-        assert_eq!(app.cache_refresh_request, request);
-        assert_eq!(app.flash.as_deref(), Some("Refresh already in progress"));
+            handle_key(&mut app, r, &tx, &mut config).await;
+            assert_eq!(app.cache_refresh_request, request);
+            assert_eq!(app.flash.as_deref(), Some("Refresh already in progress"));
 
-        // One read went out, the manual one. Tests never reach Jira, so it answers with an error.
-        drop(tx);
-        let mut sent = Vec::new();
-        while let Some(message) = rx.recv().await {
-            match message {
-                BackgroundMessage::CacheRefreshed { phase, request, .. } => {
-                    sent.push((phase, request))
+            // The lists and the epics are read at once, without waiting for each other, and an
+            // epics read already out isn't sent again. Tests never reach Jira, so each answers
+            // with an error.
+            drop(tx);
+            let (mut lists, mut epics) = (Vec::new(), Vec::new());
+            while let Some(message) = rx.recv().await {
+                match message {
+                    BackgroundMessage::CacheRefreshed { phase, request, .. } => {
+                        lists.push((phase, request))
+                    }
+                    BackgroundMessage::EpicsRefreshed { request, .. } => epics.push(request),
+                    _ => panic!("r sends only a cache refresh and an epics refresh"),
                 }
-                _ => panic!("r sends only a cache refresh"),
             }
+            assert_eq!(lists, vec![(CacheRefreshPhase::Manual, request)]);
+            let expected_epics = if epics_already_refreshing {
+                vec![]
+            } else {
+                vec![epics_request]
+            };
+            assert_eq!(epics, expected_epics);
         }
-        assert_eq!(sent, vec![(CacheRefreshPhase::Manual, request)]);
     }
 
     #[tokio::test]

@@ -98,7 +98,6 @@ impl App {
                 FollowUp {
                     prefetch_details: true,
                     save_snapshot: Some(phase),
-                    refresh_epics: !self.epics_refreshing,
                     ..FollowUp::default()
                 }
             }
@@ -123,9 +122,7 @@ impl App {
     /// Reports saving the snapshot that a `phase` read's `save_snapshot` asked for.
     pub fn snapshot_saved(&mut self, phase: CacheRefreshPhase, saved: Result<(), String>) {
         self.flash = Some(match (phase, saved) {
-            (CacheRefreshPhase::Manual, Ok(())) => {
-                "Refreshed! Syncing epic relationships...".to_string()
-            }
+            (CacheRefreshPhase::Manual, Ok(())) => "Refreshed!".to_string(),
             (CacheRefreshPhase::Manual, Err(e)) => format!("Refreshed (cache save failed: {})", e),
             (_, Ok(())) => "Ticket cache is up to date".to_string(),
             (_, Err(e)) => format!("Cache snapshot write failed: {}", e),
@@ -305,32 +302,28 @@ mod tests {
     }
 
     #[test]
-    fn a_manual_read_is_applied_saved_and_refreshes_the_epics_unless_already_refreshing() {
-        for epics_refreshing in [false, true] {
-            let (mut app, request) = app_refreshing(CacheRefreshPhase::Manual);
-            app.epics_refreshing = epics_refreshing;
+    fn a_manual_read_is_applied_and_saved() {
+        let (mut app, request) = app_refreshing(CacheRefreshPhase::Manual);
 
-            let follow_up = app.apply_cache_refresh(
-                CacheRefreshPhase::Manual,
-                request,
-                app.moves.now(),
-                Ok(my_work_cache(&[("DEMO-2", "To Do")])),
-            );
+        let follow_up = app.apply_cache_refresh(
+            CacheRefreshPhase::Manual,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[("DEMO-2", "To Do")])),
+        );
 
-            assert_eq!(
-                follow_up,
-                FollowUp {
-                    prefetch_details: true,
-                    save_snapshot: Some(CacheRefreshPhase::Manual),
-                    refresh_epics: !epics_refreshing,
-                    ..FollowUp::default()
-                }
-            );
-            assert!(!app.loading);
-            assert_eq!(my_work_keys(&app), ["DEMO-2"]);
-            assert_eq!(app.cache_stale_age_secs, None);
-            assert_eq!(app.ticket_sync_stage, None);
-        }
+        assert_eq!(
+            follow_up,
+            FollowUp {
+                prefetch_details: true,
+                save_snapshot: Some(CacheRefreshPhase::Manual),
+                ..FollowUp::default()
+            }
+        );
+        assert!(!app.loading);
+        assert_eq!(my_work_keys(&app), ["DEMO-2"]);
+        assert_eq!(app.cache_stale_age_secs, None);
+        assert_eq!(app.ticket_sync_stage, None);
     }
 
     #[test]
@@ -364,11 +357,7 @@ mod tests {
                 Err("disk full".to_string()),
                 "Cache snapshot write failed: disk full",
             ),
-            (
-                CacheRefreshPhase::Manual,
-                Ok(()),
-                "Refreshed! Syncing epic relationships...",
-            ),
+            (CacheRefreshPhase::Manual, Ok(()), "Refreshed!"),
             (
                 CacheRefreshPhase::Manual,
                 Err("disk full".to_string()),
