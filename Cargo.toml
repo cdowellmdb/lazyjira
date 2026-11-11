@@ -21,7 +21,7 @@ anyhow = "1"
 toml = "0.8"
 tui-textarea = "0.7"
 csv = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
 
 [dev-dependencies]
 # Paused time, so waits (the details writer's 750 ms quiet period, the event loop's 33 ms frame)

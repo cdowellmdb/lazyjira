@@ -1,6 +1,7 @@
 use crate::app::{App, TicketSyncStage};
 use crate::background::FollowUp;
 use crate::cache::Cache;
+use crate::lists::{attach_epics_to_tickets, reconcile_epic_child_statuses};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheRefreshPhase {
@@ -98,7 +99,6 @@ impl App {
                 FollowUp {
                     prefetch_details: true,
                     save_snapshot: Some(phase),
-                    refresh_epics: !self.epics_refreshing,
                     ..FollowUp::default()
                 }
             }
@@ -110,7 +110,14 @@ impl App {
         }
     }
 
-    fn show_refreshed_lists(&mut self, cache: Cache, requested_at: u64, full_scope: bool) {
+    /// Shows a list read's tickets with the epics already shown, which may be newer than the read:
+    /// a list read doesn't read epics.
+    fn show_refreshed_lists(&mut self, mut cache: Cache, requested_at: u64, full_scope: bool) {
+        // The rows the selection is found in again must be built while the epics are still shown.
+        self.ensure_visible_keys_cache();
+        cache.epics = std::mem::take(&mut self.cache.epics);
+        attach_epics_to_tickets(&mut cache.my_tickets, &mut cache.team_tickets, &cache.epics);
+        reconcile_epic_child_statuses(&mut cache.epics, &cache.my_tickets, &cache.team_tickets);
         if full_scope {
             self.replace_cache_full_scope(cache, requested_at);
         } else {
@@ -123,9 +130,7 @@ impl App {
     /// Reports saving the snapshot that a `phase` read's `save_snapshot` asked for.
     pub fn snapshot_saved(&mut self, phase: CacheRefreshPhase, saved: Result<(), String>) {
         self.flash = Some(match (phase, saved) {
-            (CacheRefreshPhase::Manual, Ok(())) => {
-                "Refreshed! Syncing epic relationships...".to_string()
-            }
+            (CacheRefreshPhase::Manual, Ok(())) => "Refreshed!".to_string(),
             (CacheRefreshPhase::Manual, Err(e)) => format!("Refreshed (cache save failed: {})", e),
             (_, Ok(())) => "Ticket cache is up to date".to_string(),
             (_, Err(e)) => format!("Cache snapshot write failed: {}", e),
@@ -138,7 +143,7 @@ mod tests {
     use super::CacheRefreshPhase;
     use crate::app::{App, Tab, TicketSyncStage};
     use crate::background::FollowUp;
-    use crate::cache::{Cache, Ticket};
+    use crate::cache::{Cache, Epic, Ticket};
 
     fn my_work_cache(tickets: &[(&str, &str)]) -> Cache {
         let mut cache = Cache::empty();
@@ -305,32 +310,53 @@ mod tests {
     }
 
     #[test]
-    fn a_manual_read_is_applied_saved_and_refreshes_the_epics_unless_already_refreshing() {
-        for epics_refreshing in [false, true] {
-            let (mut app, request) = app_refreshing(CacheRefreshPhase::Manual);
-            app.epics_refreshing = epics_refreshing;
+    fn a_list_read_keeps_the_epics_shown_and_puts_its_tickets_in_them() {
+        let (mut app, request) = app_refreshing(CacheRefreshPhase::Manual);
+        // An epics read lands while the list read is out.
+        app.replace_epics(
+            vec![Epic::for_test("DEMO-100", &[("To Do", 1)])],
+            app.moves.now(),
+        );
 
-            let follow_up = app.apply_cache_refresh(
-                CacheRefreshPhase::Manual,
-                request,
-                app.moves.now(),
-                Ok(my_work_cache(&[("DEMO-2", "To Do")])),
-            );
+        app.apply_cache_refresh(
+            CacheRefreshPhase::Manual,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[("DEMO-0", "In Progress")])),
+        );
 
-            assert_eq!(
-                follow_up,
-                FollowUp {
-                    prefetch_details: true,
-                    save_snapshot: Some(CacheRefreshPhase::Manual),
-                    refresh_epics: !epics_refreshing,
-                    ..FollowUp::default()
-                }
-            );
-            assert!(!app.loading);
-            assert_eq!(my_work_keys(&app), ["DEMO-2"]);
-            assert_eq!(app.cache_stale_age_secs, None);
-            assert_eq!(app.ticket_sync_stage, None);
-        }
+        let epic = &app.cache.epics[0];
+        assert_eq!(epic.key, "DEMO-100", "the epics read isn't undone");
+        assert_eq!(epic.children[0].status, "In Progress");
+        assert_eq!(
+            app.cache.my_tickets[0].epic_key.as_deref(),
+            Some("DEMO-100")
+        );
+    }
+
+    #[test]
+    fn a_manual_read_is_applied_and_saved() {
+        let (mut app, request) = app_refreshing(CacheRefreshPhase::Manual);
+
+        let follow_up = app.apply_cache_refresh(
+            CacheRefreshPhase::Manual,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[("DEMO-2", "To Do")])),
+        );
+
+        assert_eq!(
+            follow_up,
+            FollowUp {
+                prefetch_details: true,
+                save_snapshot: Some(CacheRefreshPhase::Manual),
+                ..FollowUp::default()
+            }
+        );
+        assert!(!app.loading);
+        assert_eq!(my_work_keys(&app), ["DEMO-2"]);
+        assert_eq!(app.cache_stale_age_secs, None);
+        assert_eq!(app.ticket_sync_stage, None);
     }
 
     #[test]
@@ -364,11 +390,7 @@ mod tests {
                 Err("disk full".to_string()),
                 "Cache snapshot write failed: disk full",
             ),
-            (
-                CacheRefreshPhase::Manual,
-                Ok(()),
-                "Refreshed! Syncing epic relationships...",
-            ),
+            (CacheRefreshPhase::Manual, Ok(()), "Refreshed!"),
             (
                 CacheRefreshPhase::Manual,
                 Err("disk full".to_string()),
