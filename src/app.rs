@@ -292,6 +292,9 @@ pub struct App {
     /// True while full epic relationships are being refreshed in background.
     pub epics_refreshing: bool,
     pub epic_refresh_request: u64,
+    /// The epics read out, aborted when a newer one supersedes it, so its older epics never
+    /// reach the epics cache file.
+    pub epics_read: Option<tokio::task::AbortHandle>,
     pub cache_refresh_request: u64,
     /// Ticket sync stage for background cache refresh.
     pub ticket_sync_stage: Option<TicketSyncStage>,
@@ -382,6 +385,7 @@ impl App {
             delight: Default::default(),
             status_focus: None,
             epics_refreshing: false,
+            epics_read: None,
             epic_refresh_request: 0,
             cache_refresh_request: 0,
             ticket_sync_stage: None,
@@ -590,15 +594,16 @@ impl App {
         self.mark_cache_changed();
     }
 
-    pub fn replace_epics(&mut self, epics: Vec<crate::cache::Epic>, requested_at: u64) {
+    pub fn replace_epics(&mut self, mut epics: Vec<crate::cache::Epic>, requested_at: u64) {
         self.ensure_visible_keys_cache();
+        self.details
+            .hydrate_tickets(epics.iter_mut().flat_map(|epic| &mut epic.children));
         crate::lists::attach_epics_to_tickets(
             &mut self.cache.my_tickets,
             &mut self.cache.team_tickets,
             &epics,
         );
         self.cache.epics = epics;
-        self.details.hydrate(&mut self.cache);
         self.reapply_moves_since(requested_at);
         self.mark_cache_changed();
         self.clamp_selection();
@@ -849,7 +854,7 @@ impl App {
         (items, families)
     }
 
-    fn ensure_visible_keys_cache(&self) {
+    pub(crate) fn ensure_visible_keys_cache(&self) {
         let state = self.visible_keys_state();
         {
             let cache = self.visible_keys_cache.borrow();

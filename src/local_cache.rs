@@ -261,16 +261,22 @@ impl DetailCache {
         }
     }
 
-    /// Fill a list read's tickets, including epic children, with the details already fetched.
+    /// Fill a cache's tickets, including epic children, with the details already fetched.
     pub fn hydrate(&self, cache: &mut Cache) {
-        let by_key = lock_details(&self.by_key);
         let epic_children = cache.epics.iter_mut().flat_map(|epic| &mut epic.children);
-        for ticket in cache
-            .my_tickets
-            .iter_mut()
-            .chain(&mut cache.team_tickets)
-            .chain(epic_children)
-        {
+        self.hydrate_tickets(
+            cache
+                .my_tickets
+                .iter_mut()
+                .chain(&mut cache.team_tickets)
+                .chain(epic_children),
+        );
+    }
+
+    /// Fill `tickets` with the details already fetched.
+    pub fn hydrate_tickets<'a>(&self, tickets: impl IntoIterator<Item = &'a mut Ticket>) {
+        let by_key = lock_details(&self.by_key);
+        for ticket in tickets {
             hydrate_ticket_from_details_cache(ticket, &by_key);
         }
     }

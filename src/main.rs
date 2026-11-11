@@ -64,7 +64,10 @@ fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, c
     app.epics_refreshing = true;
     let tx = tx.clone();
     let config = config.clone();
-    tokio::spawn(async move {
+    if let Some(superseded) = app.epics_read.take() {
+        superseded.abort();
+    }
+    let read = tokio::spawn(async move {
         let result = jira_reads::refresh_epics_cache(&config)
             .await
             .map_err(|e| describe(&e));
@@ -74,6 +77,7 @@ fn spawn_epics_refresh(app: &mut App, tx: &UnboundedSender<BackgroundMessage>, c
             result,
         });
     });
+    app.epics_read = Some(read.abort_handle());
 }
 
 fn spawn_cache_refresh(
@@ -2451,6 +2455,22 @@ mod tests {
                 vec![(CacheRefreshPhase::Manual, app.cache_refresh_request)],
                 vec![app.epic_refresh_request]
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_newer_epics_read_aborts_the_one_out_so_only_its_answer_arrives() {
+        let mut app = App::new();
+        let config = sample_config();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+        spawn_epics_refresh(&mut app, &tx, &config);
+        spawn_epics_refresh(&mut app, &tx, &config);
+
+        drop(tx);
+        assert_eq!(
+            reads_sent(rx).await,
+            (vec![], vec![app.epic_refresh_request])
         );
     }
 

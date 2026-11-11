@@ -113,6 +113,8 @@ impl App {
     /// Shows a list read's tickets with the epics already shown, which may be newer than the read:
     /// a list read doesn't read epics.
     fn show_refreshed_lists(&mut self, mut cache: Cache, requested_at: u64, full_scope: bool) {
+        // The rows the selection is found in again must be built while the epics are still shown.
+        self.ensure_visible_keys_cache();
         cache.epics = std::mem::take(&mut self.cache.epics);
         attach_epics_to_tickets(&mut cache.my_tickets, &mut cache.team_tickets, &cache.epics);
         reconcile_epic_child_statuses(&mut cache.epics, &cache.my_tickets, &cache.team_tickets);
