@@ -1,7 +1,7 @@
 //! Shaping what a read found into what the tabs show, with no I/O: one search's tickets into My
 //! Work and Team, an epic search's into epics with their children, and the epics each ticket
-//! belongs to. `jira_reads` fetches and calls these; `App` calls `attach_epics_to_tickets` when
-//! the epics change.
+//! belongs to. `jira_reads` fetches and calls these; `App` keeps tickets and epics in step
+//! (`attach_epics_to_tickets`, `reconcile_epic_child_statuses`) when either changes.
 
 use std::collections::HashMap;
 

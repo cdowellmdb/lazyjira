@@ -89,7 +89,7 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 - `tui-textarea` — text input in forms
 - `unicode-width` — column widths when wrapping rendered markup
 - `tokio` — async runtime for parallel CLI calls
-- `reqwest` (rustls, no OpenSSL, gzip) — Jira REST calls for list and detail reads and moves; gzip because a 500-ticket search page is about 825 KB raw and 34 KB compressed
+- `reqwest` (rustls, no OpenSSL, gzip) — Jira REST calls for list and detail reads and moves
 - `serde` + `serde_json` + `serde_yaml` + `toml` — JSON/YAML/TOML parsing
 - `csv` — bulk upload parsing
 - `anyhow` — error handling

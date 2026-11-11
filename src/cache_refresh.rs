@@ -1,6 +1,7 @@
 use crate::app::{App, TicketSyncStage};
 use crate::background::FollowUp;
 use crate::cache::Cache;
+use crate::lists::{attach_epics_to_tickets, reconcile_epic_child_statuses};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheRefreshPhase {
@@ -109,7 +110,12 @@ impl App {
         }
     }
 
-    fn show_refreshed_lists(&mut self, cache: Cache, requested_at: u64, full_scope: bool) {
+    /// Shows a list read's tickets with the epics already shown, which may be newer than the read:
+    /// a list read doesn't read epics.
+    fn show_refreshed_lists(&mut self, mut cache: Cache, requested_at: u64, full_scope: bool) {
+        cache.epics = std::mem::take(&mut self.cache.epics);
+        attach_epics_to_tickets(&mut cache.my_tickets, &mut cache.team_tickets, &cache.epics);
+        reconcile_epic_child_statuses(&mut cache.epics, &cache.my_tickets, &cache.team_tickets);
         if full_scope {
             self.replace_cache_full_scope(cache, requested_at);
         } else {
@@ -135,7 +141,7 @@ mod tests {
     use super::CacheRefreshPhase;
     use crate::app::{App, Tab, TicketSyncStage};
     use crate::background::FollowUp;
-    use crate::cache::{Cache, Ticket};
+    use crate::cache::{Cache, Epic, Ticket};
 
     fn my_work_cache(tickets: &[(&str, &str)]) -> Cache {
         let mut cache = Cache::empty();
@@ -299,6 +305,31 @@ mod tests {
         assert_eq!(my_work_keys(&app), ["DEMO-1"]);
         assert_eq!(app.ticket_sync_stage, None);
         assert_eq!(app.flash.as_deref(), Some("Full refresh failed: boom"));
+    }
+
+    #[test]
+    fn a_list_read_keeps_the_epics_shown_and_puts_its_tickets_in_them() {
+        let (mut app, request) = app_refreshing(CacheRefreshPhase::Manual);
+        // An epics read lands while the list read is out.
+        app.replace_epics(
+            vec![Epic::for_test("DEMO-100", &[("To Do", 1)])],
+            app.moves.now(),
+        );
+
+        app.apply_cache_refresh(
+            CacheRefreshPhase::Manual,
+            request,
+            app.moves.now(),
+            Ok(my_work_cache(&[("DEMO-0", "In Progress")])),
+        );
+
+        let epic = &app.cache.epics[0];
+        assert_eq!(epic.key, "DEMO-100", "the epics read isn't undone");
+        assert_eq!(epic.children[0].status, "In Progress");
+        assert_eq!(
+            app.cache.my_tickets[0].epic_key.as_deref(),
+            Some("DEMO-100")
+        );
     }
 
     #[test]

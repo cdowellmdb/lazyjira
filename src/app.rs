@@ -598,6 +598,7 @@ impl App {
             &epics,
         );
         self.cache.epics = epics;
+        self.details.hydrate(&mut self.cache);
         self.reapply_moves_since(requested_at);
         self.mark_cache_changed();
         self.clamp_selection();

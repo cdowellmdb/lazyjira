@@ -15,12 +15,8 @@ use crate::jql::{
     children_by_epic_link_jql, children_by_parent_jqls, epics_jql, lists_jql, scoped_jql,
     subtasks_jql, TicketFetchScope,
 };
-use crate::lists::{
-    attach_epics_to_tickets, bucket_tickets, group_by_epic, reconcile_epic_child_statuses,
-};
-use crate::local_cache::{
-    load_epics_cache, load_my_email, remember_my_email, save_epics_cache, DetailCache,
-};
+use crate::lists::{bucket_tickets, group_by_epic};
+use crate::local_cache::{load_my_email, remember_my_email, save_epics_cache, DetailCache};
 use crate::subtasks;
 
 /// What an epic row needs from the epic list; the epic's children come from their own searches.
@@ -126,20 +122,17 @@ async fn fetch_with_scope(
             email: my_email.clone(),
         });
     }
-    let mut epics = load_epics_cache(project);
-
     // A failed search returns here, so the caller keeps showing the last snapshot.
     let emails: Vec<&str> = team_members.iter().map(|m| m.email.as_str()).collect();
     let found = crate::jira_rest::search(&lists_jql(config, &emails, scope), LIST_FIELDS).await?;
-    let (mut my_tickets, mut team_tickets) = bucket_tickets(found, &mut team_members, &my_email);
+    let (my_tickets, team_tickets) = bucket_tickets(found, &mut team_members, &my_email);
 
-    attach_epics_to_tickets(&mut my_tickets, &mut team_tickets, &epics);
-    reconcile_epic_child_statuses(&mut epics, &my_tickets, &team_tickets);
-
+    // No epics: the app keeps the ones it shows (`App::show_refreshed_lists`), which an epics
+    // read may have replaced while this one was out.
     let mut cache = Cache {
         my_tickets,
         team_tickets,
-        epics,
+        epics: Vec::new(),
         team_members,
     };
     details.hydrate(&mut cache);

@@ -77,7 +77,7 @@ pub struct FollowUp {
     pub prefetch_details: bool,
     /// Save the cache as the snapshot, then report it with `App::snapshot_saved` for this phase.
     pub save_snapshot: Option<CacheRefreshPhase>,
-    /// The cache refresh to send next.
+    /// The cache refresh to send next; a Manual one sends an epics read beside it.
     pub next_phase: Option<CacheRefreshPhase>,
     /// Fetch this ticket's detail; `apply` has already marked the fetch as begun.
     pub fetch_detail: Option<String>,

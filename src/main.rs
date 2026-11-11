@@ -425,6 +425,10 @@ async fn main() -> Result<()> {
         spawn_cache_refresh(&mut app, &bg_tx, CacheRefreshPhase::Full, &config);
     }
 
+    let saved_epics = local_cache::load_epics_cache(&config.jira.project);
+    if !saved_epics.is_empty() {
+        app.replace_epics(saved_epics, app.moves.now());
+    }
     spawn_epics_refresh(&mut app, &bg_tx, &config);
     queue_detail_prefetch(&mut app, &bg_tx);
 
@@ -440,22 +444,7 @@ async fn main() -> Result<()> {
         while let Some(message) = wake::arrived(&mut woke_with, &mut bg_rx) {
             state_changed = true;
             let follow_up = background::apply(&mut app, message);
-            if follow_up.prefetch_details {
-                queue_detail_prefetch(&mut app, &bg_tx);
-            }
-            if let Some(phase) = follow_up.save_snapshot {
-                let saved = local_cache::save_full_cache_snapshot(&config.jira.project, &app.cache)
-                    .map_err(|e| e.to_string());
-                app.snapshot_saved(phase, saved);
-            }
-            match follow_up.next_phase {
-                Some(CacheRefreshPhase::Manual) => spawn_manual_refresh(&mut app, &bg_tx, &config),
-                Some(next) => spawn_cache_refresh(&mut app, &bg_tx, next, &config),
-                None => {}
-            }
-            if let Some(key) = follow_up.fetch_detail {
-                spawn_ticket_detail_fetch(&bg_tx, key, app.moves.now());
-            }
+            start_follow_up(&mut app, follow_up, &bg_tx, &config);
         }
 
         if state_changed || app.delight.tick(std::time::Instant::now()) {
@@ -557,8 +546,7 @@ async fn handle_key(
         if settings::handle_key(app, key.code, key.modifiers, config) {
             app.loading = true;
             app.ticket_sync_stage = None;
-            spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
-            spawn_epics_refresh(app, bg_tx, config);
+            spawn_manual_refresh(app, bg_tx, config);
         }
     } else if app.is_filter_edit_open() {
         handle_filter_edit_keys(app, key.code, key.modifiers, config);
@@ -1613,16 +1601,40 @@ fn start_manual_refresh(
     started
 }
 
-/// Reads the lists and, unless a read of them is already out, the epics, both at once: the epics
-/// don't wait on the lists.
+/// Reads the lists and the epics at once, so the epics don't wait on the lists. An epics read
+/// already out is superseded: it may predate what this refresh is for (a ticket just created, a
+/// settings change).
 fn spawn_manual_refresh(
     app: &mut App,
     bg_tx: &UnboundedSender<BackgroundMessage>,
     config: &AppConfig,
 ) {
     spawn_cache_refresh(app, bg_tx, CacheRefreshPhase::Manual, config);
-    if !app.epics_refreshing {
-        spawn_epics_refresh(app, bg_tx, config);
+    spawn_epics_refresh(app, bg_tx, config);
+}
+
+/// Starts the work a background message's `follow_up` asks for.
+fn start_follow_up(
+    app: &mut App,
+    follow_up: background::FollowUp,
+    bg_tx: &UnboundedSender<BackgroundMessage>,
+    config: &AppConfig,
+) {
+    if follow_up.prefetch_details {
+        queue_detail_prefetch(app, bg_tx);
+    }
+    if let Some(phase) = follow_up.save_snapshot {
+        let saved = local_cache::save_full_cache_snapshot(&config.jira.project, &app.cache)
+            .map_err(|e| e.to_string());
+        app.snapshot_saved(phase, saved);
+    }
+    match follow_up.next_phase {
+        Some(CacheRefreshPhase::Manual) => spawn_manual_refresh(app, bg_tx, config),
+        Some(next) => spawn_cache_refresh(app, bg_tx, next, config),
+        None => {}
+    }
+    if let Some(key) = follow_up.fetch_detail {
+        spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
     }
 }
 
@@ -2392,47 +2404,72 @@ mod tests {
 
     #[tokio::test]
     async fn r_starts_one_manual_refresh_and_a_second_r_starts_none() {
-        for epics_already_refreshing in [false, true] {
-            let mut app = App::new();
-            app.loading = false;
-            app.ticket_sync_stage = Some(TicketSyncStage::Full);
-            app.epics_refreshing = epics_already_refreshing;
-            let mut config = sample_config();
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let r = KeyEvent::from(KeyCode::Char('r'));
+        let mut app = App::new();
+        app.loading = false;
+        app.ticket_sync_stage = Some(TicketSyncStage::Full);
+        let mut config = sample_config();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let r = KeyEvent::from(KeyCode::Char('r'));
 
-            handle_key(&mut app, r, &tx, &mut config).await;
-            assert!(app.loading);
-            assert!(app.ticket_sync_stage.is_none());
-            let request = app.cache_refresh_request;
-            let epics_request = app.epic_refresh_request;
+        handle_key(&mut app, r, &tx, &mut config).await;
+        assert!(app.loading);
+        assert!(app.ticket_sync_stage.is_none());
+        let request = app.cache_refresh_request;
+        let epics_request = app.epic_refresh_request;
 
-            handle_key(&mut app, r, &tx, &mut config).await;
-            assert_eq!(app.cache_refresh_request, request);
-            assert_eq!(app.flash.as_deref(), Some("Refresh already in progress"));
+        handle_key(&mut app, r, &tx, &mut config).await;
+        assert_eq!(app.cache_refresh_request, request);
+        assert_eq!(app.flash.as_deref(), Some("Refresh already in progress"));
 
-            // The lists and the epics are read at once, without waiting for each other, and an
-            // epics read already out isn't sent again. Tests never reach Jira, so each answers
-            // with an error.
-            drop(tx);
-            let (mut lists, mut epics) = (Vec::new(), Vec::new());
-            while let Some(message) = rx.recv().await {
-                match message {
-                    BackgroundMessage::CacheRefreshed { phase, request, .. } => {
-                        lists.push((phase, request))
-                    }
-                    BackgroundMessage::EpicsRefreshed { request, .. } => epics.push(request),
-                    _ => panic!("r sends only a cache refresh and an epics refresh"),
-                }
-            }
-            assert_eq!(lists, vec![(CacheRefreshPhase::Manual, request)]);
-            let expected_epics = if epics_already_refreshing {
-                vec![]
-            } else {
+        drop(tx);
+        assert_eq!(
+            reads_sent(rx).await,
+            (
+                vec![(CacheRefreshPhase::Manual, request)],
                 vec![epics_request]
-            };
-            assert_eq!(epics, expected_epics);
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_created_ticket_refreshes_the_lists_and_the_epics_at_once() {
+        let mut app = App::new();
+        app.loading = false;
+        let config = sample_config();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let follow_up = background::apply(
+            &mut app,
+            BackgroundMessage::TicketCreated(Ok("DEMO-9".to_string())),
+        );
+        start_follow_up(&mut app, follow_up, &tx, &config);
+
+        drop(tx);
+        assert_eq!(
+            reads_sent(rx).await,
+            (
+                vec![(CacheRefreshPhase::Manual, app.cache_refresh_request)],
+                vec![app.epic_refresh_request]
+            )
+        );
+    }
+
+    /// The list reads (phase and request) and epics reads (request) whose answers reach `rx`.
+    /// Tests never reach Jira, so each answers with an error.
+    async fn reads_sent(
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<BackgroundMessage>,
+    ) -> (Vec<(CacheRefreshPhase, u64)>, Vec<u64>) {
+        let (mut lists, mut epics) = (Vec::new(), Vec::new());
+        while let Some(message) = rx.recv().await {
+            match message {
+                BackgroundMessage::CacheRefreshed { phase, request, .. } => {
+                    lists.push((phase, request))
+                }
+                BackgroundMessage::EpicsRefreshed { request, .. } => epics.push(request),
+                _ => panic!("only list and epics reads are sent"),
+            }
         }
+        (lists, epics)
     }
 
     #[tokio::test]
