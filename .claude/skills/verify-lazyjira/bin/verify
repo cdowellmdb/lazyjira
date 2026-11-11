@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# Drives lazyjira in a private tmux server against the demo's fake Jira. See ../SKILL.md.
+#
+#   verify <run> up | doctor | keys <tmux keys...> | type <text> | wait <regex> [secs]
+#          | snap <name> | issue <KEY> | calls | down
+#
+# Every run lives in target/verify/<run>/. `down` removes everything there but evidence/.
+set -euo pipefail
+
+repo="$(cd "$(dirname "$0")/../../../.." && pwd)"
+run="${1:?usage: verify <run> <command> [args]}"
+cmd="${2:?usage: verify <run> <command> [args]}"
+shift 2
+[[ "$run" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "run id must be [A-Za-z0-9_-]+" >&2; exit 2; }
+
+dir="$repo/target/verify/$run"
+evidence="$dir/evidence"
+tmx=(tmux -L "lazyjira-verify-$run")
+pane="lazyjira"
+
+screen() { "${tmx[@]}" capture-pane -p -t "$pane"; }
+
+wait_for() { # regex, seconds
+  local deadline=$((SECONDS + ${2:-10}))
+  until screen 2>/dev/null | grep -Eq -- "$1"; do
+    if ((SECONDS >= deadline)); then
+      echo "timed out waiting for /$1/; screen was:" >&2
+      screen >&2 || true
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
+port() { cat "$dir/rest-port"; }
+
+case "$cmd" in
+up)
+  [ ! -e "$dir/home" ] || { echo "run '$run' already exists; 'verify $run down' first" >&2; exit 1; }
+  mkdir -p "$dir/home/.config/lazyjira" "$dir/home/.config/.jira" "$dir/home/tmp" "$dir/shims" "$evidence"
+  cp "$repo/docs/demo/config.toml" "$dir/home/.config/lazyjira/config.toml"
+
+  # Shims log what the app asks of the outside world instead of letting it reach it.
+  # `jira` still answers through the demo's fake CLI; `open` and `pbcopy` do nothing else.
+  for name in jira open pbcopy; do
+    {
+      echo '#!/usr/bin/env bash'
+      echo "printf '%s' '$name' >> '$dir/calls.log'"
+      echo "printf ' %q' \"\$@\" >> '$dir/calls.log'"
+      echo "echo >> '$dir/calls.log'"
+      case "$name" in
+      jira) echo "exec '$repo/docs/demo/bin/jira' \"\$@\"" ;;
+      pbcopy) echo "cat > '$dir/clipboard.txt'" ;;
+      esac
+    } > "$dir/shims/$name"
+    chmod +x "$dir/shims/$name"
+  done
+  : > "$dir/calls.log"
+
+  cargo build --release --quiet --manifest-path "$repo/Cargo.toml"
+
+  nohup python3 -I "$repo/docs/demo/bin/fake_jira_rest.py" "$dir/rest-port" > "$dir/rest.log" 2>&1 &
+  echo $! > "$dir/rest.pid"
+  for _ in $(seq 50); do [ -s "$dir/rest-port" ] && break; sleep 0.1; done
+  [ -s "$dir/rest-port" ] || { echo "fake Jira REST server didn't start; see $dir/rest.log" >&2; exit 1; }
+
+  cat > "$dir/home/.config/.jira/.config.yml" <<EOF
+installation: Local
+server: http://127.0.0.1:$(port)
+auth_type: bearer
+login: alex.rivera@example.com
+project:
+  key: DEMO
+epic:
+  name: customfield_10858
+  link: customfield_10857
+EOF
+
+  # Shims first, then the demo's `date` (a fixed September day: no spooky season), then the build.
+  path="$dir/shims:$repo/docs/demo/bin:$repo/target/release:$PATH"
+  "${tmx[@]}" -f /dev/null new-session -d -s "$pane" -x 160 -y 45 \
+    env -u JIRA_CONFIG_FILE -u NO_COLOR -u VISUAL -u EDITOR \
+    HOME="$dir/home" TMPDIR="$dir/home/tmp" PATH="$path" JIRA_API_TOKEN=demo TERM=xterm-256color \
+    "$repo/target/release/lazyjira"
+  "${tmx[@]}" set -s escape-time 0
+  "${tmx[@]}" set -g remain-on-exit on
+  wait_for 'DEMO-101' 20
+  echo "ready: run=$run evidence=$evidence"
+  ;;
+doctor)
+  ok=1
+  if "${tmx[@]}" has-session -t "$pane" 2>/dev/null; then
+    if [ "$("${tmx[@]}" display -p -t "$pane" '#{pane_dead}')" = 1 ]; then
+      echo "FAIL lazyjira exited; last screen:"; screen; ok=0
+    else
+      echo "ok   lazyjira running in tmux socket lazyjira-verify-$run"
+    fi
+  else
+    echo "FAIL no tmux session for run '$run'"; ok=0
+  fi
+  if [ -s "$dir/rest.pid" ] && kill -0 "$(cat "$dir/rest.pid")" 2>/dev/null &&
+    curl -sf "http://127.0.0.1:$(port)/rest/api/2/issue/DEMO-101?fields=status" > /dev/null; then
+    echo "ok   fake Jira REST on 127.0.0.1:$(port) (pid $(cat "$dir/rest.pid"))"
+  else
+    echo "FAIL fake Jira REST not answering"; ok=0
+  fi
+  bin="$repo/target/release/lazyjira"
+  newer="$(find "$repo/src" "$repo/Cargo.toml" -newer "$bin" -print -quit 2>/dev/null || true)"
+  if [ -n "$newer" ]; then echo "STALE build older than $newer; down, then up again"; ok=0
+  else echo "ok   build is newer than src/ ($(git -C "$repo" rev-parse --short HEAD)$(git -C "$repo" diff --quiet -- src || echo '+dirty'))"; fi
+  echo "     HOME=$dir/home"
+  ((ok)) || exit 1
+  ;;
+keys) "${tmx[@]}" send-keys -t "$pane" "$@" ;;
+type) "${tmx[@]}" send-keys -t "$pane" -l -- "$*" ;;
+wait) wait_for "$1" "${2:-10}" ;;
+snap)
+  name="${1:?snap <name>}"
+  screen > "$evidence/$name.txt"
+  "${tmx[@]}" capture-pane -p -e -t "$pane" > "$evidence/$name.ansi"
+  cat "$evidence/$name.txt"
+  ;;
+issue)
+  key="${1:?issue <KEY>}"
+  curl -sf "http://127.0.0.1:$(port)/rest/api/2/issue/$key?fields=status,assignee,updated" |
+    python3 -I -c 'import json,sys; i=json.load(sys.stdin); f=i["fields"]; print(i["key"], "status="+f["status"]["name"], "assignee="+str((f.get("assignee") or {}).get("emailAddress")), "updated="+str(f.get("updated")))' |
+    tee -a "$evidence/jira-state.txt"
+  ;;
+calls) cp "$dir/calls.log" "$evidence/calls.log"; cat "$dir/calls.log" ;;
+down)
+  "${tmx[@]}" kill-server 2>/dev/null || true
+  [ -s "$dir/rest.pid" ] && kill "$(cat "$dir/rest.pid")" 2>/dev/null || true
+  [ -f "$dir/calls.log" ] && cp "$dir/calls.log" "$evidence/calls.log"
+  rm -rf "$dir/home" "$dir/shims" "$dir/rest-port" "$dir/rest.pid" "$dir/rest.log" "$dir/calls.log" "$dir/clipboard.txt"
+  echo "down: evidence kept in $evidence"
+  ;;
+*) echo "unknown command: $cmd" >&2; exit 2 ;;
+esac
