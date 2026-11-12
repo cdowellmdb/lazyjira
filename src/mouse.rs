@@ -324,22 +324,31 @@ fn drag(app: &mut App, point: Position) {
     }
 }
 
+/// Registers each item's targets: `rows` holds the lines it takes (a header's one, a ticket's one
+/// per summary line), its index, and whether it is a group header. Every drawn line of an item
+/// selects it; its first line also holds its mark and fold arrow.
 pub fn register_rows(
     app: &App,
     area: Rect,
-    rows: &[(usize, usize, bool)],
+    rows: &[(std::ops::Range<usize>, usize, bool)],
     scroll: u16,
     lines: &[ratatui::text::Line<'_>],
 ) {
     let inner = crate::views::common::panel().inner(area);
-    for &(line, index, header) in rows {
-        if let Some(y) = line
-            .checked_sub(scroll as usize)
-            .filter(|y| *y < inner.height as usize)
-        {
+    for (item, index, header) in rows.iter().cloned() {
+        for line in item.clone() {
+            let Some(y) = line
+                .checked_sub(scroll as usize)
+                .filter(|y| *y < inner.height as usize)
+            else {
+                continue;
+            };
             let rect = Rect::new(inner.x, inner.y + y as u16, inner.width, 1);
             let mut targets = app.mouse_targets.borrow_mut();
             targets.push((rect, Target::Row(index)));
+            if line != item.start {
+                continue;
+            }
             let text = lines[line]
                 .spans
                 .iter()
@@ -576,6 +585,9 @@ fn choose(app: &mut App, field: usize, index: usize) {
         }
         if field == 4 {
             state.theme = index.min(state.themes.len() - 1);
+        }
+        if field == 5 {
+            state.wrap_summaries = index != 0;
         }
     } else if let Some(state) = &mut app.create_ticket {
         match field {
@@ -989,6 +1001,60 @@ mod tests {
         click(&mut app, &mut config, &tx, |t| matches!(t, Target::Fold(1))).await;
         assert!(!app.is_parent_folded("DEMO-1"));
         assert_eq!(app.item_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn clicking_a_wrapped_summarys_later_line_selects_its_ticket() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new();
+        app.loading = false;
+        app.wrap_summaries = true;
+        let mut long = Ticket::for_test("DEMO-1", "To Do");
+        long.summary = (1..=12)
+            .map(|n| format!("word{n:02}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        app.cache.my_tickets = vec![long, Ticket::for_test("DEMO-2", "To Do")];
+        draw(&app, &config);
+        let at = locate(&app, "word12");
+        assert_ne!(at.y, locate(&app, "DEMO-1").y);
+        click_at(&mut app, &mut config, &tx, at).await;
+        assert!(
+            matches!(app.selected_item(), Some(crate::app::VisibleItem::Ticket(key)) if key == "DEMO-1")
+        );
+        assert!(
+            !app.is_ticket_selected("DEMO-1"),
+            "a later line has no mark"
+        );
+    }
+
+    #[test]
+    fn one_line_rows_keep_their_target_cells() {
+        let mut app = App::new();
+        app.loading = false;
+        let mut child = Ticket::for_test("DEMO-2", "To Do");
+        child.parent_key = Some("DEMO-1".into());
+        app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "To Do"), child];
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|f| crate::views::my_work::render(f, f.area(), &app))
+            .unwrap();
+        let row = |y| Rect::new(2, y, 76, 1);
+        assert_eq!(
+            *app.mouse_targets.borrow(),
+            vec![
+                (row(4), Target::Row(0)),
+                (Rect::new(2, 4, 2, 1), Target::Mark(0)),
+                (Rect::new(4, 4, 1, 1), Target::Fold(0)),
+                (row(5), Target::Row(1)),
+                (Rect::new(3, 5, 3, 1), Target::Mark(1)),
+                (Rect::new(13, 5, 1, 1), Target::Fold(1)),
+                (row(6), Target::Row(2)),
+                (Rect::new(5, 6, 3, 1), Target::Mark(2)),
+            ]
+        );
     }
 
     #[tokio::test]

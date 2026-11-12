@@ -390,6 +390,7 @@ async fn main() -> Result<()> {
     app.set_epics_i_care_about(config.epics_i_care_about_ordered());
     app.set_status_rules(&config.statuses);
     app.show_done = config.preferences.show_done;
+    app.wrap_summaries = config.preferences.wrap_summaries;
     app.theme = theme::resolve(&config.preferences.theme, &config.themes);
     app.delight.enabled = config.preferences.delight;
     app.delight.today = delight::Today::read();

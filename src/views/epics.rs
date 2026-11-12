@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -8,8 +10,8 @@ use crate::app::{App, VisibleGroup};
 use crate::cache::{Epic, Ticket};
 use crate::views::common::{
     color_marks, column_width, epic_bar, fit, fold_indicator, group_marker, highlight_row,
-    narrow_for_summary, panel, status_color, status_label, status_width, ticket_cells,
-    ticket_marker, Ages, EPIC_BAR_WIDTH, KEY_WIDTH, SEPARATOR_WIDTH,
+    narrow_for_summary, panel, push_ticket_row, status_color, status_label, status_width,
+    ticket_cells, ticket_marker, Ages, EPIC_BAR_WIDTH, KEY_WIDTH, SEPARATOR_WIDTH,
 };
 
 /// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so
@@ -60,7 +62,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut selected_visual_line: Option<usize> = None;
+    let mut selected_visual_line: Option<Range<usize>> = None;
     let mut mouse_rows = Vec::new();
 
     if !visible_epics.is_empty() {
@@ -87,10 +89,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let indicator = fold_indicator(group.tickets.is_none());
         let marker = group_marker(app.group_selection_state(&epic.key));
 
-        mouse_rows.push((lines.len(), group.index, true));
+        let header_line = lines.len()..lines.len() + 1;
+        mouse_rows.push((header_line.clone(), group.index, true));
         let is_header_selected = group.index == app.selected_index;
         if is_header_selected {
-            selected_visual_line = Some(lines.len());
+            selected_visual_line = Some(header_line);
         }
 
         let inner = panel().inner(area).width as usize;
@@ -140,11 +143,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             )));
         } else {
             for (index, ticket) in children {
-                mouse_rows.push((lines.len(), *index, false));
                 let is_selected = *index == app.selected_index;
-                if is_selected {
-                    selected_visual_line = Some(lines.len());
-                }
 
                 let base = if is_selected {
                     Style::default().bg(Color::DarkGray)
@@ -170,7 +169,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     base,
                 );
 
-                let mut row = vec![
+                let row = Line::from(vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
@@ -180,9 +179,12 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(fit(assignee(ticket), assignee_w), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
-                ];
-                row.extend(summary);
-                lines.push(Line::from(row));
+                ]);
+                let rows = push_ticket_row(&mut lines, row, summary, |_| {});
+                mouse_rows.push((rows.clone(), *index, false));
+                if is_selected {
+                    selected_visual_line = Some(rows);
+                }
             }
         }
 
@@ -211,13 +213,17 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         }
     }
 
-    highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);
+    highlight_row(
+        &mut lines,
+        selected_visual_line.clone(),
+        panel().inner(area).width,
+    );
     color_marks(&mut lines);
 
     // Scroll to keep selected row visible
     let visible = area.height.saturating_sub(2) as usize;
     let scroll_y = match selected_visual_line {
-        Some(line) if line >= visible => (line - visible + 1) as u16,
+        Some(item) if item.end > visible => (item.end - visible) as u16,
         _ => 0,
     };
 
