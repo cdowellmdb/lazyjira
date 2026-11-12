@@ -336,12 +336,11 @@ pub struct Item {
 /// holds its mark and fold arrow.
 pub fn register_rows(
     app: &App,
-    area: Rect,
+    inner: Rect,
     items: &[Item],
     scroll: u16,
     lines: &[ratatui::text::Line<'_>],
 ) {
-    let inner = crate::views::common::panel().inner(area);
     for item in items {
         let index = item.index;
         for line in item.lines.clone() {

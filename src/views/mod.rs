@@ -1450,6 +1450,22 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_summaries_draw_on_terminals_too_narrow_for_summarys_minimum() {
+        for &tab in Tab::all() {
+            for width in [20, 30, 40, 60] {
+                let mut long = Ticket::for_test("DEMO-1", "In Progress");
+                long.summary = words(10).join(" ");
+                let app = wrapping_app(tab, vec![long]);
+                let rows = draw_highlights(&app, tab, width, 30);
+                assert!(
+                    rows.iter().any(|(text, _)| text.contains("DEMO-1")),
+                    "{tab:?} at {width}: {rows:#?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_wrapped_summarys_later_lines_are_blank_before_summarys_separator() {
         for &tab in Tab::all() {
             let mut long = Ticket::for_test("DEMO-1", "In Progress");

@@ -300,10 +300,9 @@ pub fn ticket_cells(
         (None, Some(parent)) => (format!("{} › ", parent), ticket.summary.clone()),
         _ => (String::new(), ticket.summary.clone()),
     };
-    if app.wrap_summaries {
-        // Under two columns a wide character can't fit a line, so wrapping would overflow the
-        // cell; every tab keeps Summary at least 12 wide.
-        debug_assert!(width >= 2);
+    // Under two columns a wide character can't fit a line, so wrapping would overflow the cell.
+    // A terminal too narrow for Summary's minimum leaves it less (`narrow_for_summary`).
+    if app.wrap_summaries && width >= 2 {
         let content = vec![
             Span::styled(prefix, muted(base)),
             Span::styled(summary, base),
@@ -415,7 +414,7 @@ impl ListLines {
                 .saturating_sub(inner.height as usize)
                 .min(item.start)
         }) as u16;
-        crate::mouse::register_rows(app, area, &self.items, scroll, &self.lines);
+        crate::mouse::register_rows(app, inner, &self.items, scroll, &self.lines);
         f.render_widget(
             Paragraph::new(self.lines).block(block).scroll((scroll, 0)),
             area,
@@ -783,6 +782,9 @@ mod tests {
             ["山田 ", "太郎 ", "山田 ", "太郎 "]
         );
         assert_eq!(lines(true, "", 8), ["        "]);
+        // Two columns is the narrowest that wraps: one wide character a line.
+        assert_eq!(lines(true, "山田", 2), ["山", "田"]);
+        assert_eq!(lines(true, "山田", 1), ["."]);
     }
 
     #[test]
