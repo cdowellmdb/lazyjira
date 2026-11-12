@@ -11,8 +11,8 @@ use crate::{
     widgets::form,
 };
 
-/// Teammates, pinned epics, starting tab, Done tickets, theme.
-pub const FIELDS: usize = 5;
+/// Teammates, pinned epics, starting tab, Done tickets, theme, wrapped summaries.
+pub const FIELDS: usize = 6;
 
 pub struct Settings {
     pub focused_field: usize,
@@ -20,6 +20,7 @@ pub struct Settings {
     pub epics: TextArea<'static>,
     pub start_tab: usize,
     pub show_done: bool,
+    pub wrap_summaries: bool,
     /// Every theme name to offer; the chosen one previews while settings are open.
     pub themes: Vec<String>,
     pub theme: usize,
@@ -44,11 +45,21 @@ impl Settings {
                 .position(|tab| tab.title() == config.preferences.start_tab)
                 .unwrap_or(0),
             show_done: config.preferences.show_done,
+            wrap_summaries: config.preferences.wrap_summaries,
             theme: themes
                 .iter()
                 .position(|name| name.eq_ignore_ascii_case(&config.preferences.theme))
                 .unwrap_or(0),
             themes,
+        }
+    }
+
+    /// The on/off switch at `field`: Done tickets or wrapped summaries.
+    pub fn switch_mut(&mut self, field: usize) -> Option<&mut bool> {
+        match field {
+            3 => Some(&mut self.show_done),
+            5 => Some(&mut self.wrap_summaries),
+            _ => None,
         }
     }
 
@@ -97,6 +108,7 @@ impl Settings {
         config.jira.epics_i_care_about = epics;
         config.preferences.start_tab = Tab::all()[self.start_tab].title().into();
         config.preferences.show_done = self.show_done;
+        config.preferences.wrap_summaries = self.wrap_summaries;
         config.preferences.theme = self.themes[self.theme].clone();
         Ok(config)
     }
@@ -123,8 +135,7 @@ pub fn handle_key(
             }) {
                 Ok(next) => {
                     *config = next;
-                    app.show_done = config.preferences.show_done;
-                    app.theme = theme::resolve(&config.preferences.theme, &config.themes);
+                    app.apply_preferences(config);
                     app.set_epics_i_care_about(config.epics_i_care_about_ordered());
                     app.settings = None;
                     app.flash = Some("Settings saved. Refreshing team...".into());
@@ -142,20 +153,25 @@ pub fn handle_key(
             2 if matches!(key, KeyCode::Right | KeyCode::Down) => {
                 state.start_tab = (state.start_tab + 1).min(4)
             }
-            3 if matches!(
-                key,
-                KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
-            ) =>
-            {
-                state.show_done = !state.show_done
-            }
             4 if matches!(key, KeyCode::Up | KeyCode::Left) => {
                 state.theme = state.theme.saturating_sub(1)
             }
             4 if matches!(key, KeyCode::Down | KeyCode::Right) => {
                 state.theme = (state.theme + 1).min(state.themes.len() - 1)
             }
-            _ => {}
+            field => {
+                let flips = matches!(
+                    key,
+                    KeyCode::Char(' ')
+                        | KeyCode::Left
+                        | KeyCode::Right
+                        | KeyCode::Up
+                        | KeyCode::Down
+                );
+                if let Some(on) = state.switch_mut(field).filter(|_| flips) {
+                    *on = !*on
+                }
+            }
         },
     }
     false
@@ -178,6 +194,9 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let [start_tab, theme] = Layout::horizontal([Constraint::Fill(1); 2])
         .spacing(1)
         .areas(areas[2]);
+    let [done, wrap] = Layout::horizontal([Constraint::Fill(1); 2])
+        .spacing(1)
+        .areas(areas[3]);
     form::render_editor(
         f,
         app,
@@ -211,10 +230,19 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     form::render_choices(
         f,
         app,
-        areas[3],
+        done,
         (3, "Done tickets"),
         &["Hide".into(), "Show".into()],
         usize::from(state.show_done),
+        "",
+    );
+    form::render_choices(
+        f,
+        app,
+        wrap,
+        (5, "Wrap summaries"),
+        &["Off".into(), "On".into()],
+        usize::from(state.wrap_summaries),
         "",
     );
     form::render_choices(f, app, theme, (4, "Theme"), &state.themes, state.theme, "");
@@ -248,14 +276,36 @@ mod tests {
         settings.epics = form::editor("demo-2, DEMO-1");
         settings.start_tab = Tab::Team.index();
         settings.show_done = false;
+        settings.wrap_summaries = true;
         let updated = settings.config(&config).unwrap();
         assert_eq!(updated.team.len(), 2);
         assert_eq!(updated.epics_i_care_about_ordered(), ["DEMO-2", "DEMO-1"]);
         assert_eq!(updated.preferences.start_tab, "Team");
         assert!(!updated.preferences.show_done);
+        assert!(updated.preferences.wrap_summaries);
         assert_eq!(updated.filters[0].jql, "type = Bug");
         settings.team = form::editor("Alex = wrong-email");
         assert!(settings.config(&config).is_err());
+    }
+
+    #[test]
+    fn saving_wrap_summaries_wraps_them_at_once() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let mut app = App::new();
+        app.settings = Some(Settings::new(&config));
+        handle_key(&mut app, KeyCode::BackTab, KeyModifiers::NONE, &mut config);
+        assert_eq!(app.focused_field(), Some(5));
+        handle_key(
+            &mut app,
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+            &mut config,
+        );
+        assert!(!app.wrap_summaries, "only saving applies it");
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::NONE, &mut config);
+        assert!(app.wrap_summaries);
+        assert!(config.preferences.wrap_summaries);
     }
 
     #[test]
@@ -274,7 +324,9 @@ mod tests {
         };
         for save in [false, true] {
             app.settings = Some(Settings::new(&config));
-            handle_key(&mut app, KeyCode::BackTab, KeyModifiers::NONE, &mut config);
+            for _ in 0..2 {
+                handle_key(&mut app, KeyCode::BackTab, KeyModifiers::NONE, &mut config);
+            }
             assert_eq!(app.focused_field(), Some(4));
             for _ in 0..crate::theme::PRESETS.len() + 1 {
                 handle_key(&mut app, KeyCode::Down, KeyModifiers::NONE, &mut config);

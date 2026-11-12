@@ -389,8 +389,7 @@ async fn main() -> Result<()> {
     let mut app = App::new();
     app.set_epics_i_care_about(config.epics_i_care_about_ordered());
     app.set_status_rules(&config.statuses);
-    app.show_done = config.preferences.show_done;
-    app.theme = theme::resolve(&config.preferences.theme, &config.themes);
+    app.apply_preferences(&config);
     app.delight.enabled = config.preferences.delight;
     app.delight.today = delight::Today::read();
     app.delight.scene = local_cache::now_unix_secs() as usize;

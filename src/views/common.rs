@@ -1,6 +1,9 @@
+use std::ops::Range;
+
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Padding};
+use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
 use crate::app::{App, GroupSelectionState, VisibleGroup};
 use crate::cache::{Epic, Status, StatusKind, StatusRules, Ticket};
@@ -29,14 +32,21 @@ pub fn fold_indicator(collapsed: bool) -> &'static str {
     }
 }
 
-pub fn highlight_row(lines: &mut [Line<'_>], index: Option<usize>, width: u16) {
-    if let Some(line) = index.and_then(|index| lines.get_mut(index)) {
+/// Highlights the selected item's `lines`, each to `width`, with its first line's first cell bold.
+pub fn highlight_row(lines: &mut [Line<'_>], selected: Option<Range<usize>>, width: u16) {
+    let Some(selected) = selected else {
+        return;
+    };
+    let first = selected.start;
+    for (at, line) in lines.iter_mut().enumerate().take(selected.end).skip(first) {
         line.spans.push(Span::raw(
             " ".repeat((width as usize).saturating_sub(line.width())),
         ));
         line.style = line.style.bg(Color::DarkGray);
-        if let Some(key) = line.spans.first_mut() {
-            key.style = key.style.add_modifier(Modifier::BOLD);
+        if at == first {
+            if let Some(key) = line.spans.first_mut() {
+                key.style = key.style.add_modifier(Modifier::BOLD);
+            }
         }
     }
 }
@@ -224,19 +234,15 @@ pub fn muted(base: Style) -> Style {
     })
 }
 
-/// Colors each line's selection mark: `muted` when unselected, cyan when selected or partial. Only a line's first mark is the
-/// selection, since a summary may contain one. Call after `highlight_row`.
-pub fn color_marks(lines: &mut [Line<'_>]) {
+/// Colors each line's selection mark: `muted` when unselected, cyan when selected or partial. Only
+/// a mark in a line's first span is the selection, since a summary, wrapped onto a line of its
+/// own or not, may contain one. Call after `highlight_row`.
+fn color_marks(lines: &mut [Line<'_>]) {
     for line in lines {
-        let Some((index, at)) = line
-            .spans
-            .iter()
-            .enumerate()
-            .find_map(|(index, span)| span.content.find(MARKS).map(|at| (index, at)))
-        else {
+        let Some(at) = line.spans.first().and_then(|span| span.content.find(MARKS)) else {
             continue;
         };
-        let span = line.spans.remove(index);
+        let span = line.spans.remove(0);
         let (before, rest) = span.content.split_at(at);
         let mark_len = rest.chars().next().map_or(0, char::len_utf8);
         let (mark, after) = rest.split_at(mark_len);
@@ -253,7 +259,7 @@ pub fn color_marks(lines: &mut [Line<'_>]) {
             Span::styled(after.to_string(), span.style),
         ];
         line.spans.splice(
-            index..index,
+            0..0,
             parts.into_iter().filter(|part| !part.content.is_empty()),
         );
     }
@@ -263,7 +269,8 @@ pub fn color_marks(lines: &mut [Line<'_>]) {
 /// its parent is indented, and a parent shows whether its sub-tasks are folded, with how many are
 /// hidden. A sub-task whose parent is elsewhere leads its summary with the parent's key, muted so
 /// the summary reads first (gray on the selected row, as other muted cells are). The summary is
-/// drawn in `base`, truncated and padded to `width`.
+/// drawn in `base`, one line truncated and padded to `width`, or, with `App::wrap_summaries`,
+/// word-wrapped onto as many lines as it needs, each padded to `width`.
 pub fn ticket_cells(
     app: &App,
     family: Option<Family>,
@@ -271,7 +278,7 @@ pub fn ticket_cells(
     marker: char,
     width: usize,
     base: Style,
-) -> (String, Vec<Span<'static>>) {
+) -> (String, Vec<Vec<Span<'static>>>) {
     let folded = app.is_parent_folded(&ticket.key);
     let key = match family {
         Some(Family::Child) => format!("  {} {}", marker, ticket.key),
@@ -293,6 +300,24 @@ pub fn ticket_cells(
         (None, Some(parent)) => (format!("{} › ", parent), ticket.summary.clone()),
         _ => (String::new(), ticket.summary.clone()),
     };
+    // Under two columns a wide character can't fit a line, so wrapping would overflow the cell.
+    // A terminal too narrow for Summary's minimum leaves it less (`narrow_for_summary`).
+    if app.wrap_summaries && width >= 2 {
+        let content = vec![
+            Span::styled(prefix, muted(base)),
+            Span::styled(summary, base),
+        ];
+        let lines = crate::widgets::markup::wrap(vec![], vec![], content, width)
+            .into_iter()
+            .map(|line| {
+                let pad = width.saturating_sub(line.width());
+                let mut spans = line.spans;
+                spans.push(Span::styled(" ".repeat(pad), base));
+                spans
+            })
+            .collect();
+        return (key, lines);
+    }
     let cell = fit(&(prefix.clone() + &summary), width);
     let split = cell
         .char_indices()
@@ -301,11 +326,106 @@ pub fn ticket_cells(
     let (prefix, summary) = cell.split_at(split);
     (
         key,
-        vec![
+        vec![vec![
             Span::styled(prefix.to_string(), muted(base)),
             Span::styled(summary.to_string(), base),
-        ],
+        ]],
     )
+}
+
+/// A list tab's lines and the items among them: each group header and ticket row, with the lines
+/// it takes, so `render` can highlight, scroll to and register mouse targets for whole items.
+#[derive(Default)]
+pub struct ListLines {
+    lines: Vec<Line<'static>>,
+    items: Vec<crate::mouse::Item>,
+    selected_lines: Option<Range<usize>>,
+}
+
+impl ListLines {
+    /// A line that is no item: column headings, counts, blank lines, empty-state text.
+    pub fn push(&mut self, line: impl Into<Line<'static>>) {
+        self.lines.push(line.into());
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    /// A group header, one line.
+    pub fn header(&mut self, index: usize, selected: bool, line: impl Into<Line<'static>>) {
+        let start = self.lines.len();
+        self.lines.push(line.into());
+        self.item(start, index, selected, true);
+    }
+
+    /// A ticket row: `cells` up to Summary, Summary's separator, then the summary's first line
+    /// (from `ticket_cells`). Each further summary line goes on a line of its own, blank before
+    /// Summary's separator. Returns the first line, for the cells after Summary.
+    pub fn ticket(
+        &mut self,
+        index: usize,
+        selected: bool,
+        cells: Vec<Span<'static>>,
+        base: Style,
+        summary: Vec<Vec<Span<'static>>>,
+    ) -> &mut Line<'static> {
+        let start = self.lines.len();
+        let separator = Span::styled(" │ ", base.fg(Color::DarkGray));
+        let mut row = Line::from(cells);
+        let lead = " ".repeat(row.width());
+        row.spans.push(separator.clone());
+        let mut summary = summary.into_iter();
+        row.spans.extend(summary.next().unwrap_or_default());
+        self.lines.push(row);
+        for more in summary {
+            let mut line = Line::from(vec![
+                Span::styled(lead.clone(), separator.style),
+                separator.clone(),
+            ]);
+            line.spans.extend(more);
+            self.lines.push(line);
+        }
+        self.item(start, index, selected, false);
+        &mut self.lines[start]
+    }
+
+    fn item(&mut self, start: usize, index: usize, selected: bool, header: bool) {
+        let lines = start..self.lines.len();
+        if selected {
+            self.selected_lines = Some(lines.clone());
+        }
+        self.items.push(crate::mouse::Item {
+            lines,
+            index,
+            header,
+        });
+    }
+
+    /// Highlights the selected item, colors marks, scrolls so the selected item's last line is
+    /// on screen (its first, when it is taller than the screen), registers mouse targets and
+    /// draws the lines in `block`.
+    pub fn render(mut self, f: &mut ratatui::Frame, area: Rect, app: &App, block: Block<'_>) {
+        let inner = block.inner(area);
+        highlight_row(&mut self.lines, self.selected_lines.clone(), inner.width);
+        color_marks(&mut self.lines);
+        let scroll = self.selected_lines.map_or(0, |item| {
+            item.end
+                .saturating_sub(inner.height as usize)
+                .min(item.start)
+        }) as u16;
+        crate::mouse::register_rows(app, inner, &self.items, scroll, &self.lines);
+        f.render_widget(
+            Paragraph::new(self.lines).block(block).scroll((scroll, 0)),
+            area,
+        );
+    }
+}
+
+impl Extend<Line<'static>> for ListLines {
+    fn extend<I: IntoIterator<Item = Line<'static>>>(&mut self, lines: I) {
+        self.lines.extend(lines);
+    }
 }
 
 /// The name a status cell or group header shows: Jira's, except that Blocked is Cursed in
@@ -635,6 +755,36 @@ mod tests {
         ] {
             assert_eq!(fit(text, width).width(), width, "{text}");
         }
+    }
+
+    #[test]
+    fn a_summary_wraps_to_lines_of_exactly_width_display_columns_only_when_asked() {
+        let lines = |wrap: bool, summary: &str, width: usize| {
+            let mut app = App::new();
+            app.wrap_summaries = wrap;
+            let mut ticket = Ticket::for_test("DEMO-1", "To Do");
+            ticket.summary = summary.into();
+            let (_, lines) = ticket_cells(&app, None, &ticket, '☐', width, Style::default());
+            lines
+                .iter()
+                .map(|spans| spans.iter().map(|span| span.content.as_ref()).collect())
+                .collect::<Vec<String>>()
+        };
+        let summary = "alpha bravo charlie delta";
+        assert_eq!(lines(false, summary, 12), ["alpha bra..."]);
+        assert_eq!(
+            lines(true, summary, 12),
+            ["alpha bravo ", "charlie     ", "delta       "]
+        );
+        // 山 is two columns: three would be six, so five columns hold two and a pad.
+        assert_eq!(
+            lines(true, "山田太郎山田太郎", 5),
+            ["山田 ", "太郎 ", "山田 ", "太郎 "]
+        );
+        assert_eq!(lines(true, "", 8), ["        "]);
+        // Two columns is the narrowest that wraps: one wide character a line.
+        assert_eq!(lines(true, "山田", 2), ["山", "田"]);
+        assert_eq!(lines(true, "山田", 1), ["."]);
     }
 
     #[test]

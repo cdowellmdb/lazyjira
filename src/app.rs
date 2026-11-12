@@ -283,6 +283,8 @@ pub struct App {
     pub search: Option<String>,
     /// Whether Done tickets are visible in My Work and Team tabs.
     pub show_done: bool,
+    /// Ticket summaries wrap onto further lines (`views::common::ticket_cells`).
+    pub wrap_summaries: bool,
     /// Recolors each drawn frame.
     pub theme: crate::theme::Theme,
     /// Confetti, the quit receipt, stale marks and spooky season.
@@ -381,6 +383,7 @@ impl App {
             flash: None,
             search: None,
             show_done: true,
+            wrap_summaries: false,
             theme: Default::default(),
             delight: Default::default(),
             status_focus: None,
@@ -507,6 +510,14 @@ impl App {
         } else {
             None
         }
+    }
+
+    /// The preferences both startup and saving settings apply: Done visibility, wrapped
+    /// summaries and the theme.
+    pub fn apply_preferences(&mut self, config: &crate::config::AppConfig) {
+        self.show_done = config.preferences.show_done;
+        self.wrap_summaries = config.preferences.wrap_summaries;
+        self.theme = crate::theme::resolve(&config.preferences.theme, &config.themes);
     }
 
     /// Orders statuses and decides which are done or dropped from the configured `active`,

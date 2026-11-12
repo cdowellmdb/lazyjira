@@ -1,12 +1,11 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    color_marks, fold_indicator, group_marker, highlight_row, panel, status_color, status_label,
-    ticket_cells, ticket_marker, Ages, Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
+    fold_indicator, group_marker, panel, status_color, status_label, ticket_cells, ticket_marker,
+    Ages, Columns, ListLines, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
@@ -95,9 +94,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .add_modifier(Modifier::BOLD);
     let separator = |style: Style| Span::styled(" │ ", style.fg(Color::DarkGray));
 
-    let mut lines: Vec<Line> = Vec::new();
-    let mut selected_visual_line: Option<usize> = None;
-    let mut mouse_rows = Vec::new();
+    let mut lines = ListLines::default();
     let mut has_rows = false;
 
     for group in &grouped {
@@ -112,11 +109,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             let header_w = header.width();
             lines.push(header);
             lines.extend(shared.line(header_w));
-            lines.push(Line::from(Span::styled(
+            lines.push(Span::styled(
                 "─".repeat(header_w),
                 Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(""));
+            ));
+            lines.push("");
         }
 
         let total_count = group.total;
@@ -125,12 +122,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let indicator = fold_indicator(group.tickets.is_none());
         let marker = group_marker(app.group_selection_state(status.as_str()));
 
-        // Status header
-        mouse_rows.push((lines.len(), group.index, true));
         let is_header_selected = group.index == app.selected_index;
-        if is_header_selected {
-            selected_visual_line = Some(lines.len());
-        }
         let header = format!(
             "{} {} {} ({})",
             marker,
@@ -148,20 +140,20 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 .fg(status_color(status, app.status_rules()))
                 .add_modifier(Modifier::BOLD)
         };
-        lines.push(Line::from(Span::styled(header, header_style)));
+        lines.header(
+            group.index,
+            is_header_selected,
+            Span::styled(header, header_style),
+        );
 
         let Some(tickets) = &group.tickets else {
-            lines.push(Line::from(""));
+            lines.push("");
             continue;
         };
 
         // Ticket rows
         for (index, ticket) in tickets {
-            mouse_rows.push((lines.len(), *index, false));
             let is_selected = *index == app.selected_index;
-            if is_selected {
-                selected_visual_line = Some(lines.len());
-            }
 
             let base = if is_selected {
                 Style::default().bg(Color::DarkGray)
@@ -180,34 +172,18 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 base,
             );
 
-            let mut row = Line::from(vec![
-                Span::styled(format!("  {:<key_w$}", key_cell), base),
-                separator(base),
-            ]);
-            row.spans.extend(summary);
-            shared.push_trailing_cells(ages, &mut row, ticket, base, epic_w, labels_w);
-            lines.push(row);
+            let cells = vec![Span::styled(format!("  {:<key_w$}", key_cell), base)];
+            let row = lines.ticket(*index, is_selected, cells, base, summary);
+            shared.push_trailing_cells(ages, row, ticket, base, epic_w, labels_w);
         }
 
         // Blank line between groups
-        lines.push(Line::from(""));
+        lines.push("");
     }
 
     if lines.is_empty() {
-        lines = empty_lines(app);
+        lines.extend(empty_lines(app));
     }
 
-    highlight_row(&mut lines, selected_visual_line, panel().inner(area).width);
-    color_marks(&mut lines);
-
-    // Scroll to keep selected row visible
-    let visible = area.height.saturating_sub(2) as usize;
-    let scroll_y = match selected_visual_line {
-        Some(line) if line >= visible => (line - visible + 1) as u16,
-        _ => 0,
-    };
-
-    crate::mouse::register_rows(app, area, &mouse_rows, scroll_y, &lines);
-    let widget = Paragraph::new(lines).block(panel()).scroll((scroll_y, 0));
-    f.render_widget(widget, area);
+    lines.render(f, area, app, panel());
 }

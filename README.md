@@ -32,7 +32,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 - Click into form fields and buttons; scroll lists and details with the wheel
 - Drag across text to select it, then copy with `Ctrl+C`
 - Edit in `$EDITOR`, paste multiple lines, and filter pickers by typing
-- Settings (teammates, pinned epics, Done visibility, starting tab, theme) apply without a restart
+- Settings (teammates, pinned epics, Done visibility, starting tab, theme, wrapped summaries) apply without a restart
 - Built-in color themes, previewed live as you pick, plus your own in `config.toml`
 
 **Little joys**
@@ -94,7 +94,7 @@ The first run asks for two things:
 
 lazyjira then saves `~/.config/lazyjira/config.toml`, adds you to the team roster using the email from `jira me`, and loads your tickets. Press `?` at any time to see the keybindings.
 
-Press `S` or click **Settings** to manage teammates, pinned epics, Done visibility, your starting tab, and the color theme. Team and epic changes refresh without restarting.
+Press `S` or click **Settings** to manage teammates, pinned epics, Done visibility, your starting tab, the color theme, and whether long ticket summaries wrap. Team and epic changes refresh without restarting.
 
 ## Configuration
 
@@ -129,6 +129,7 @@ show_done = true
 start_tab = "My Work"
 theme = "default"
 delight = true
+wrap_summaries = false
 
 [themes.ocean]
 background = "#0b1d2a"
@@ -149,6 +150,7 @@ accent = "#4fd1c5"
 | `preferences.start_tab` | `"My Work"` | Starting tab: `My Work`, `Team`, `Epics`, `Unassigned`, or `Filters`. |
 | `preferences.theme` | `"default"` | Color theme: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin`, `solarized-light`, `spooky`, or a custom theme's name, in any case. An unknown name uses the default. |
 | `preferences.delight` | `true` | Confetti, the quit receipt, stale-ticket marks, the empty My Work scene and spooky season. See [Little joys](#features). |
+| `preferences.wrap_summaries` | `false` | Wrap a ticket's summary onto as many lines as it needs, in every tab, instead of cutting it with `...`. Epic headers in the Epics tab stay on one line. Set it with **Wrap summaries** in settings (`S`). |
 | `themes.<name>` | empty | Custom themes. See [Themes](#themes). |
 
 ### Themes
@@ -190,7 +192,7 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 | `B` | Open bulk action menu (move/assign) |
 | `U` | Open bulk CSV upload |
 | `c` | Create ticket (not on Filters) |
-| `S` | Settings: teammates, pinned epics, Done visibility, starting tab, theme |
+| `S` | Settings: teammates, pinned epics, Done visibility, starting tab, theme, wrapped summaries |
 | `z/Z` | Fold the current group, or a parent's sub-tasks when a parent or one of its sub-tasks is selected / fold every group shown but the current one, or unfold them all when the tab has a folded group |
 | `d` | Toggle visibility of done statuses (`statuses.done` and `statuses.dropped`); not on Filters |
 | `f/F` | Focus the next / previous status in My Work, Team or Epics, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that). In Epics it filters the children, and hides epics with no child in that status |
