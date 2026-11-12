@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -7,9 +5,9 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, FilterFocus};
 use crate::views::common::{
-    color_marks, fit, fold_indicator, group_marker, highlight_row, narrow_for_summary, panel,
-    push_ticket_row, status_color, status_label, status_width, ticket_cells, ticket_marker, Ages,
-    Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
+    fit, fold_indicator, group_marker, highlight_row, narrow_for_summary, panel, status_color,
+    status_label, status_width, ticket_cells, ticket_marker, Ages, Columns, ListLines, Shared,
+    KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -116,32 +114,30 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let mut lines = Vec::new();
-    let mut selected_visual_line: Option<Range<usize>> = None;
-    let mut mouse_rows = Vec::new();
+    let mut lines = ListLines::default();
     let groups = app.filters_visible_by_status();
     // How many results the search keeps, counting those in folded groups.
     let kept: usize = groups.iter().map(|group| group.total).sum();
 
     if app.filter_loading {
-        lines.push(Line::from(Span::styled(
+        lines.push(Span::styled(
             "  Loading...",
             Style::default().fg(Color::Yellow),
-        )));
+        ));
     } else if app.filter_results.is_empty() {
-        lines.push(Line::from(Span::styled(
+        lines.push(Span::styled(
             "  Select a filter and press Enter to run it",
             Style::default().fg(Color::DarkGray),
-        )));
+        ));
     } else if groups.is_empty() {
         // Every result is in a status group, so only a search leaves none.
-        lines.push(Line::from(Span::styled(
+        lines.push(Span::styled(
             format!(
                 "  No results match \"{}\"",
                 app.search.as_deref().unwrap_or_default()
             ),
             Style::default().fg(Color::DarkGray),
-        )));
+        ));
     } else {
         let key_w = KEY_WIDTH;
         let (status_w, summary_w) = results_column_widths(area, status_width(&groups));
@@ -162,20 +158,15 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let header_w = header.width();
         lines.push(header);
         lines.extend(shared.line(header_w));
-        lines.push(Line::from(Span::styled(
+        lines.push(Span::styled(
             "─".repeat(header_w),
             Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(""));
+        ));
+        lines.push("");
 
         for group in groups {
             let status = &group.header;
-            let header_line = lines.len()..lines.len() + 1;
-            mouse_rows.push((header_line.clone(), group.index, true));
             let is_header_selected = results_focused && group.index == app.selected_index;
-            if is_header_selected {
-                selected_visual_line = Some(header_line);
-            }
 
             let indicator = fold_indicator(group.tickets.is_none());
             let marker = group_marker(app.group_selection_state(status.as_str()));
@@ -190,19 +181,23 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     .add_modifier(Modifier::BOLD)
             };
 
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "{} {} {} ({})",
-                    marker,
-                    indicator,
-                    status_label(app, status).to_uppercase(),
-                    group.total
+            lines.header(
+                group.index,
+                is_header_selected,
+                Span::styled(
+                    format!(
+                        "{} {} {} ({})",
+                        marker,
+                        indicator,
+                        status_label(app, status).to_uppercase(),
+                        group.total
+                    ),
+                    header_style,
                 ),
-                header_style,
-            )));
+            );
 
             let Some(tickets) = &group.tickets else {
-                lines.push(Line::from(""));
+                lines.push("");
                 continue;
             };
 
@@ -233,41 +228,21 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     Style::default().fg(status_color(&ticket.status, app.status_rules()))
                 };
 
-                let row = Line::from(vec![
+                let cells = vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
                         fit(status_label(app, &ticket.status), status_w),
                         status_style,
                     ),
-                    Span::styled(" │ ", base.fg(Color::DarkGray)),
-                ]);
-                let rows = push_ticket_row(&mut lines, row, summary, |row| {
-                    shared.push_trailing_cells(ages, row, ticket, base, 0, 0)
-                });
-                mouse_rows.push((rows.clone(), *index, false));
-                if is_selected {
-                    selected_visual_line = Some(rows);
-                }
+                ];
+                let row = lines.ticket(*index, is_selected, cells, base, summary);
+                shared.push_trailing_cells(ages, row, ticket, base, 0, 0);
             }
 
-            lines.push(Line::from(""));
+            lines.push("");
         }
     }
-
-    highlight_row(
-        &mut lines,
-        selected_visual_line.clone(),
-        panel().inner(area).width,
-    );
-    color_marks(&mut lines);
-
-    // Scroll to keep selected row visible
-    let visible = area.height.saturating_sub(2) as usize;
-    let scroll_y = match selected_visual_line {
-        Some(item) if item.end > visible => (item.end - visible) as u16,
-        _ => 0,
-    };
 
     let title = if app.filter_results.is_empty() {
         " Results ".to_string()
@@ -275,10 +250,12 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
         format!(" Results ({kept}) ")
     };
 
-    let block = panel().title(title).border_style(border_style);
-    crate::mouse::register_rows(app, area, &mouse_rows, scroll_y, &lines);
-    let widget = Paragraph::new(lines).block(block).scroll((scroll_y, 0));
-    f.render_widget(widget, area);
+    lines.render(
+        f,
+        area,
+        app,
+        panel().title(title).border_style(border_style),
+    );
 }
 
 #[cfg(test)]

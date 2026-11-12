@@ -33,7 +33,7 @@ const MAIN: &[(&str, &str)] = &[
     ("f / F", "Next / previous status focus"),
     ("", "Create & refresh"),
     ("c", "Create ticket"),
-    ("S", "Settings: team, epics, startup & theme"),
+    ("S", "Settings: teammates, pinned epics, Done visibility, starting tab, theme, wrapped summaries"),
     ("r", "Refresh tickets"),
 ];
 

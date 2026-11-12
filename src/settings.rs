@@ -54,6 +54,15 @@ impl Settings {
         }
     }
 
+    /// The on/off switch at `field`: Done tickets or wrapped summaries.
+    pub fn switch_mut(&mut self, field: usize) -> Option<&mut bool> {
+        match field {
+            3 => Some(&mut self.show_done),
+            5 => Some(&mut self.wrap_summaries),
+            _ => None,
+        }
+    }
+
     fn config(&self, current: &AppConfig) -> Result<AppConfig> {
         let mut config = current.clone();
         let mut team = BTreeMap::new();
@@ -126,9 +135,7 @@ pub fn handle_key(
             }) {
                 Ok(next) => {
                     *config = next;
-                    app.show_done = config.preferences.show_done;
-                    app.wrap_summaries = config.preferences.wrap_summaries;
-                    app.theme = theme::resolve(&config.preferences.theme, &config.themes);
+                    app.apply_preferences(config);
                     app.set_epics_i_care_about(config.epics_i_care_about_ordered());
                     app.settings = None;
                     app.flash = Some("Settings saved. Refreshing team...".into());
@@ -146,27 +153,25 @@ pub fn handle_key(
             2 if matches!(key, KeyCode::Right | KeyCode::Down) => {
                 state.start_tab = (state.start_tab + 1).min(4)
             }
-            3 if matches!(
-                key,
-                KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
-            ) =>
-            {
-                state.show_done = !state.show_done
-            }
-            5 if matches!(
-                key,
-                KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
-            ) =>
-            {
-                state.wrap_summaries = !state.wrap_summaries
-            }
             4 if matches!(key, KeyCode::Up | KeyCode::Left) => {
                 state.theme = state.theme.saturating_sub(1)
             }
             4 if matches!(key, KeyCode::Down | KeyCode::Right) => {
                 state.theme = (state.theme + 1).min(state.themes.len() - 1)
             }
-            _ => {}
+            field => {
+                let flips = matches!(
+                    key,
+                    KeyCode::Char(' ')
+                        | KeyCode::Left
+                        | KeyCode::Right
+                        | KeyCode::Up
+                        | KeyCode::Down
+                );
+                if let Some(on) = state.switch_mut(field).filter(|_| flips) {
+                    *on = !*on
+                }
+            }
         },
     }
     false

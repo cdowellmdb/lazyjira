@@ -1424,10 +1424,63 @@ mod tests {
                 line_with(&rows, "DEMO-5").is_some_and(|(_, lit)| *lit),
                 "{tab:?}"
             );
+            // Row 13 is the panel's bottom border, so 12 is its last inner row.
             assert!(
-                line_with(&rows, "last5").is_some_and(|(_, lit)| *lit),
+                rows[12].0.contains("last5") && rows[12].1,
                 "{tab:?}: {rows:#?}"
             );
+        }
+    }
+
+    #[test]
+    fn a_wrapped_ticket_taller_than_the_list_keeps_its_key_line_on_screen() {
+        for &tab in Tab::all() {
+            let mut tall = Ticket::for_test("DEMO-2", "In Progress");
+            tall.summary = words(80).join(" ");
+            let mut app = wrapping_app(tab, vec![Ticket::for_test("DEMO-1", "In Progress"), tall]);
+            select_ticket(&mut app, "DEMO-2");
+            let rows = draw_highlights(&app, tab, 100, 8);
+            // Row 0 is the panel's top border, so 1 is its first inner row.
+            assert!(
+                rows[1].0.contains("DEMO-2") && rows[1].1,
+                "{tab:?}: {rows:#?}"
+            );
+            assert!(rows[1].0.contains("word01"), "{tab:?}: {rows:#?}");
+        }
+    }
+
+    #[test]
+    fn a_wrapped_summarys_later_lines_are_blank_before_summarys_separator() {
+        for &tab in Tab::all() {
+            let mut long = Ticket::for_test("DEMO-1", "In Progress");
+            long.summary = words(30).join(" ");
+            let app = wrapping_app(tab, vec![long]);
+            let rows: Vec<Vec<char>> = draw_highlights(&app, tab, 120, 30)
+                .into_iter()
+                .map(|(text, _)| text.chars().collect())
+                .collect();
+            let key = rows
+                .iter()
+                .position(|row| String::from_iter(row).contains("DEMO-1"))
+                .unwrap();
+            let text = String::from_iter(&rows[key]);
+            let column = |word: &str| text[..text.find(word).unwrap()].chars().count();
+            let separator = column("word01") - 2;
+            // The list panel's left border: Filters draws its sidebar to the left of it.
+            let border = rows[key][..column("DEMO-1")]
+                .iter()
+                .rposition(|c| *c == '│')
+                .unwrap();
+            for row in &rows[key..key + 2] {
+                assert_eq!(row[separator], '│', "{tab:?}: {}", String::from_iter(row));
+            }
+            let later = &rows[key + 1];
+            assert!(
+                later[border + 1..separator].iter().all(|c| *c == ' '),
+                "{tab:?}: {}",
+                String::from_iter(later)
+            );
+            assert!(String::from_iter(later).contains("word"), "{tab:?}");
         }
     }
 }

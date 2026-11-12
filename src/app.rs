@@ -512,6 +512,14 @@ impl App {
         }
     }
 
+    /// The preferences both startup and saving settings apply: Done visibility, wrapped
+    /// summaries and the theme.
+    pub fn apply_preferences(&mut self, config: &crate::config::AppConfig) {
+        self.show_done = config.preferences.show_done;
+        self.wrap_summaries = config.preferences.wrap_summaries;
+        self.theme = crate::theme::resolve(&config.preferences.theme, &config.themes);
+    }
+
     /// Orders statuses and decides which are done or dropped from the configured `active`,
     /// `done` and `dropped` lists.
     pub fn set_status_rules(&mut self, statuses: &crate::config::StatusConfig) {

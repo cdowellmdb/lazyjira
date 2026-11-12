@@ -1,8 +1,9 @@
 use std::ops::Range;
 
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Padding};
+use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
 use crate::app::{App, GroupSelectionState, VisibleGroup};
 use crate::cache::{Epic, Status, StatusKind, StatusRules, Ticket};
@@ -234,20 +235,14 @@ pub fn muted(base: Style) -> Style {
 }
 
 /// Colors each line's selection mark: `muted` when unselected, cyan when selected or partial. Only
-/// a mark in a line's first cell is the selection, since a summary, wrapped onto a line of its
+/// a mark in a line's first span is the selection, since a summary, wrapped onto a line of its
 /// own or not, may contain one. Call after `highlight_row`.
-pub fn color_marks(lines: &mut [Line<'_>]) {
+fn color_marks(lines: &mut [Line<'_>]) {
     for line in lines {
-        let Some((index, at)) = line
-            .spans
-            .iter()
-            .take(1)
-            .enumerate()
-            .find_map(|(index, span)| span.content.find(MARKS).map(|at| (index, at)))
-        else {
+        let Some(at) = line.spans.first().and_then(|span| span.content.find(MARKS)) else {
             continue;
         };
-        let span = line.spans.remove(index);
+        let span = line.spans.remove(0);
         let (before, rest) = span.content.split_at(at);
         let mark_len = rest.chars().next().map_or(0, char::len_utf8);
         let (mark, after) = rest.split_at(mark_len);
@@ -264,7 +259,7 @@ pub fn color_marks(lines: &mut [Line<'_>]) {
             Span::styled(after.to_string(), span.style),
         ];
         line.spans.splice(
-            index..index,
+            0..0,
             parts.into_iter().filter(|part| !part.content.is_empty()),
         );
     }
@@ -305,8 +300,10 @@ pub fn ticket_cells(
         (None, Some(parent)) => (format!("{} › ", parent), ticket.summary.clone()),
         _ => (String::new(), ticket.summary.clone()),
     };
-    // Under two columns a wide character can't fit a line, so wrapping would overflow the cell.
-    if app.wrap_summaries && width >= 2 {
+    if app.wrap_summaries {
+        // Under two columns a wide character can't fit a line, so wrapping would overflow the
+        // cell; every tab keeps Summary at least 12 wide.
+        debug_assert!(width >= 2);
         let content = vec![
             Span::styled(prefix, muted(base)),
             Span::styled(summary, base),
@@ -337,32 +334,99 @@ pub fn ticket_cells(
     )
 }
 
-/// Pushes a ticket row onto `lines` and returns the lines it takes. `row` holds its cells up to
-/// and including Summary's separator, the summary's first line (from `ticket_cells`) follows, and
-/// `trailing` pushes the cells after it. Each further summary line goes on a line of its own,
-/// under Summary, with the row's separator before it and nothing in the other columns.
-pub fn push_ticket_row(
-    lines: &mut Vec<Line<'static>>,
-    mut row: Line<'static>,
-    summary: Vec<Vec<Span<'static>>>,
-    trailing: impl FnOnce(&mut Line<'static>),
-) -> Range<usize> {
-    let start = lines.len();
-    let separator = row.spans.last().cloned().unwrap_or_default();
-    let lead = " ".repeat(row.width().saturating_sub(separator.width()));
-    let mut summary = summary.into_iter();
-    row.spans.extend(summary.next().unwrap_or_default());
-    trailing(&mut row);
-    lines.push(row);
-    for more in summary {
-        let mut line = Line::from(vec![
-            Span::styled(lead.clone(), separator.style),
-            separator.clone(),
-        ]);
-        line.spans.extend(more);
-        lines.push(line);
+/// A list tab's lines and the items among them: each group header and ticket row, with the lines
+/// it takes, so `render` can highlight, scroll to and register mouse targets for whole items.
+#[derive(Default)]
+pub struct ListLines {
+    lines: Vec<Line<'static>>,
+    items: Vec<crate::mouse::Item>,
+    selected_lines: Option<Range<usize>>,
+}
+
+impl ListLines {
+    /// A line that is no item: column headings, counts, blank lines, empty-state text.
+    pub fn push(&mut self, line: impl Into<Line<'static>>) {
+        self.lines.push(line.into());
     }
-    start..lines.len()
+
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    /// A group header, one line.
+    pub fn header(&mut self, index: usize, selected: bool, line: impl Into<Line<'static>>) {
+        let start = self.lines.len();
+        self.lines.push(line.into());
+        self.item(start, index, selected, true);
+    }
+
+    /// A ticket row: `cells` up to Summary, Summary's separator, then the summary's first line
+    /// (from `ticket_cells`). Each further summary line goes on a line of its own, blank before
+    /// Summary's separator. Returns the first line, for the cells after Summary.
+    pub fn ticket(
+        &mut self,
+        index: usize,
+        selected: bool,
+        cells: Vec<Span<'static>>,
+        base: Style,
+        summary: Vec<Vec<Span<'static>>>,
+    ) -> &mut Line<'static> {
+        let start = self.lines.len();
+        let separator = Span::styled(" │ ", base.fg(Color::DarkGray));
+        let mut row = Line::from(cells);
+        let lead = " ".repeat(row.width());
+        row.spans.push(separator.clone());
+        let mut summary = summary.into_iter();
+        row.spans.extend(summary.next().unwrap_or_default());
+        self.lines.push(row);
+        for more in summary {
+            let mut line = Line::from(vec![
+                Span::styled(lead.clone(), separator.style),
+                separator.clone(),
+            ]);
+            line.spans.extend(more);
+            self.lines.push(line);
+        }
+        self.item(start, index, selected, false);
+        &mut self.lines[start]
+    }
+
+    fn item(&mut self, start: usize, index: usize, selected: bool, header: bool) {
+        let lines = start..self.lines.len();
+        if selected {
+            self.selected_lines = Some(lines.clone());
+        }
+        self.items.push(crate::mouse::Item {
+            lines,
+            index,
+            header,
+        });
+    }
+
+    /// Highlights the selected item, colors marks, scrolls so the selected item's last line is
+    /// on screen (its first, when it is taller than the screen), registers mouse targets and
+    /// draws the lines in `block`.
+    pub fn render(mut self, f: &mut ratatui::Frame, area: Rect, app: &App, block: Block<'_>) {
+        let inner = block.inner(area);
+        highlight_row(&mut self.lines, self.selected_lines.clone(), inner.width);
+        color_marks(&mut self.lines);
+        let scroll = self.selected_lines.map_or(0, |item| {
+            item.end
+                .saturating_sub(inner.height as usize)
+                .min(item.start)
+        }) as u16;
+        crate::mouse::register_rows(app, area, &self.items, scroll, &self.lines);
+        f.render_widget(
+            Paragraph::new(self.lines).block(block).scroll((scroll, 0)),
+            area,
+        );
+    }
+}
+
+impl Extend<Line<'static>> for ListLines {
+    fn extend<I: IntoIterator<Item = Line<'static>>>(&mut self, lines: I) {
+        self.lines.extend(lines);
+    }
 }
 
 /// The name a status cell or group header shows: Jira's, except that Blocked is Cursed in

@@ -1,15 +1,12 @@
-use std::ops::Range;
-
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::views::common::{
-    color_marks, fit, fold_indicator, group_marker, highlight_row, narrow_for_summary, panel,
-    push_ticket_row, status_color, status_label, status_width, ticket_cells, ticket_marker, Ages,
-    Columns, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
+    fit, fold_indicator, group_marker, narrow_for_summary, panel, status_color, status_label,
+    status_width, ticket_cells, ticket_marker, Ages, Columns, ListLines, Shared, KEY_WIDTH,
+    SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
@@ -33,9 +30,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
 
-    let mut lines: Vec<Line> = Vec::new();
-    let mut selected_visual_line: Option<Range<usize>> = None;
-    let mut mouse_rows = Vec::new();
+    let mut lines = ListLines::default();
 
     if !grouped.is_empty() {
         let mut header = Line::from(vec![
@@ -49,7 +44,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let header_w = header.width();
         lines.push(header);
         lines.extend(shared.line(header_w));
-        lines.push(Line::from(""));
+        lines.push("");
     }
 
     for group in grouped {
@@ -57,12 +52,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let indicator = fold_indicator(group.tickets.is_none());
         let marker = group_marker(app.group_selection_state(epic_key));
 
-        let header_line = lines.len()..lines.len() + 1;
-        mouse_rows.push((header_line.clone(), group.index, true));
         let is_header_selected = group.index == app.selected_index;
-        if is_header_selected {
-            selected_visual_line = Some(header_line);
-        }
 
         let header = if epic_key == NO_EPIC_KEY {
             format!("{} {} No Epic", marker, indicator)
@@ -76,7 +66,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         } else {
             Style::default().add_modifier(Modifier::BOLD)
         };
-        lines.push(Line::from(Span::styled(header, header_style)));
+        lines.header(
+            group.index,
+            is_header_selected,
+            Span::styled(header, header_style),
+        );
         let count_style = if is_header_selected {
             Style::default().fg(Color::Gray)
         } else {
@@ -88,7 +82,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         ]));
 
         let Some(tickets) = &group.tickets else {
-            lines.push(Line::from(""));
+            lines.push("");
             continue;
         };
 
@@ -119,25 +113,19 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 base,
             );
 
-            let row = Line::from(vec![
+            let cells = vec![
                 Span::styled(format!("    {:<key_w$}", key_cell), base),
                 Span::styled(" │ ", base.fg(Color::DarkGray)),
                 Span::styled(
                     fit(status_label(app, &ticket.status), status_w),
                     status_style,
                 ),
-                Span::styled(" │ ", base.fg(Color::DarkGray)),
-            ]);
-            let rows = push_ticket_row(&mut lines, row, summary, |row| {
-                shared.push_trailing_cells(ages, row, ticket, base, 0, 0)
-            });
-            mouse_rows.push((rows.clone(), *index, false));
-            if is_selected {
-                selected_visual_line = Some(rows);
-            }
+            ];
+            let row = lines.ticket(*index, is_selected, cells, base, summary);
+            shared.push_trailing_cells(ages, row, ticket, base, 0, 0);
         }
 
-        lines.push(Line::from(""));
+        lines.push("");
     }
 
     if lines.is_empty() {
@@ -146,28 +134,13 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         } else {
             "  No unassigned tickets found".to_string()
         };
-        lines.push(Line::from(Span::styled(
+        lines.push(Span::styled(
             empty_text,
             Style::default().fg(Color::DarkGray),
-        )));
+        ));
     }
 
-    highlight_row(
-        &mut lines,
-        selected_visual_line.clone(),
-        panel().inner(area).width,
-    );
-    color_marks(&mut lines);
-
-    let visible = area.height.saturating_sub(2) as usize;
-    let scroll_y = match selected_visual_line {
-        Some(item) if item.end > visible => (item.end - visible) as u16,
-        _ => 0,
-    };
-
-    crate::mouse::register_rows(app, area, &mouse_rows, scroll_y, &lines);
-    let widget = Paragraph::new(lines).block(panel()).scroll((scroll_y, 0));
-    f.render_widget(widget, area);
+    lines.render(f, area, app, panel());
 }
 
 #[cfg(test)]

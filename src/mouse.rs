@@ -324,19 +324,27 @@ fn drag(app: &mut App, point: Position) {
     }
 }
 
-/// Registers each item's targets: `rows` holds the lines it takes (a header's one, a ticket's one
-/// per summary line), its index, and whether it is a group header. Every drawn line of an item
-/// selects it; its first line also holds its mark and fold arrow.
+/// A list item as drawn: a group header or a ticket row.
+pub struct Item {
+    /// The lines it takes: a header's one, a ticket's one per summary line.
+    pub lines: std::ops::Range<usize>,
+    pub index: usize,
+    pub header: bool,
+}
+
+/// Registers each item's targets. Every drawn line of an item selects it; its first line also
+/// holds its mark and fold arrow.
 pub fn register_rows(
     app: &App,
     area: Rect,
-    rows: &[(std::ops::Range<usize>, usize, bool)],
+    items: &[Item],
     scroll: u16,
     lines: &[ratatui::text::Line<'_>],
 ) {
     let inner = crate::views::common::panel().inner(area);
-    for (item, index, header) in rows.iter().cloned() {
-        for line in item.clone() {
+    for item in items {
+        let index = item.index;
+        for line in item.lines.clone() {
             let Some(y) = line
                 .checked_sub(scroll as usize)
                 .filter(|y| *y < inner.height as usize)
@@ -346,7 +354,7 @@ pub fn register_rows(
             let rect = Rect::new(inner.x, inner.y + y as u16, inner.width, 1);
             let mut targets = app.mouse_targets.borrow_mut();
             targets.push((rect, Target::Row(index)));
-            if line != item.start {
+            if line != item.lines.start {
                 continue;
             }
             let text = lines[line]
@@ -371,7 +379,7 @@ pub fn register_rows(
                 ),
                 Target::Mark(index),
             ));
-            if header {
+            if item.header {
                 // A header's fold arrow follows its mark and a space.
                 targets.push((
                     Rect::new(
@@ -580,14 +588,11 @@ fn choose(app: &mut App, field: usize, index: usize) {
         if field == 2 {
             state.start_tab = index.min(4);
         }
-        if field == 3 {
-            state.show_done = index != 0;
+        if let Some(on) = state.switch_mut(field) {
+            *on = index != 0;
         }
         if field == 4 {
             state.theme = index.min(state.themes.len() - 1);
-        }
-        if field == 5 {
-            state.wrap_summaries = index != 0;
         }
     } else if let Some(state) = &mut app.create_ticket {
         match field {

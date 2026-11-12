@@ -1,17 +1,14 @@
-use std::ops::Range;
-
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 use std::time::Instant;
 
 use crate::app::{App, VisibleGroup};
 use crate::cache::{Epic, Ticket};
 use crate::views::common::{
-    color_marks, column_width, epic_bar, fit, fold_indicator, group_marker, highlight_row,
-    narrow_for_summary, panel, push_ticket_row, status_color, status_label, status_width,
-    ticket_cells, ticket_marker, Ages, EPIC_BAR_WIDTH, KEY_WIDTH, SEPARATOR_WIDTH,
+    column_width, epic_bar, fit, fold_indicator, group_marker, narrow_for_summary, panel,
+    status_color, status_label, status_width, ticket_cells, ticket_marker, Ages, ListLines,
+    EPIC_BAR_WIDTH, KEY_WIDTH, SEPARATOR_WIDTH,
 };
 
 /// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so
@@ -61,9 +58,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
 
-    let mut lines: Vec<Line> = Vec::new();
-    let mut selected_visual_line: Option<Range<usize>> = None;
-    let mut mouse_rows = Vec::new();
+    let mut lines = ListLines::default();
 
     if !visible_epics.is_empty() {
         let header = Line::from(vec![
@@ -77,11 +72,8 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         ]);
         let rule = "─".repeat(header.width());
         lines.push(header);
-        lines.push(Line::from(Span::styled(
-            rule,
-            Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(""));
+        lines.push(Span::styled(rule, Style::default().fg(Color::DarkGray)));
+        lines.push("");
     }
 
     for group in visible_epics {
@@ -89,12 +81,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let indicator = fold_indicator(group.tickets.is_none());
         let marker = group_marker(app.group_selection_state(&epic.key));
 
-        let header_line = lines.len()..lines.len() + 1;
-        mouse_rows.push((header_line.clone(), group.index, true));
         let is_header_selected = group.index == app.selected_index;
-        if is_header_selected {
-            selected_visual_line = Some(header_line);
-        }
 
         let inner = panel().inner(area).width as usize;
         let prefix = 2 + 1 + 1 + 10 + 2; // mark + indicator + space + key + gap
@@ -112,14 +99,18 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         } else {
             Style::default()
         };
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{} {} {:<10}", marker, indicator, epic.key),
-                header_key_style,
-            ),
-            Span::raw("  "),
-            Span::styled(fit(&epic.summary, epic_summary_w), header_summary_style),
-        ]));
+        lines.header(
+            group.index,
+            is_header_selected,
+            vec![
+                Span::styled(
+                    format!("{} {} {:<10}", marker, indicator, epic.key),
+                    header_key_style,
+                ),
+                Span::raw("  "),
+                Span::styled(fit(&epic.summary, epic_summary_w), header_summary_style),
+            ],
+        );
         let meta_style = if is_header_selected {
             Style::default().fg(Color::Gray)
         } else {
@@ -129,18 +120,18 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let bar = epic_bar(epic, app.status_rules(), EPIC_BAR_WIDTH, meta_style);
         meta.extend(app.delight.rainbow_bar(&epic.key, bar, Instant::now()));
         meta.extend(status_counts(app, epic, meta_style));
-        lines.push(Line::from(meta));
+        lines.push(meta);
 
         let Some(children) = &group.tickets else {
-            lines.push(Line::from(""));
+            lines.push("");
             continue;
         };
 
         if children.is_empty() {
-            lines.push(Line::from(Span::styled(
+            lines.push(Span::styled(
                 "    (no related tickets)",
                 Style::default().fg(Color::DarkGray),
-            )));
+            ));
         } else {
             for (index, ticket) in children {
                 let is_selected = *index == app.selected_index;
@@ -169,7 +160,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     base,
                 );
 
-                let row = Line::from(vec![
+                let cells = vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(
@@ -178,58 +169,37 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     ),
                     Span::styled(" │ ", base.fg(Color::DarkGray)),
                     Span::styled(fit(assignee(ticket), assignee_w), base),
-                    Span::styled(" │ ", base.fg(Color::DarkGray)),
-                ]);
-                let rows = push_ticket_row(&mut lines, row, summary, |_| {});
-                mouse_rows.push((rows.clone(), *index, false));
-                if is_selected {
-                    selected_visual_line = Some(rows);
-                }
+                ];
+                lines.ticket(*index, is_selected, cells, base, summary);
             }
         }
 
         // Blank line between epics
-        lines.push(Line::from(""));
+        lines.push("");
     }
 
     if lines.is_empty() {
         let empty_text = if app.epics_refreshing {
             "  Loading epics... (assembling the relationship map)"
         } else if let Some(search) = app.search.as_ref().filter(|s| !s.is_empty()) {
-            lines.push(Line::from(Span::styled(
+            lines.push(Span::styled(
                 format!("  No epics match \"{}\"", search),
                 Style::default().fg(Color::DarkGray),
-            )));
+            ));
             ""
         } else {
             "  No epics found"
         };
 
         if !empty_text.is_empty() {
-            lines.push(Line::from(Span::styled(
+            lines.push(Span::styled(
                 empty_text,
                 Style::default().fg(Color::DarkGray),
-            )));
+            ));
         }
     }
 
-    highlight_row(
-        &mut lines,
-        selected_visual_line.clone(),
-        panel().inner(area).width,
-    );
-    color_marks(&mut lines);
-
-    // Scroll to keep selected row visible
-    let visible = area.height.saturating_sub(2) as usize;
-    let scroll_y = match selected_visual_line {
-        Some(item) if item.end > visible => (item.end - visible) as u16,
-        _ => 0,
-    };
-
-    crate::mouse::register_rows(app, area, &mouse_rows, scroll_y, &lines);
-    let widget = Paragraph::new(lines).block(panel()).scroll((scroll_y, 0));
-    f.render_widget(widget, area);
+    lines.render(f, area, app, panel());
 }
 
 #[cfg(test)]
