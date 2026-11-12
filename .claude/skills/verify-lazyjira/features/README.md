@@ -34,3 +34,4 @@ Each feature file has an H1, one paragraph of user-visible behavior, then exactl
 - [Ticket detail](./ticket-detail.md): opening by search, fields, markup, prev/next, zoom. Opening driven 2026-11-11; the rest *not yet driven*.
 - [Search](./search.md): `/` search in a list tab, match and empty states. Match and empty states seen 2026-11-11; clearing *not yet driven*.
 - [Tabs and lists](./tabs-and-lists.md): the five tabs, status groups, status focus, folding, done toggle, refresh. *Not yet driven* beyond My Work loading.
+- [Wrap summaries](./wrap-summaries.md): the Settings toggle, wrapped rows in every tab, highlight and scroll. Driven 2026-11-11.
