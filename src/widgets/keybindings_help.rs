@@ -113,10 +113,10 @@ fn rows(bindings: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
     lines
 }
 
-/// The help as a sheet over the whole frame: two columns when the width allows, one below.
 /// The close hint's words after its key.
 const CLOSE_LABEL: &str = " close";
 
+/// The help as a sheet over the whole frame: two columns when the width allows, one below.
 pub fn render(f: &mut ratatui::Frame, app: &App) {
     let inner = form::render_sheet(f, app, "Keyboard shortcuts");
     let wide = inner.width >= 110;
