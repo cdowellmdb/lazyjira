@@ -169,11 +169,11 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 | `muted` | Secondary text, rules, hints |
 | `subtle` | Secondary text on the selected row, and behind buttons |
 | `selection` | Behind the selected row |
-| `accent` | Keys, focused fields, links, In Review |
+| `accent` | Keys, focused fields, @mentions, In Review |
 | `highlight` | The In Progress dot, loading and pending text, the chosen option |
 | `error` | Errors, Blocked |
 | `success` | Done |
-| `info` | Ready for Work, info markers, selected text |
+| `info` | Ready for Work, links, info markers, selected text |
 | `special` | Statuses lazyjira doesn't know |
 
 ## Keybindings
