@@ -15,7 +15,7 @@ use crate::cache::{StatusKind, StatusRules, Ticket};
 use crate::views::common::{fit, DONE_CELL};
 
 const DAY: i64 = 24 * 60 * 60;
-/// An active ticket untouched this long is dusty.
+/// An active ticket untouched this long gets a line in its detail view.
 const DUSTY_AFTER: i64 = 21 * DAY;
 /// An active ticket untouched this long is a fossil, and its row fades.
 const FOSSIL_AFTER: i64 = 90 * DAY;
@@ -48,13 +48,6 @@ struct Shipped {
     summary: String,
     /// How long it had sat untouched when it was shipped, in seconds.
     idle: Option<i64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Staleness {
-    Fresh,
-    Dusty,
-    Fossil,
 }
 
 impl Delight {
@@ -169,15 +162,7 @@ impl Delight {
     }
 
     /// How long `ticket` has sat untouched at `now` (Unix seconds). Done tickets, tickets
-    /// whose read had no `updated`, and everything while delight is off are fresh.
-    fn staleness(&self, rules: &StatusRules, ticket: &Ticket, now: i64) -> Staleness {
-        match self.idle(rules, ticket, now) {
-            Some(idle) if idle >= FOSSIL_AFTER => Staleness::Fossil,
-            Some(idle) if idle >= DUSTY_AFTER => Staleness::Dusty,
-            _ => Staleness::Fresh,
-        }
-    }
-
+    /// whose read had no `updated`, and everything while delight is off have no idle time.
     fn idle(&self, rules: &StatusRules, ticket: &Ticket, now: i64) -> Option<i64> {
         if !self.enabled || rules.is_done(&ticket.status) {
             return None;
@@ -187,7 +172,8 @@ impl Delight {
 
     /// Whether `ticket` is a fossil at `now`, so its row fades.
     pub fn is_fossil(&self, rules: &StatusRules, ticket: &Ticket, now: i64) -> bool {
-        self.staleness(rules, ticket, now) == Staleness::Fossil
+        self.idle(rules, ticket, now)
+            .is_some_and(|idle| idle >= FOSSIL_AFTER)
     }
 
     /// A line for the ticket detail about how long a stale ticket has waited.
@@ -572,30 +558,13 @@ mod tests {
     }
 
     #[test]
-    fn active_tickets_turn_dusty_at_three_weeks_and_fossil_at_ninety_days() {
-        let delight = on(None);
-        let rules = StatusRules::default();
-        let ticket = untouched("In Progress");
-        let at = |now| delight.staleness(&rules, &ticket, now);
-        assert_eq!(at(DUSTY_AFTER - 1), Staleness::Fresh);
-        assert_eq!(at(DUSTY_AFTER), Staleness::Dusty);
-        assert_eq!(at(FOSSIL_AFTER - 1), Staleness::Dusty);
-        assert_eq!(at(FOSSIL_AFTER), Staleness::Fossil);
-    }
-
-    #[test]
     fn done_tickets_and_delight_off_are_never_stale() {
         let rules = StatusRules::default();
         let done = untouched("Done");
-        assert_eq!(
-            on(None).staleness(&rules, &done, FOSSIL_AFTER),
-            Staleness::Fresh
-        );
+        assert!(!on(None).is_fossil(&rules, &done, FOSSIL_AFTER));
         let active = untouched("In Progress");
-        assert_eq!(
-            Delight::default().staleness(&rules, &active, FOSSIL_AFTER),
-            Staleness::Fresh
-        );
+        assert!(!Delight::default().is_fossil(&rules, &active, FOSSIL_AFTER));
+        assert_eq!(Delight::default().stale_quip(&rules, &active, YEAR), None);
         assert_eq!(on(None).stale_quip(&rules, &done, YEAR), None);
     }
 
