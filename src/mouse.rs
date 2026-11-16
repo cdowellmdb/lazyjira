@@ -860,6 +860,8 @@ mod tests {
         for (tab, loading, text) in [
             (Tab::MyWork, false, "No tickets found"),
             (Tab::Team, false, "No team members"),
+            (Tab::Epics, false, "No epics found"),
+            (Tab::Unassigned, false, "No unassigned tickets found"),
             (Tab::MyWork, true, "Loading..."),
             (
                 Tab::Filters,

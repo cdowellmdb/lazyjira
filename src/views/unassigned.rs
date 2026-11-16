@@ -64,12 +64,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     if lines.is_empty() {
-        let empty_text = if let Some(search) = app.search.as_ref().filter(|s| !s.is_empty()) {
-            format!("  No unassigned tickets match \"{}\"", search)
+        if let Some(search) = app.search.as_ref().filter(|s| !s.is_empty()) {
+            lines.note(format!("No unassigned tickets match \"{}\"", search));
         } else {
-            "  No unassigned tickets found".to_string()
-        };
-        lines.push(Span::styled(empty_text, style::secondary()));
+            lines.note("No unassigned tickets found");
+        }
     }
 
     lines.render(f, area);

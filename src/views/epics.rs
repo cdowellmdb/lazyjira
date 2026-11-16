@@ -109,20 +109,12 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     if lines.is_empty() {
-        let empty_text = if app.epics_refreshing {
-            "  Loading epics... (assembling the relationship map)"
+        if app.epics_refreshing {
+            lines.note("Loading epics... (assembling the relationship map)");
         } else if let Some(search) = app.search.as_ref().filter(|s| !s.is_empty()) {
-            lines.push(Span::styled(
-                format!("  No epics match \"{}\"", search),
-                style::secondary(),
-            ));
-            ""
+            lines.note(format!("No epics match \"{}\"", search));
         } else {
-            "  No epics found"
-        };
-
-        if !empty_text.is_empty() {
-            lines.push(Span::styled(empty_text, style::secondary()));
+            lines.note("No epics found");
         }
     }
 
