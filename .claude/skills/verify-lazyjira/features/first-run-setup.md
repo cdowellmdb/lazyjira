@@ -14,15 +14,18 @@ Start lazyjira with an empty `HOME`, so there is no `~/.config/lazyjira/config.t
 
 ## Driving it with verify
 
-`verify up` always starts with the demo config, so this one is driven by hand in a private tmux server, with the fake `jira` CLI first on `PATH` (it answers `jira me`). Nothing real is read.
+`verify up` always starts with the demo config, so this one is driven by hand in a private tmux server, with the fake `jira` CLI first on `PATH` (it answers `jira me`). Nothing real is read. The socket name must not collide with a harness run's (`lazyjira-verify-<run>`), so it is `lazyjira-setup-hand`. Run it with `RUN=<run>` set, after `verify <run> up` has built `target/release/lazyjira`, and wait on the screen rather than capturing right after a key: the app needs a moment to draw.
 
 ```bash
-H=$(mktemp -d); mkdir -p "$H/tmp"; T="tmux -L lazyjira-verify-setup"
+E=target/verify/${RUN:?the verify run id}/evidence; mkdir -p "$E"
+H=$(mktemp -d); mkdir -p "$H/tmp"; T="tmux -L lazyjira-setup-hand"
+wait_for() { for _ in $(seq 50); do $T capture-pane -p | grep -q -- "$1" && return; sleep 0.2; done; echo "timed out: $1" >&2; $T capture-pane -p >&2; return 1; }
 $T new-session -d -x 80 -y 24 "env HOME=$H TMPDIR=$H/tmp PATH=$PWD/docs/demo/bin:$PATH JIRA_API_TOKEN=demo $PWD/target/release/lazyjira"
-$T capture-pane -p                     # First-time setup, Project key, Continue
+wait_for 'Project key'; $T capture-pane -p | tee "$E/setup-project.txt"   # First-time setup, Project key, Continue
 $T send-keys d e m o; $T send-keys Enter
-$T send-keys P a y; $T capture-pane -p # Team name field, Back button
-$T send-keys Enter; $T capture-pane -p # Save this configuration?, Save and Start over
+wait_for 'Team name'; $T send-keys P a y; wait_for 'Pay'; $T capture-pane -p | tee "$E/setup-team.txt"   # Team name field, Back button
+$T send-keys Enter
+wait_for 'Save this configuration'; $T capture-pane -p | tee "$E/setup-confirm.txt"   # Save and Start over
 $T kill-server; rm -rf "$H"
 ```
 

@@ -32,7 +32,7 @@ Preconditions:
 - **Filters** (*not yet driven*). `$V <run> keys Tab`, `$V <run> wait 'My bugs'`, `$V <run> keys Enter`, `$V <run> wait 'DEMO-205'`. My bugs lists DEMO-102 and DEMO-205.
 - **Status focus** (*not yet driven*). Back on My Work, `$V <run> keys f`. Only the first status group shows. `F` steps back, and cycling past the last returns to all.
 - **Narrow.** `tmux -L lazyjira-verify-<run> resize-window -x 80 -y 24` on My Work: no Epic or Labels column, the summaries whole (`Add saved payment methods to checkout`), the age at the right edge and `? more` in the footer. `snap tabs-narrow-80`. At `-x 120` the Epic (`Checkout redesign`) and Labels columns are back; Team keeps both at 120 and loses Labels at 119. At `-x 60` the top bar has no Settings button. Resize back to `-x 160 -y 45` after.
-- **Settings at 80x24.** `$V <run> keys S` at 80x24 shows all five Starting tab options (`Filters` last) and all five themes (`catppuccin` last). `snap settings-80`, then `keys Escape`.
+- **Settings at 80x24.** `$V <run> keys S` at 80x24 shows all five Starting tab options (`Filters` last) and the first five themes (`default` to `catppuccin`); `solarized-light`, `spooky` and the demo config's custom `ocean` are below the fold. `snap settings-80`, then `keys Escape`.
 - **Help's close hint.** `$V <run> keys ?` at 80x24 (help scrolls): only `Esc/? close` on the last row closes it, not the scroll hint before it. The harness has no mouse, so this is proven by `ui_tests::sheets`, not driven.
 - **Refresh.** `$V <run> keys r`. The list stays on screen while it reloads.
 
