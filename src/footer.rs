@@ -173,9 +173,12 @@ pub fn render_pairs(f: &mut ratatui::Frame, app: &App, area: Rect, pairs: Pairs)
         return;
     }
     let row = Rect::new(area.x, area.y, area.width, 1);
+    f.render_widget(
+        ratatui::widgets::Paragraph::new(pairs_line(pairs, row.width)),
+        row,
+    );
     let hints = pair_hints(pairs);
     let kept = choose(&hints, "", row.width as usize).kept;
-    f.render_widget(ratatui::widgets::Paragraph::new(hints_line(&kept)), row);
     let mut x = row.x.saturating_add(1);
     let mut targets = app.mouse_targets.borrow_mut();
     for hint in kept {
