@@ -69,7 +69,7 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 - **Grouped rows, selection, tab switching, cache mutation helpers, mouse targets or form fields**: "Visible rows"
 - **Sub-tasks, parents or folding**: "Sub-tasks nest under their parent"
 - **The event loop, or anything that should change the screen without a key press**: "The event loop sleeps until woken"
-- **Colors or themes**: "Themes recolor the finished frame"
+- **Colors, themes, borders, spacing, footers, overlays or glyphs**: [docs/tui-style.md](docs/tui-style.md), then "Themes recolor the finished frame"
 - **Confetti, the quit receipt, stale marks or spooky season**: the `delight.rs` bullet of "Current UX behavior"
 - **Columns, marks, Team including the current user, done-group folding, done ordering (`order_done`) or the detail overlay's scrolling**: "Current UX behavior"
 
