@@ -6,6 +6,12 @@ use ratatui::text::Span;
 use super::{link_style, muted};
 use crate::style;
 
+/// The characters a backslash escapes. `\\` is a forced line break, and a backslash before any
+/// other character is kept, so `C:\dir` reads as written.
+pub(super) fn is_escapable(c: char) -> bool {
+    "()[]{}*_+-|!^~?".contains(c)
+}
+
 /// Parses inline markup: `*bold*`, `_italic_`, `-strike-`, `+underline+`,
 /// `{{monospace}}`, `{color:red}text{color}`, `[text|url]`, `[~mention]`,
 /// `!image.png!`, bare URLs, `--`/`---` dashes and `(/)`-style icons.
@@ -63,6 +69,14 @@ impl Inline<'_> {
         (from..self.chars.len()).find(|&j| self.starts_with(j, pat))
     }
 
+    fn in_bare_url(&self, at: usize) -> bool {
+        let Some(&c) = self.chars.get(at) else {
+            return false;
+        };
+        let escape = c == '\\' && self.chars.get(at + 1).is_some_and(|n| is_escapable(*n));
+        !c.is_whitespace() && !"<>\"|[]".contains(c) && !escape
+    }
+
     fn at_word_start(&self, i: usize) -> bool {
         i == 0 || !self.chars[i - 1].is_alphanumeric()
     }
@@ -85,6 +99,12 @@ impl Inline<'_> {
     /// if `chars[i]` is plain text.
     fn step(&mut self, i: usize) -> Option<usize> {
         let c = self.chars[i];
+
+        if c == '\\' {
+            let next = *self.chars.get(i + 1).filter(|n| is_escapable(**n))?;
+            self.buf.push(next);
+            return Some(i + 2);
+        }
 
         if self.starts_with(i, "{{") {
             let end = self.find(i + 2, "}}")?;
@@ -148,10 +168,7 @@ impl Inline<'_> {
             && (self.starts_with(i, "https://") || self.starts_with(i, "http://"))
         {
             let mut end = i;
-            while end < self.chars.len()
-                && !self.chars[end].is_whitespace()
-                && !"<>\"|[]".contains(self.chars[end])
-            {
+            while self.in_bare_url(end) {
                 end += 1;
             }
             while end > i && ".,;:!?)'".contains(self.chars[end - 1]) {
@@ -206,6 +223,7 @@ impl Inline<'_> {
         (i + 2..self.chars.len()).find(|&j| {
             self.chars[j] == marker
                 && !self.chars[j - 1].is_whitespace()
+                && !(is_escapable(marker) && self.chars[j - 1] == '\\')
                 && self.chars.get(j + 1).is_none_or(|n| !n.is_alphanumeric())
         })
     }

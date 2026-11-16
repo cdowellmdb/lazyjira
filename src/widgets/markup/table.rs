@@ -2,6 +2,7 @@
 
 use ratatui::text::{Line, Span};
 
+use super::inline::is_escapable;
 use super::{bold, inline, muted, spans_width, text_style, Renderer};
 
 impl Renderer {
@@ -70,6 +71,14 @@ pub(super) fn parse_table_row(row: &str) -> Vec<(bool, String)> {
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
+        if c == '\\' && chars.get(i + 1).is_some_and(|n| is_escapable(*n)) {
+            if let Some((_, text)) = current.as_mut() {
+                text.push(c);
+                text.push(chars[i + 1]);
+            }
+            i += 2;
+            continue;
+        }
         if c == '|' && depth == 0 {
             let header = chars.get(i + 1) == Some(&'|');
             if let Some(cell) = current.take() {

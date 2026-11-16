@@ -243,3 +243,87 @@ fn forced_line_breaks() {
     let lines = render("one\\\\two", 40);
     assert_eq!(text(&lines), vec!["one", "two"]);
 }
+
+fn plain(source: &str) -> String {
+    let spans = inline(source, text_style());
+    assert!(spans.iter().all(|s| s.style == text_style()), "{spans:?}");
+    text(&[Line::from(spans)]).remove(0)
+}
+
+#[test]
+fn a_backslash_before_a_wiki_special_character_drops_out_and_the_character_is_plain() {
+    for (source, shown) in [
+        ("\\(see DEMO-190)", "(see DEMO-190)"),
+        ("a\\)", "a)"),
+        ("\\[x\\]", "[x]"),
+        ("\\{x\\}", "{x}"),
+        ("\\*", "*"),
+        ("\\_", "_"),
+        ("\\+", "+"),
+        ("\\-", "-"),
+        ("a\\|b", "a|b"),
+        ("\\!", "!"),
+        ("\\^", "^"),
+        ("\\~", "~"),
+        ("\\?", "?"),
+    ] {
+        assert_eq!(plain(source), shown, "{source}");
+    }
+}
+
+#[test]
+fn a_backslash_before_anything_else_stays_literal() {
+    for source in [
+        "C:\\dir\\file",
+        "\\d+",
+        "a\\ b",
+        "\\#",
+        "\\&",
+        "\\.",
+        "\\%",
+        "x\\",
+    ] {
+        assert_eq!(plain(source), source, "{source}");
+    }
+}
+
+#[test]
+fn an_escaped_marker_does_not_start_emphasis_a_link_or_code() {
+    assert_eq!(plain("\\*not bold\\*"), "*not bold*");
+    assert_eq!(plain("\\_not italic\\_"), "_not italic_");
+    assert_eq!(plain("\\-not struck\\-"), "-not struck-");
+    assert_eq!(plain("\\+not underlined\\+"), "+not underlined+");
+    assert_eq!(plain("\\[a|not a url\\]"), "[a|not a url]");
+    assert_eq!(plain("\\{{not code}}"), "{{not code}}");
+    assert_eq!(plain("\\{color:red}x"), "{color:red}x");
+    let spans = inline("*a \\* b*", text_style());
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].content, "a * b");
+    assert_eq!(spans[0].style, text_style().add_modifier(Modifier::BOLD));
+}
+
+#[test]
+fn escapes_hold_in_paragraphs_and_list_items_but_not_in_code() {
+    let lines = render("\\* not a list\n* \\(item)\n{code}\n\\(x\\)\n{code}", 40);
+    assert_eq!(text(&lines), vec!["* not a list", "• (item)", "│ \\(x\\)"]);
+}
+
+#[test]
+fn an_escaped_pipe_stays_in_its_table_cell() {
+    assert_eq!(
+        table::parse_table_row("|a\\|b|c \\[d\\|e\\] f|"),
+        vec![
+            (false, "a\\|b".to_string()),
+            (false, "c \\[d\\|e\\] f".to_string())
+        ]
+    );
+    let lines = render("||H||\n|a\\|b|", 40);
+    assert_eq!(text(&lines), vec!["H", "───", "a|b"]);
+}
+
+#[test]
+fn a_bare_link_ends_where_an_escape_begins() {
+    let spans = inline("see http://b.io\\) now", text_style());
+    assert_eq!(span(&spans, "http://b.io").style, link_style());
+    assert_eq!(text(&[Line::from(spans)]), vec!["see http://b.io) now"]);
+}
