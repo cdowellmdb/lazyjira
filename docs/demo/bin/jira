@@ -198,6 +198,33 @@ def run_query(jql):
     return [t for t in issues if evaluate(t, jql)]
 
 
+# Tickets with a description of their own, which shows inline code, an escape, a quote, bullets
+# and an aligned and a too-wide table. Every other ticket gets the generic one below.
+DESCRIPTIONS = {
+    "DEMO-201": (
+        "h2. Problem statement\n"
+        "Facet queries on the catalog index take over 800 ms once a result set passes 5,000 hits. "
+        "The slow path is {{facet_counts}}, which runs once per facet instead of once per query. "
+        "Wildcards such as {{title:*}} skip the cache \\(see DEMO-190), so they make it worse.\n\n"
+        "h2. Findings\n"
+        "||Query||Hits||Time||Cached||\n"
+        "|title:* red|12,400|1.9 s|no|\n"
+        "|brand:Acme|4,100|0.3 s|yes|\n\n"
+        "h2. Proposed fix\n"
+        "bq. Count every facet in one pass and cache the result per query.\n\n"
+        "* Batch the counts\n"
+        "* Key the cache on the filter set\n"
+        "* Drop the {{title:*}} special case\n\n"
+        "h2. Slow cases\n"
+        "||Query||Cause||Seen||\n"
+        "|title:* red|wildcard skips the cache and counts every facet again|"
+        "12,400 hits in 1.9 s, no cache hit|\n"
+        "|brand:Acme|none, served from cache|4,100 hits in 0.3 s|\n\n"
+        "See the [search notes|https://example.com/wiki/SEARCH-7] and C:\\logs\\facets for the traces."
+    ),
+}
+
+
 def person(email):
     if not email:
         return None
@@ -243,7 +270,7 @@ def issue_payload(t):
         "fields": {
             **base_fields(t),
             "reporter": person(reporter),
-            "description": (
+            "description": DESCRIPTIONS.get(t["key"]) or (
                 "h2. Context\n"
                 f"{t['summary']}. Customers hit this during *peak checkout traffic*; "
                 "see the [incident review|https://example.com/wiki/INC-42] for details.\n\n"
