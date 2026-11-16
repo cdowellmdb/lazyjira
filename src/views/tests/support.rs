@@ -75,3 +75,51 @@ pub fn labelled(key: &str, epic: Option<&str>, labels: &[&str]) -> Ticket {
     ticket.labels = labels.iter().map(|l| l.to_string()).collect();
     ticket
 }
+
+/// The mockup's My Work: DEMO-101 with its sub-task DEMO-111 under In Progress, DEMO-201
+/// under Ready for Work, DEMO-102 under In Review. The epics differ, so Epic shows.
+pub fn mockup_app() -> App {
+    let ticket = |key: &str, summary: &str, status: &str, epic: &str, labels: &[&str]| {
+        let mut ticket = Ticket::for_test(key, status);
+        ticket.summary = summary.into();
+        ticket.epic_name = Some(epic.into());
+        ticket.labels = labels.iter().map(|label| label.to_string()).collect();
+        ticket
+    };
+    let mut child = ticket(
+        "DEMO-111",
+        "Migrate stored cards to the new vault",
+        "In Progress",
+        "Checkout redesign",
+        &["checkout"],
+    );
+    child.parent_key = Some("DEMO-101".into());
+    let mut app = App::new();
+    app.loading = false;
+    app.cache.my_tickets = vec![
+        ticket(
+            "DEMO-101",
+            "Add saved payment methods to checkout",
+            "In Progress",
+            "Checkout redesign",
+            &["checkout", "frontend"],
+        ),
+        child,
+        ticket(
+            "DEMO-201",
+            "Profile slow facet queries",
+            "Ready for Work",
+            "Search performance",
+            &["search", "perf"],
+        ),
+        ticket(
+            "DEMO-102",
+            "Fix tax rounding for multi-currency carts",
+            "In Review",
+            "Checkout redesign",
+            &["checkout", "billing"],
+        ),
+    ];
+    app.mark_cache_changed();
+    app
+}

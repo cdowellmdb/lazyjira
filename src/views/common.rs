@@ -621,6 +621,21 @@ pub fn status_label<'a>(app: &App, status: &'a str) -> &'a str {
     }
 }
 
+/// The width Summary keeps before a list gives room to Epic or Labels: a summary of about seven
+/// words. Below it those columns are not drawn, so an 80 column terminal shows Key, Summary and
+/// Updated (and Status where a tab has it).
+pub const SUMMARY_MIN: usize = 40;
+
+/// The columns an Epic cell of `epic_w` and a Labels cell of `labels_w` take, with their gaps; a
+/// width of 0 is a column not drawn and takes none.
+pub fn cells_width(epic_w: usize, labels_w: usize) -> usize {
+    [epic_w, labels_w]
+        .into_iter()
+        .filter(|&w| w > 0)
+        .map(|w| COLUMN_GAP + w)
+        .sum()
+}
+
 /// The columns a tab has that `Shared` may hide, which decides what its shared line names.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Columns {
@@ -679,17 +694,29 @@ impl Shared {
         }
     }
 
-    /// The summary's width once the hidden Epic and Labels columns, and their separators, give
-    /// it theirs. For `Columns::EpicAndLabels` tabs, whose widths count both columns.
-    pub fn summary_width(&self, summary_w: usize, epic_w: usize, labels_w: usize) -> usize {
-        [(self.epic_column, epic_w), (self.labels_column, labels_w)]
-            .into_iter()
-            .filter(|(shown, _)| !shown)
-            .fold(summary_w, |w, (_, hidden)| w + hidden + COLUMN_GAP)
+    /// The Epic and Labels widths (0 for a column not drawn) a list has room for, with `room`
+    /// columns for Summary and these two. A column is drawn at its full width or not at all:
+    /// Labels is dropped first, then Epic, until Summary keeps `SUMMARY_MIN`. A column every row
+    /// shares needs no room, and a width of 0 in `epic_w` or `labels_w` has none to give.
+    pub fn trailing_widths(&self, room: usize, epic_w: usize, labels_w: usize) -> (usize, usize) {
+        let wanted = |shown: bool, width: usize| if shown { width } else { 0 };
+        let (epic, labels) = (
+            wanted(self.epic_column, epic_w),
+            wanted(self.labels_column, labels_w),
+        );
+        let fits = |extra: usize| room >= SUMMARY_MIN + extra;
+        if fits(cells_width(epic, labels)) {
+            (epic, labels)
+        } else if fits(cells_width(epic, 0)) {
+            (epic, 0)
+        } else {
+            (0, 0)
+        }
     }
 
-    /// Pushes a row's trailing cells, a `COLUMN_GAP` apart: Epic (when shown), Updated
-    /// (`Ages::updated_cell`), and Labels (when shown), muted in `base`, the row's style.
+    /// Pushes a row's trailing cells, a `COLUMN_GAP` apart: Epic (when `epic_w` is not 0), Updated
+    /// (`Ages::updated_cell`), and Labels (when `labels_w` is not 0), muted in `base`, the row's
+    /// style.
     pub fn push_trailing_cells(
         &self,
         ages: Ages,
@@ -700,14 +727,14 @@ impl Shared {
         labels_w: usize,
     ) {
         let gap = Span::raw(" ".repeat(COLUMN_GAP));
-        if self.epic_column {
+        if epic_w > 0 {
             let epic = ticket.epic_name.as_deref().unwrap_or("-");
             row.push_span(gap.clone());
             row.push_span(Span::styled(fit(epic, epic_w), muted(base)));
         }
         row.push_span(gap.clone());
         row.push_span(Span::styled(ages.updated_cell(ticket), muted(base)));
-        if self.labels_column {
+        if labels_w > 0 {
             row.push_span(gap);
             row.push_span(Span::styled(
                 fit(&self.row_labels(ticket), labels_w),
