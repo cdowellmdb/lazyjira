@@ -178,8 +178,7 @@ impl Inline<'_> {
 
         if c == '[' {
             let end = self.find(i + 1, "]")?;
-            let inner: String = self.chars[i + 1..end].iter().collect();
-            return self.link(&inner).then_some(end + 1);
+            return self.link(i + 1, end).then_some(end + 1);
         }
 
         if c == '!' && self.at_word_start(i) {
@@ -269,28 +268,37 @@ impl Inline<'_> {
         })
     }
 
-    /// Renders the inside of `[...]`, returning false if it isn't a link.
-    fn link(&mut self, inner: &str) -> bool {
+    /// Renders `chars[from..to]`, the inside of `[...]`, returning false if it isn't a link. An
+    /// escaped `|` or `]` belongs to the text or the target.
+    fn link(&mut self, from: usize, to: usize) -> bool {
+        let chars = self.chars;
+        let inner: String = chars[from..to].iter().collect();
         if let Some(user) = inner.strip_prefix('~') {
-            let user = user.strip_prefix("accountid:").unwrap_or(user);
+            let user = unescape(user);
+            let user = user.strip_prefix("accountid:").unwrap_or(&user);
             self.emit(format!("@{}", user), Style::default().fg(Color::Cyan));
             return true;
         }
-        if let Some((text, rest)) = inner.split_once('|') {
-            let url = rest.split('|').next().unwrap_or("").trim();
+        if let Some(bar) = self.find(from, "|").filter(|&bar| bar < to) {
+            let url_end = self.find(bar + 1, "|").filter(|&end| end < to);
+            let url: String = chars[bar + 1..url_end.unwrap_or(to)].iter().collect();
+            let url = unescape(&url);
+            let url = url.trim();
             self.flush();
+            let text: String = chars[from..bar].iter().collect();
             let text = text.trim();
             if text.is_empty() {
                 self.emit(url.to_string(), style::link());
             } else {
                 self.out.extend(inline(text, style::link()));
-                if !url.is_empty() && url != text {
+                if !url.is_empty() && url != unescape(text) {
                     self.emit(format!(" ({})", url), style::secondary());
                 }
             }
             return true;
         }
-        let target = inner.trim();
+        let target = unescape(&inner);
+        let target = target.trim();
         if target.contains("://") || target.starts_with("mailto:") {
             self.emit(target.to_string(), style::link());
             return true;

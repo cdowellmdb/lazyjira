@@ -596,3 +596,24 @@ fn escaped_characters_in_double_brace_code_show_plain_and_an_escaped_brace_does_
     let lines = render("{code}\n{{\\{x\\}}}\n{code}", 20);
     assert_eq!(text(&lines), vec!["│ {{\\{x\\}}}"]);
 }
+
+#[test]
+fn an_escaped_pipe_or_bracket_belongs_to_the_text_of_a_link_and_an_escaped_bar_to_its_target() {
+    for (source, shown, link) in [
+        ("[a\\|b|http://x]", "a|b (http://x)", "a|b"),
+        ("[a\\]b|http://x]", "a]b (http://x)", "a]b"),
+        ("[a|http://x/p\\_q]", "a (http://x/p_q)", "a"),
+        ("[http://x/a\\_b]", "http://x/a_b", "http://x/a_b"),
+        ("[a\\|b|a|b]", "a|b (a)", "a|b"),
+    ] {
+        let spans = inline(source, style::primary());
+        assert_eq!(text(&[Line::from(spans.clone())]), vec![shown], "{source}");
+        assert_eq!(spans[0].style, style::link(), "{source}");
+        assert_eq!(spans[0].content, link, "{source}");
+    }
+    assert_eq!(plain("[a\\]"), "[a]");
+    assert_eq!(
+        inline("[~a\\_b]", style::primary()),
+        vec![Span::styled("@a_b", Style::default().fg(Color::Cyan))]
+    );
+}
