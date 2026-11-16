@@ -15,6 +15,21 @@ pub fn secondary() -> Style {
     Style::default().fg(Color::DarkGray)
 }
 
+/// Secondary text on the selected row, where `secondary` would vanish into the highlight.
+pub fn subtle() -> Style {
+    Style::default().fg(Color::Gray)
+}
+
+/// Errors and failed actions.
+pub fn error() -> Style {
+    Style::default().fg(Color::Red)
+}
+
+/// What is pending or in progress: the search line, a move under way, "Loading...".
+pub fn warning() -> Style {
+    Style::default().fg(Color::Yellow)
+}
+
 /// Focus, links, the active tab.
 pub fn accent() -> Style {
     Style::default().fg(Color::Cyan)
@@ -50,7 +65,7 @@ pub fn status_color(status: &str, rules: &StatusRules) -> Color {
         StatusKind::Active => {}
     }
     match Status::from_str(status) {
-        Status::NeedsTriage => Color::Reset,
+        Status::NeedsTriage => Color::Magenta,
         Status::ReadyForWork => Color::Blue,
         Status::InProgress => Color::Yellow,
         Status::ToDo => Color::Reset,
@@ -76,6 +91,24 @@ mod tests {
     }
 
     #[test]
+    fn each_status_dot_has_the_color_the_style_guide_gives_it() {
+        let rules = StatusRules::default();
+        for (name, color) in [
+            ("In Progress", Color::Yellow),
+            ("Ready for Work", Color::Blue),
+            ("Needs Triage", Color::Magenta),
+            ("In Review", Color::Cyan),
+            ("Blocked", Color::Red),
+            ("Done", Color::Green),
+            ("To Do", Color::Reset),
+            ("Waiting for Approval", Color::Magenta),
+        ] {
+            assert_eq!(status_color(name, &rules), color, "{name}");
+            assert_eq!(status(name, &rules).fg, Some(color), "{name}");
+        }
+    }
+
+    #[test]
     fn a_dropped_status_stays_readable_on_the_selected_row() {
         // Rows draw a selected status cell on dark gray, so its text can't be dark gray too.
         let rules = StatusRules::default();
@@ -89,6 +122,9 @@ mod tests {
         let styles = [
             primary(),
             secondary(),
+            subtle(),
+            error(),
+            warning(),
             accent(),
             key_hint(),
             heading(),

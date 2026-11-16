@@ -22,7 +22,7 @@ Preconditions:
 
 - Fresh run. DEMO-205 is assigned to Alex Rivera.
 
-- **Open the ticket.** `$V <run> keys /`, `$V <run> type DEMO-205`, `$V <run> wait 'NEEDS TRIAGE \(1\)'`, `$V <run> keys Down`, `$V <run> keys Enter`, `$V <run> wait 'Status +●'`.
+- **Open the ticket.** `$V <run> keys /`, `$V <run> type DEMO-205`, `$V <run> wait '● Needs Triage 1'`, `$V <run> keys Down`, `$V <run> keys Enter`, `$V <run> wait 'Status +●'`.
 - **Open the comment form.** `$V <run> keys C`, `$V <run> wait 'Comment on DEMO-205'`. The form shows `Submit    Cancel    Editor`.
 - **Submit.** `$V <run> type "Verified via tmux"`, `$V <run> keys Enter`, `$V <run> wait 'Comment added to DEMO-205'`, `$V <run> snap comment-submit`.
 - **Open the assign picker.** `$V <run> keys a`, `$V <run> wait 'Assign DEMO-205'`. It lists Alex Rivera, Jordan Lee, Priya Shah, Sam Chen and `Unassigned (__unassigned__)`.

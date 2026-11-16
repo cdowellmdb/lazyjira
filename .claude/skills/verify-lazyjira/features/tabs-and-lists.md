@@ -5,7 +5,7 @@ A user switches between My Work, Team, Epics, Unassigned and Filters. Each lists
 ## Sub-features
 
 - `tabs-switch` moves between tabs with `Tab` / `S-Tab`.
-- `tabs-groups` shows status groups like `IN PROGRESS (2)`, with sub-tasks under their parents.
+- `tabs-groups` shows status groups like `● In Progress 2`, with sub-tasks under their parents.
 - `tabs-focus` focuses one status with `f` / `F`, then back to all.
 - `tabs-fold` folds the current group with `z`, every other group with `Z`.
 - `tabs-done` toggles done statuses with `d`.
@@ -24,7 +24,7 @@ Preconditions:
 
 - Fresh run, on My Work.
 
-- **My Work.** `$V <run> wait 'IN PROGRESS \(2\)'`. DEMO-101 shows with sub-task DEMO-111 under it, and DEMO-112 reads `DEMO-101 › Add card tokenization endpoint`. `$V <run> snap tabs-my-work`.
+- **My Work.** `$V <run> wait '● In Progress 2'`. DEMO-101 shows with sub-task DEMO-111 under it, and DEMO-112 reads `DEMO-101 › Add card tokenization endpoint`. `$V <run> snap tabs-my-work`.
 - **Team** (*not yet driven*). `$V <run> keys Tab`, `$V <run> wait 'DEMO-204'`. Tickets from Priya, Sam and Jordan show.
 - **Epics** (*not yet driven*). `$V <run> keys Tab`, `$V <run> wait 'Checkout redesign'`. DEMO-100, DEMO-200 and DEMO-300 show with progress.
 - **Unassigned** (*not yet driven*). `$V <run> keys Tab`, `$V <run> wait 'DEMO-400'`. DEMO-106, DEMO-206, DEMO-304 and DEMO-400 show.

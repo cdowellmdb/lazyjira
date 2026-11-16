@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
@@ -12,43 +12,65 @@ use crate::style;
 use crate::subtasks::Family;
 use unicode_width::UnicodeWidthStr;
 
-/// Width of a row's checkbox-and-key cell: the checkbox, a key of up to ten characters, and the
-/// indent of a sub-task drawn under its parent.
-pub const KEY_WIDTH: usize = 16;
+/// Cells before a row's content: a margin, the `›` marker (a header's glyph), and a space.
+pub const GUTTER: usize = 3;
+/// The column in the gutter of a row's `›` and a header's dot or fold arrow.
+pub const GLYPH_COLUMN: u16 = 1;
+/// A row's checkbox and the space after it, drawn only while tickets are marked.
+pub const CHECKBOX_WIDTH: usize = 2;
+/// Blank cells between two columns.
+pub const COLUMN_GAP: usize = 2;
+/// A Status cell's dot and the space after it.
+pub const STATUS_DOT_WIDTH: usize = 2;
+/// The `└ ` before a sub-task's key, and the two cells of indent before it.
+const CHILD_PREFIX: &str = "  └ ";
 
 pub fn panel() -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title_style(Style::default().fg(Color::Reset))
+        .border_style(style::secondary())
+        .title_style(style::primary())
         .padding(Padding::horizontal(1))
 }
 
+/// The arrow of a folded group or parent, and of an open one.
+const FOLDED: &str = "▶";
+const OPEN: &str = "▼";
+
 pub fn fold_indicator(collapsed: bool) -> &'static str {
     if collapsed {
-        "▶"
+        FOLDED
     } else {
-        "▼"
+        OPEN
     }
 }
 
-/// Highlights the selected item's `lines`, each to `width`, with its first line's first cell bold.
+/// The columns before a row's key: the gutter, and the checkbox while tickets are `marking`.
+pub fn lead_width(marking: bool) -> usize {
+    GUTTER + if marking { CHECKBOX_WIDTH } else { 0 }
+}
+
+/// The `GUTTER` cells of a line: `glyph` in `GLYPH_COLUMN`, blanks around it.
+pub fn gutter(glyph: Span<'static>) -> Vec<Span<'static>> {
+    let margin = GLYPH_COLUMN as usize;
+    vec![
+        Span::raw(" ".repeat(margin)),
+        glyph,
+        Span::raw(" ".repeat(GUTTER - margin - 1)),
+    ]
+}
+
+/// Tints the selected item's `lines`, each to `width`.
 pub fn highlight_row(lines: &mut [Line<'_>], selected: Option<Range<usize>>, width: u16) {
     let Some(selected) = selected else {
         return;
     };
-    let first = selected.start;
-    for (at, line) in lines.iter_mut().enumerate().take(selected.end).skip(first) {
+    for line in &mut lines[selected] {
         line.spans.push(Span::raw(
             " ".repeat((width as usize).saturating_sub(line.width())),
         ));
         line.style = line.style.patch(style::selected_row());
-        if at == first {
-            if let Some(key) = line.spans.first_mut() {
-                key.style = key.style.add_modifier(Modifier::BOLD);
-            }
-        }
     }
 }
 
@@ -60,7 +82,7 @@ pub const DONE_CELL: &str = "█";
 
 /// An epic's progress bar, `width` cells: a run per status in `Epic::status_counts`' order, as
 /// wide as its share of the children (see `share_cells`), `DONE_CELL` when the status is done,
-/// `░` when it's dropped and `▓` when it's active, in the status's color. An epic with no
+/// `░` when it's dropped and `▒` when it's active, in the status's color. An epic with no
 /// children draws `·` in `style`.
 pub fn epic_bar(
     epic: &Epic,
@@ -77,7 +99,7 @@ pub fn epic_bar(
     for ((status, _), cells) in counts.iter().zip(share_cells(&sizes, width)) {
         let mark = match rules.kind(status) {
             StatusKind::Done => DONE_CELL,
-            StatusKind::Active => "▓",
+            StatusKind::Active => "▒",
             StatusKind::Dropped => "░",
         };
         spans.push(Span::styled(
@@ -186,6 +208,7 @@ const SELECTED: char = '☒';
 const PARTIAL: char = '⊟';
 /// The selection marks, each one column wide (East Asian Width "N"): unselected, selected, and a
 /// group with some of its tickets selected.
+#[cfg(test)]
 pub const MARKS: [char; 3] = [UNSELECTED, SELECTED, PARTIAL];
 
 pub fn ticket_marker(selected: bool) -> char {
@@ -204,69 +227,87 @@ pub fn group_marker(state: GroupSelectionState) -> char {
     }
 }
 
-/// `base` in the muted color: gray on the selected row (`base` has its background), so it shows
-/// against the highlight, and dark gray elsewhere.
+/// `base` in the muted color: the subtle one on the selected row (`base` has its background), so
+/// it shows against the highlight, and not bold.
 pub fn muted(base: Style) -> Style {
-    base.fg(if base.bg.is_some() {
-        Color::Gray
-    } else {
-        Color::DarkGray
-    })
+    base.remove_modifier(Modifier::BOLD)
+        .patch(if base.bg.is_some() {
+            style::subtle()
+        } else {
+            style::secondary()
+        })
 }
 
-/// Colors each line's selection mark: `muted` when unselected, cyan when selected or partial. Only
-/// a mark in a line's first span is the selection, since a summary, wrapped onto a line of its
-/// own or not, may contain one. Call after `highlight_row`.
-fn color_marks(lines: &mut [Line<'_>]) {
-    for line in lines {
-        let Some(at) = line.spans.first().and_then(|span| span.content.find(MARKS)) else {
-            continue;
-        };
-        let span = line.spans.remove(0);
-        let (before, rest) = span.content.split_at(at);
-        let mark_len = rest.chars().next().map_or(0, char::len_utf8);
-        let (mark, after) = rest.split_at(mark_len);
-        // The mark's style with the row's, so `muted` sees the highlight.
-        let row = line.style.patch(span.style);
-        let mark_style = if mark.starts_with(UNSELECTED) {
-            muted(row)
-        } else {
-            row.patch(style::accent())
-        };
-        let parts = [
-            Span::styled(before.to_string(), span.style),
-            Span::styled(mark.to_string(), mark_style),
-            Span::styled(after.to_string(), span.style),
-        ];
-        line.spans.splice(
-            0..0,
-            parts.into_iter().filter(|part| !part.content.is_empty()),
-        );
+/// The base style of a row or header: the selected row's tint, or the plain foreground.
+pub fn tint(selected: bool) -> Style {
+    if selected {
+        style::selected_row()
+    } else {
+        style::primary()
     }
 }
 
-/// A ticket row's key and summary cells, given its place in a parent's family. A sub-task under
-/// its parent is indented, and a parent shows whether its sub-tasks are folded, with how many are
-/// hidden. A sub-task whose parent is elsewhere leads its summary with the parent's key, muted so
-/// the summary reads first (gray on the selected row, as other muted cells are). The summary is
-/// drawn in `base`, one line truncated and padded to `width`, or, with `App::wrap_summaries`,
-/// word-wrapped onto as many lines as it needs, each padded to `width`.
+/// A selection mark: muted when unselected, the accent when selected or partial.
+fn mark_span(mark: char, row: Style) -> Span<'static> {
+    Span::styled(
+        mark.to_string(),
+        if mark == UNSELECTED {
+            muted(row)
+        } else {
+            row.patch(style::accent())
+        },
+    )
+}
+
+/// A ticket row's key cell and the column in it of its fold arrow, if it has one.
+pub struct KeyCell {
+    pub text: String,
+    pub fold: Option<usize>,
+}
+
+/// A ticket row's key cell: a sub-task under its parent leads with `└` and two cells of indent,
+/// and a parent ends with the arrow that says whether its sub-tasks are `folded`.
+fn key_cell(family: Option<Family>, key: &str, folded: bool) -> KeyCell {
+    let (text, fold) = match family {
+        Some(Family::Child) => (format!("{CHILD_PREFIX}{key}"), None),
+        Some(Family::Parent(_)) => (
+            format!("{key} {}", fold_indicator(folded)),
+            Some(key.width() + 1),
+        ),
+        None => (key.to_string(), None),
+    };
+    KeyCell { text, fold }
+}
+
+/// The Key column's width: the widest key cell among the rows `groups` draw.
+pub fn key_width<H>(groups: &[VisibleGroup<'_, H>]) -> usize {
+    groups
+        .iter()
+        .flat_map(|group| {
+            group.tickets.iter().flatten().map(move |(index, ticket)| {
+                key_cell(group.family.get(index).copied(), &ticket.key, false)
+                    .text
+                    .width()
+            })
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// A ticket row's key and summary cells, given its place in a parent's family. A parent shows
+/// whether its sub-tasks are folded, with how many are hidden. A sub-task whose parent is
+/// elsewhere leads its summary with the parent's key, muted so the summary reads first. The
+/// summary is drawn in `base`, one line truncated and padded to `width`, or, with
+/// `App::wrap_summaries`, word-wrapped onto as many lines as it needs, each padded to `width`.
 pub fn ticket_cells(
     app: &App,
     family: Option<Family>,
     ticket: &Ticket,
-    marker: char,
     width: usize,
     base: Style,
-) -> (String, Vec<Vec<Span<'static>>>) {
+) -> (KeyCell, Vec<Vec<Span<'static>>>) {
     let folded = app.is_parent_folded(&ticket.key);
-    let key = match family {
-        Some(Family::Child) => format!("  {} {}", marker, ticket.key),
-        Some(Family::Parent(_)) => {
-            format!("{} {} {}", marker, ticket.key, fold_indicator(folded))
-        }
-        None => format!("{} {}", marker, ticket.key),
-    };
+    let key = key_cell(family, &ticket.key, folded);
     let (prefix, summary) = match (family, &ticket.parent_key) {
         (Some(Family::Parent(count)), _) if folded => (
             String::new(),
@@ -313,17 +354,62 @@ pub fn ticket_cells(
     )
 }
 
+/// A row's Status cell: a dot in the status's color, then its name muted, `width` columns of it.
+pub fn status_cell(app: &App, ticket: &Ticket, base: Style, width: usize) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            format!("{:<width$}", "●", width = STATUS_DOT_WIDTH),
+            style::status(&ticket.status, app.status_rules()),
+        ),
+        Span::styled(fit(status_label(app, &ticket.status), width), muted(base)),
+    ]
+}
+
 /// A list tab's lines and the items among them: each group header and ticket row, with the lines
 /// it takes, so `render` can highlight, scroll to and register mouse targets for whole items.
-#[derive(Default)]
-pub struct ListLines {
+pub struct ListLines<'a> {
+    app: &'a App,
+    ages: Ages<'a>,
     lines: Vec<Line<'static>>,
     items: Vec<crate::mouse::Item>,
     selected_lines: Option<Range<usize>>,
+    /// Whether the list has the selection: a pane without focus draws none.
+    focused: bool,
 }
 
-impl ListLines {
-    /// A line that is no item: column headings, counts, blank lines, empty-state text.
+impl<'a> ListLines<'a> {
+    pub fn new(app: &'a App) -> Self {
+        ListLines {
+            app,
+            ages: Ages::of(app),
+            lines: Vec::new(),
+            items: Vec::new(),
+            selected_lines: None,
+            focused: true,
+        }
+    }
+
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    /// The ticket ages every row measures to.
+    pub fn ages(&self) -> Ages<'a> {
+        self.ages
+    }
+
+    /// The columns before a row's key.
+    pub fn lead_width(&self) -> usize {
+        lead_width(self.app.is_marking())
+    }
+
+    /// Whether the item at `index` is the selected one, in a list that has the selection.
+    pub fn is_selected(&self, index: usize) -> bool {
+        self.focused && index == self.app.selected_index
+    }
+
+    /// A line that is no item: counts, blank lines, empty-state text.
     pub fn push(&mut self, line: impl Into<Line<'static>>) {
         self.lines.push(line.into());
     }
@@ -332,81 +418,170 @@ impl ListLines {
         self.lines.is_empty()
     }
 
-    /// A group header, one line.
-    pub fn header(&mut self, index: usize, selected: bool, line: impl Into<Line<'static>>) {
-        let start = self.lines.len();
-        self.lines.push(line.into());
-        self.item(start, index, selected, true);
+    /// A muted line among the rows, indented as they are.
+    pub fn note(&mut self, text: impl Into<String>) {
+        self.glyph_line(
+            Span::raw(" "),
+            vec![Span::styled(text.into(), style::secondary())],
+        );
     }
 
-    /// A ticket row: `cells` up to Summary, Summary's separator, then the summary's first line
-    /// (from `ticket_cells`). Each further summary line goes on a line of its own, blank before
-    /// Summary's separator. Returns the first line, for the cells after Summary.
-    pub fn ticket(
+    /// A line among the rows with `glyph` in the gutter, then `rest` after the checkbox's cells.
+    pub fn glyph_line(&mut self, glyph: Span<'static>, rest: Vec<Span<'static>>) {
+        let mut spans = self.lead(glyph, None);
+        spans.extend(rest);
+        self.lines.push(Line::from(spans));
+    }
+
+    /// The top of a list: the line `shared` has in common, if any, or a blank line, then a blank,
+    /// the line cut to `width`.
+    pub fn intro(&mut self, shared: Option<&Shared>, width: usize) {
+        let line = shared.and_then(|shared| shared.line(self.lead_width(), width));
+        self.lines.extend(line);
+        self.lines.push(Line::from(""));
+    }
+
+    /// The gutter of a line: `glyph`, then the checkbox `mark` (blank for a line with none)
+    /// while tickets are marked.
+    fn lead(&self, glyph: Span<'static>, mark: Option<Span<'static>>) -> Vec<Span<'static>> {
+        let mut lead = gutter(glyph);
+        if self.app.is_marking() {
+            lead.push(mark.unwrap_or_else(|| Span::raw(" ")));
+            lead.push(Span::raw(" "));
+        }
+        lead
+    }
+
+    /// A group header, one line: `glyph` in the gutter, the group's mark while tickets are
+    /// marked, then `rest`.
+    fn header<H>(
         &mut self,
-        index: usize,
-        selected: bool,
-        cells: Vec<Span<'static>>,
-        base: Style,
-        summary: Vec<Vec<Span<'static>>>,
-    ) -> &mut Line<'static> {
+        group: &VisibleGroup<'_, H>,
+        glyph: Span<'static>,
+        rest: Vec<Span<'static>>,
+    ) {
+        let row = tint(self.is_selected(group.index));
+        let mark = mark_span(group_marker(self.app.group_selection_state(&group.id)), row);
         let start = self.lines.len();
-        let separator = Span::styled(" │ ", base.fg(Color::DarkGray));
-        let mut row = Line::from(cells);
-        let lead = " ".repeat(row.width());
-        row.spans.push(separator.clone());
+        let mut spans = self.lead(glyph, Some(mark));
+        spans.extend(rest);
+        self.lines.push(Line::from(spans));
+        self.item(start, group.index, Some(GLYPH_COLUMN));
+    }
+
+    /// The header of a group of one member, epic or epic key: its fold arrow in the gutter, then
+    /// `rest`.
+    pub fn group_header<H>(&mut self, group: &VisibleGroup<'_, H>, rest: Vec<Span<'static>>) {
+        let row = tint(self.is_selected(group.index));
+        let arrow = Span::styled(fold_indicator(group.tickets.is_none()), muted(row));
+        self.header(group, arrow, rest);
+    }
+
+    /// A status group's header: `● Name 3`, the dot in the status's color, the name bold, the
+    /// count muted. A folded group says how to open it.
+    pub fn status_header(&mut self, group: &VisibleGroup<'_, String>) {
+        let status = &group.header;
+        let muted = muted(tint(self.is_selected(group.index)));
+        let mut rest = vec![
+            Span::styled(status_label(self.app, status).to_string(), style::heading()),
+            Span::styled(format!(" {}", group.total), muted),
+        ];
+        if group.tickets.is_none() {
+            rest.push(Span::styled(FOLDED_HINT, muted));
+        }
+        let dot = Span::styled("●", style::status(status, self.app.status_rules()));
+        self.header(group, dot, rest);
+    }
+
+    /// A ticket row of `group`: the gutter (`›` when selected, and the ticket's mark while
+    /// tickets are marked), the key cell fit to `key_w`, the cells `extra` makes from the row's
+    /// style (Status, Assignee), then the summary's first line (from `ticket_cells`), each a
+    /// `COLUMN_GAP` apart. Each further summary line goes on a line of its own, blank under the
+    /// cells. A `faded` row is muted. Returns the first line, for the cells after Summary, and
+    /// the row's style.
+    pub fn ticket_row<H>(
+        &mut self,
+        group: &VisibleGroup<'_, H>,
+        &(index, ticket): &(usize, &Ticket),
+        key_w: usize,
+        summary_w: usize,
+        faded: bool,
+        extra: impl FnOnce(Style) -> Vec<Vec<Span<'static>>>,
+    ) -> (&mut Line<'static>, Style) {
+        let selected = self.is_selected(index);
+        let (base, primary) = self.ages.row_styles(ticket, selected, faded);
+        let family = group.family.get(&index).copied();
+        let (key, summary) = ticket_cells(self.app, family, ticket, summary_w, primary);
+        let mut cells = vec![vec![Span::styled(fit(&key.text, key_w), primary)]];
+        cells.extend(extra(base));
+
+        let glyph = if selected {
+            Span::styled("›", style::accent().patch(style::heading()))
+        } else {
+            Span::raw(" ")
+        };
+        let mark = ticket_marker(self.app.is_ticket_selected(&ticket.key));
+        let lead = self.lead_width();
+        let fold = key.fold.map(|col| (lead + col) as u16);
+        let start = self.lines.len();
+        let mut row = self.lead(glyph, Some(mark_span(mark, base)));
+        let gap = Span::raw(" ".repeat(COLUMN_GAP));
+        let cells_width: usize =
+            cells.iter().flatten().map(Span::width).sum::<usize>() + COLUMN_GAP * cells.len();
+        for cell in cells {
+            row.extend(cell);
+            row.push(gap.clone());
+        }
         let mut summary = summary.into_iter();
-        row.spans.extend(summary.next().unwrap_or_default());
-        self.lines.push(row);
+        row.extend(summary.next().unwrap_or_default());
+        self.lines.push(Line::from(row));
         for more in summary {
-            let mut line = Line::from(vec![
-                Span::styled(lead.clone(), separator.style),
-                separator.clone(),
-            ]);
+            let mut line = Line::from(Span::raw(" ".repeat(lead + cells_width)));
             line.spans.extend(more);
             self.lines.push(line);
         }
-        self.item(start, index, selected, false);
-        &mut self.lines[start]
+        self.item(start, index, fold);
+        (&mut self.lines[start], base)
     }
 
-    fn item(&mut self, start: usize, index: usize, selected: bool, header: bool) {
+    fn item(&mut self, start: usize, index: usize, fold: Option<u16>) {
         let lines = start..self.lines.len();
-        if selected {
+        if self.is_selected(index) {
             self.selected_lines = Some(lines.clone());
         }
-        self.items.push(crate::mouse::Item {
-            lines,
-            index,
-            header,
-        });
+        self.items.push(crate::mouse::Item { lines, index, fold });
     }
 
-    /// Highlights the selected item, colors marks, scrolls so the selected item's last line is
-    /// on screen (its first, when it is taller than the screen), registers mouse targets and
-    /// draws the lines in `block`.
-    pub fn render(mut self, f: &mut ratatui::Frame, area: Rect, app: &App, block: Block<'_>) {
-        let inner = block.inner(area);
-        highlight_row(&mut self.lines, self.selected_lines.clone(), inner.width);
-        color_marks(&mut self.lines);
-        let scroll = self.selected_lines.map_or(0, |item| {
+    /// Highlights the selected item, scrolls so the selected item's last line is on screen (its
+    /// first, when it is taller than the screen), registers mouse targets for the rows actually
+    /// drawn and draws the lines in `area`.
+    pub fn render(mut self, f: &mut ratatui::Frame, area: Rect) {
+        highlight_row(&mut self.lines, self.selected_lines.clone(), area.width);
+        let scroll = self.selected_lines.as_ref().map_or(0, |item| {
             item.end
-                .saturating_sub(inner.height as usize)
+                .saturating_sub(area.height as usize)
                 .min(item.start)
         }) as u16;
-        crate::mouse::register_rows(app, inner, &self.items, scroll, &self.lines);
-        f.render_widget(
-            Paragraph::new(self.lines).block(block).scroll((scroll, 0)),
-            area,
+        let lead = self.lead_width();
+        crate::mouse::register_rows(self.app, area, &self.items, scroll, lead);
+        // A drag copies a row's text, not its marker or checkbox.
+        let lead = (lead as u16).min(area.width);
+        crate::mouse::selectable(
+            self.app,
+            Rect::new(area.x + lead, area.y, area.width - lead, area.height),
         );
+        f.render_widget(Paragraph::new(self.lines).scroll((scroll, 0)), area);
     }
 }
 
-impl Extend<Line<'static>> for ListLines {
+impl Extend<Line<'static>> for ListLines<'_> {
     fn extend<I: IntoIterator<Item = Line<'static>>>(&mut self, lines: I) {
         self.lines.extend(lines);
     }
 }
+
+/// What `ListLines::status_header` adds to a folded group.
+const FOLDED_HINT: &str = "  (z to open)";
 
 /// The name a status cell or group header shows: Jira's, except that Blocked is Cursed in
 /// spooky season.
@@ -417,9 +592,6 @@ pub fn status_label<'a>(app: &App, status: &'a str) -> &'a str {
         status
     }
 }
-
-/// Width of the ` │ ` between two columns.
-pub const SEPARATOR_WIDTH: usize = 3;
 
 /// The columns a tab has that `Shared` may hide, which decides what its shared line names.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -485,32 +657,11 @@ impl Shared {
         [(self.epic_column, epic_w), (self.labels_column, labels_w)]
             .into_iter()
             .filter(|(shown, _)| !shown)
-            .fold(summary_w, |w, (_, hidden)| w + hidden + SEPARATOR_WIDTH)
+            .fold(summary_w, |w, (_, hidden)| w + hidden + COLUMN_GAP)
     }
 
-    /// Pushes the headings, in `style`, of the cells `push_trailing_cells` draws.
-    pub fn push_trailing_headings(
-        &self,
-        header: &mut Line<'static>,
-        style: Style,
-        epic_w: usize,
-        labels_w: usize,
-    ) {
-        for (shown, title, width) in [
-            (self.epic_column, "EPIC", epic_w),
-            (true, "UPDATED", UPDATED_WIDTH),
-            (self.labels_column, "LABELS", labels_w),
-        ] {
-            if shown {
-                header.push_span(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
-                header.push_span(Span::styled(format!("{title:<width$}"), style));
-            }
-        }
-    }
-
-    /// Pushes a row's trailing cells: Epic (when shown), Updated (`Ages::updated_cell`), and
-    /// Labels (when shown), muted in `base`, the row's style (with its background on the
-    /// selected row, where labels are yellow).
+    /// Pushes a row's trailing cells, a `COLUMN_GAP` apart: Epic (when shown), Updated
+    /// (`Ages::updated_cell`), and Labels (when shown), muted in `base`, the row's style.
     pub fn push_trailing_cells(
         &self,
         ages: Ages,
@@ -520,23 +671,19 @@ impl Shared {
         epic_w: usize,
         labels_w: usize,
     ) {
-        let separator = Span::styled(" │ ", base.fg(Color::DarkGray));
+        let gap = Span::raw(" ".repeat(COLUMN_GAP));
         if self.epic_column {
             let epic = ticket.epic_name.as_deref().unwrap_or("-");
-            row.push_span(separator.clone());
+            row.push_span(gap.clone());
             row.push_span(Span::styled(fit(epic, epic_w), muted(base)));
         }
-        row.push_span(separator.clone());
+        row.push_span(gap.clone());
         row.push_span(Span::styled(ages.updated_cell(ticket), muted(base)));
         if self.labels_column {
-            row.push_span(separator);
+            row.push_span(gap);
             row.push_span(Span::styled(
                 fit(&self.row_labels(ticket), labels_w),
-                if base.bg.is_some() {
-                    base.fg(Color::Yellow)
-                } else {
-                    muted(base)
-                },
+                muted(base),
             ));
         }
     }
@@ -556,12 +703,13 @@ impl Shared {
         }
     }
 
-    /// The muted line under the column headers, cut to `width`; `None` when nothing is shared.
-    pub fn line(&self, width: usize) -> Option<Line<'static>> {
+    /// The muted line over the list, indented `lead` cells as rows are and cut to `width`; `None`
+    /// when nothing is shared.
+    pub fn line(&self, lead: usize, width: usize) -> Option<Line<'static>> {
         if self.epic.is_none() && self.labels.is_empty() {
             return None;
         }
-        let mut text = "  all rows".to_string();
+        let mut text = format!("{}all rows", " ".repeat(lead));
         if let Some(epic) = &self.epic {
             text.push_str(" · epic ");
             text.push_str(epic);
@@ -572,7 +720,7 @@ impl Shared {
         }
         Some(Line::from(Span::styled(
             truncate(&text, width),
-            Style::default().fg(Color::DarkGray),
+            style::secondary(),
         )))
     }
 }
@@ -605,18 +753,27 @@ impl<'a> Ages<'a> {
         format!("{age:>width$}", width = UPDATED_WIDTH)
     }
 
-    /// `base`, muted when `ticket` is a fossil, so its whole row fades.
-    pub fn fade(&self, ticket: &Ticket, base: Style) -> Style {
-        if self.delight.is_fossil(self.rules, ticket, self.now) {
+    /// A ticket row's styles: the one its cells share, and the one of its key and summary, bold
+    /// when `selected`. The row is the selected row's tint, and muted when `faded` or when
+    /// `ticket` is a fossil.
+    pub fn row_styles(&self, ticket: &Ticket, selected: bool, faded: bool) -> (Style, Style) {
+        let base = tint(selected);
+        let base = if faded || self.delight.is_fossil(self.rules, ticket, self.now) {
             muted(base)
         } else {
             base
-        }
+        };
+        let primary = if selected {
+            base.add_modifier(Modifier::BOLD)
+        } else {
+            base
+        };
+        (base, primary)
     }
 }
 
-/// Width of the Updated column: its heading's.
-pub const UPDATED_WIDTH: usize = 7;
+/// Width of the Updated column: the widest age, "100w", right-aligned.
+pub const UPDATED_WIDTH: usize = 4;
 
 /// How long ago `updated` was at `now` (both Unix seconds), in its largest whole unit: "59m",
 /// "23h", "6d", "3w". A time ahead of `now` (clocks disagree) is "0m".
@@ -633,6 +790,7 @@ pub fn age(updated: i64, now: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Color;
 
     fn rules() -> StatusRules {
         let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
@@ -669,7 +827,7 @@ mod tests {
         );
         let bar = epic_bar(&epic, &rules(), EPIC_BAR_WIDTH, Style::default());
         let text: String = bar.iter().map(|span| span.content.as_ref()).collect();
-        assert_eq!(text, format!("{}▓{}", DONE_CELL.repeat(21), "░".repeat(2)));
+        assert_eq!(text, format!("{}▒{}", DONE_CELL.repeat(21), "░".repeat(2)));
         let colors: Vec<_> = bar.iter().map(|span| span.style.fg).collect();
         assert_eq!(
             colors,
@@ -732,7 +890,7 @@ mod tests {
             app.wrap_summaries = wrap;
             let mut ticket = Ticket::for_test("DEMO-1", "To Do");
             ticket.summary = summary.into();
-            let (_, lines) = ticket_cells(&app, None, &ticket, '☐', width, Style::default());
+            let (_, lines) = ticket_cells(&app, None, &ticket, width, Style::default());
             lines
                 .iter()
                 .map(|spans| spans.iter().map(|span| span.content.as_ref()).collect())
@@ -773,6 +931,31 @@ mod tests {
         // Too narrow even with every column at its floor: Summary gets what is left.
         assert_eq!(narrow(31), [10, 8, 13]);
         assert_eq!(narrow(0), [10, 8, 0]);
+    }
+
+    #[test]
+    fn only_a_parents_key_cell_has_a_fold_arrow_and_names_its_column() {
+        let cell = |family, folded| {
+            let cell = key_cell(family, "DEMO-1", folded);
+            (cell.text, cell.fold)
+        };
+        assert_eq!(cell(None, false), ("DEMO-1".to_string(), None));
+        assert_eq!(
+            cell(Some(Family::Child), false),
+            ("  └ DEMO-1".to_string(), None)
+        );
+        assert_eq!(
+            cell(Some(Family::Parent(2)), false),
+            (format!("DEMO-1 {OPEN}"), Some(7))
+        );
+        assert_eq!(
+            cell(Some(Family::Parent(2)), true),
+            (format!("DEMO-1 {FOLDED}"), Some(7))
+        );
+        assert_eq!(
+            key_cell(Some(Family::Parent(1)), "山田-1", false).fold,
+            Some(7)
+        );
     }
 
     #[test]

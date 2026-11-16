@@ -245,6 +245,8 @@ struct VisibleKeysCache {
     items: Vec<VisibleItem>,
     families: HashMap<usize, Family>,
     group_ticket_keys: HashMap<String, Vec<String>>,
+    /// While My Work is the tab: how many done tickets the search keeps and `d` hides.
+    hidden_done: usize,
 }
 
 #[derive(Default, Clone)]
@@ -876,7 +878,9 @@ impl App {
 
         let (items, families) = self.compute_visible_items_for_tab(state.active_tab);
         let group_ticket_keys = Self::build_group_ticket_keys(&items);
+        let hidden_done = self.count_hidden_done(state.active_tab);
         let mut cache = self.visible_keys_cache.borrow_mut();
+        cache.hidden_done = hidden_done;
         cache.state = Some(state);
         cache.items = items;
         cache.families = families;
@@ -1148,6 +1152,23 @@ impl App {
             .group(self.kept_by_search(&[], tickets).unwrap_or_default())
     }
 
+    /// How many done tickets the search keeps while `d` hides them, which My Work says under its
+    /// groups. Counted when the visible rows are, not on every frame.
+    pub(crate) fn hidden_done_count(&self) -> usize {
+        self.ensure_visible_keys_cache();
+        self.visible_keys_cache.borrow().hidden_done
+    }
+
+    fn count_hidden_done(&self, tab: Tab) -> usize {
+        if tab != Tab::MyWork || self.show_done {
+            return 0;
+        }
+        self.my_work_by_status(|status| self.status_rules.is_done(status))
+            .iter()
+            .map(|(_, tickets)| tickets.len())
+            .sum()
+    }
+
     /// Team members and visible tickets in the exact order used by the Team tab.
     /// Returns active tickets first, then Done tickets as a secondary group.
     pub(crate) fn team_visible_tickets_by_member(
@@ -1348,6 +1369,11 @@ impl App {
 
     pub fn selected_ticket_count(&self) -> usize {
         self.selected_ticket_keys.len()
+    }
+
+    /// Whether any ticket is marked: lists draw their checkboxes and the bulk bar shows.
+    pub fn is_marking(&self) -> bool {
+        self.selected_ticket_count() > 0
     }
 
     pub fn is_ticket_selected(&self, key: &str) -> bool {
@@ -2765,6 +2791,48 @@ mod tests {
             app.group_selection_state("In Progress"),
             GroupSelectionState::Partial
         );
+    }
+
+    #[test]
+    fn the_hidden_done_count_follows_d_the_search_and_the_tickets() {
+        let done = |key: &str, summary: &str| {
+            let mut done = ticket(key, summary);
+            done.status = "Done".to_string();
+            done
+        };
+        let mut app = App::new();
+        app.active_tab = Tab::MyWork;
+        app.cache.my_tickets = vec![
+            ticket("DEMO-1", "open"),
+            done("DEMO-2", "alpha"),
+            done("DEMO-3", "beta"),
+        ];
+        app.mark_cache_changed();
+        assert_eq!(app.hidden_done_count(), 0, "done is shown");
+        app.toggle_show_done();
+        assert_eq!(app.hidden_done_count(), 2);
+        app.search = Some("alp".into());
+        assert_eq!(app.hidden_done_count(), 1);
+        app.search = Some("open".into());
+        assert_eq!(app.hidden_done_count(), 0);
+        app.search = None;
+        app.cache.my_tickets.push(done("DEMO-4", "gamma"));
+        app.mark_cache_changed();
+        assert_eq!(app.hidden_done_count(), 3);
+        app.switch_tab(Tab::Team);
+        assert_eq!(app.hidden_done_count(), 0, "only My Work says it");
+        app.switch_tab(Tab::MyWork);
+        assert_eq!(app.hidden_done_count(), 3, "back on My Work");
+        let mut refreshed = app.cache.clone();
+        refreshed.my_tickets.push(done("DEMO-5", "delta"));
+        app.replace_cache(refreshed, app.moves.now());
+        assert_eq!(app.hidden_done_count(), 4, "a refresh brings a done ticket");
+        let mut refreshed = app.cache.clone();
+        refreshed.my_tickets.retain(|ticket| ticket.key == "DEMO-1");
+        app.replace_cache(refreshed, app.moves.now());
+        assert_eq!(app.hidden_done_count(), 0, "a refresh drops them all");
+        app.toggle_show_done();
+        assert_eq!(app.hidden_done_count(), 0);
     }
 
     #[test]

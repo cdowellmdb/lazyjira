@@ -47,7 +47,7 @@ $V <run> issue <KEY>                # the ticket's status/assignee/updated as th
 $V <run> calls                      # every jira/open/pbcopy call the app made, in order
 ```
 
-Reach a ticket by key, never by counting rows: `keys /`, `type DEMO-201`, `wait 'READY FOR WORK \(1\)'`, `keys Down`, `keys Enter`, `wait 'Status +●'`. Search selects the group header first, so Enter without Down does nothing.
+Reach a ticket by key, never by counting rows: `keys /`, `type DEMO-201`, `wait '● Ready for Work 1'`, `keys Down`, `keys Enter`, `wait 'Status +●'`. Search selects the group header first, so Enter without Down does nothing.
 
 Wait on text, not on sleeps. Status-bar messages (`Moved DEMO-201 to In Progress`, `Comment added to DEMO-205`, `Assigned DEMO-205`) are the most dependable signals that an action finished.
 

@@ -1,22 +1,25 @@
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Span;
 
 use crate::app::App;
 use crate::style;
 use crate::views::common::{
-    fit, fold_indicator, group_marker, narrow_for_summary, panel, status_label, status_width,
-    ticket_cells, ticket_marker, Ages, Columns, ListLines, Shared, KEY_WIDTH, SEPARATOR_WIDTH,
-    UPDATED_WIDTH,
+    key_width, narrow_for_summary, status_cell, status_width, Columns, ListLines, Shared,
+    COLUMN_GAP, STATUS_DOT_WIDTH, UPDATED_WIDTH,
 };
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
 
 /// Summary takes what Status and the fixed cells leave; on narrow terminals Status gives up
 /// columns, down to 8, so it keeps 18.
-fn ticket_column_widths(area: Rect, mut status_w: usize) -> (usize, usize) {
-    let inner = panel().inner(area).width as usize;
-    let room = inner.saturating_sub(4 + KEY_WIDTH + 3 * SEPARATOR_WIDTH + UPDATED_WIDTH);
+fn ticket_column_widths(
+    area: Rect,
+    lead: usize,
+    key_w: usize,
+    mut status_w: usize,
+) -> (usize, usize) {
+    let fixed = lead + key_w + 3 * COLUMN_GAP + STATUS_DOT_WIDTH + UPDATED_WIDTH;
+    let room = (area.width as usize).saturating_sub(fixed);
     let summary_w = narrow_for_summary(room, 18, &mut [(&mut status_w, 8)]);
     (status_w, summary_w)
 }
@@ -24,131 +27,77 @@ fn ticket_column_widths(area: Rect, mut status_w: usize) -> (usize, usize) {
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.unassigned_visible_by_epic();
     let shared = Shared::of(&grouped, Columns::GroupedByEpic);
-    let ages = Ages::of(app);
-    let key_w = KEY_WIDTH;
-    let (status_w, summary_w) = ticket_column_widths(area, status_width(&grouped));
-    let heading_style = Style::default()
-        .fg(Color::Reset)
-        .add_modifier(Modifier::BOLD);
-
-    let mut lines = ListLines::default();
+    let key_w = key_width(&grouped);
+    let mut lines = ListLines::new(app);
+    let ages = lines.ages();
+    let (status_w, summary_w) =
+        ticket_column_widths(area, lines.lead_width(), key_w, status_width(&grouped));
 
     if !grouped.is_empty() {
-        let mut header = Line::from(vec![
-            Span::styled(format!("    {:<key_w$}", "SEL KEY"), heading_style),
-            Span::styled(" │ ", style::secondary()),
-            Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
-            Span::styled(" │ ", style::secondary()),
-            Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
-        ]);
-        shared.push_trailing_headings(&mut header, heading_style, 0, 0);
-        let header_w = header.width();
-        lines.push(header);
-        lines.extend(shared.line(header_w));
-        lines.push("");
+        lines.intro(Some(&shared), area.width as usize);
     }
 
     for group in grouped {
         let (epic_key, epic_summary) = &group.header;
-        let indicator = fold_indicator(group.tickets.is_none());
-        let marker = group_marker(app.group_selection_state(epic_key));
 
-        let is_header_selected = group.index == app.selected_index;
-
-        let header = if epic_key == NO_EPIC_KEY {
-            format!("{} {} No Epic", marker, indicator)
+        let name = if epic_key == NO_EPIC_KEY {
+            "No Epic".to_string()
         } else {
-            format!("{} {} {}  {}", marker, indicator, epic_key, epic_summary)
+            format!("{epic_key}  {epic_summary}")
         };
-        let header_style = if is_header_selected {
-            style::heading().patch(style::selected_row())
-        } else {
-            style::heading()
-        };
-        lines.header(
-            group.index,
-            is_header_selected,
-            Span::styled(header, header_style),
-        );
-        let count_style = if is_header_selected {
-            Style::default().fg(Color::Gray)
-        } else {
-            style::secondary()
-        };
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(format!("unassigned: {}", group.total), count_style),
-        ]));
+        lines.group_header(&group, vec![Span::styled(name, style::heading())]);
+        lines.note(format!("unassigned: {}", group.total));
 
         let Some(tickets) = &group.tickets else {
             lines.push("");
             continue;
         };
 
-        for (index, ticket) in tickets {
-            let is_selected = *index == app.selected_index;
-
-            let base = if is_selected {
-                style::selected_row()
-            } else {
-                Style::default()
-            };
-
-            let base = ages.fade(ticket, base);
-            let status_style = style::status(&ticket.status, app.status_rules());
-            let status_style = if is_selected {
-                status_style.patch(style::selected_row())
-            } else {
-                status_style
-            };
-            let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
-            let (key_cell, summary) = ticket_cells(
-                app,
-                group.family.get(index).copied(),
-                ticket,
-                marker,
-                summary_w,
-                base,
-            );
-
-            let cells = vec![
-                Span::styled(format!("    {:<key_w$}", key_cell), base),
-                Span::styled(" │ ", base.patch(style::secondary())),
-                Span::styled(
-                    fit(status_label(app, &ticket.status), status_w),
-                    status_style,
-                ),
-            ];
-            let row = lines.ticket(*index, is_selected, cells, base, summary);
-            shared.push_trailing_cells(ages, row, ticket, base, 0, 0);
+        for row in tickets {
+            let (line, base) = lines.ticket_row(&group, row, key_w, summary_w, false, |base| {
+                vec![status_cell(app, row.1, base, status_w)]
+            });
+            shared.push_trailing_cells(ages, line, row.1, base, 0, 0);
         }
 
         lines.push("");
     }
 
     if lines.is_empty() {
-        let empty_text = if let Some(search) = app.search.as_ref().filter(|s| !s.is_empty()) {
-            format!("  No unassigned tickets match \"{}\"", search)
+        if let Some(search) = app.search.as_ref().filter(|s| !s.is_empty()) {
+            lines.note(format!("No unassigned tickets match \"{}\"", search));
         } else {
-            "  No unassigned tickets found".to_string()
-        };
-        lines.push(Span::styled(empty_text, style::secondary()));
+            lines.note("No unassigned tickets found");
+        }
     }
 
-    lines.render(f, area, app, panel());
+    lines.render(f, area);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::views::common::{CHECKBOX_WIDTH, GUTTER};
 
     #[test]
     fn narrow_unassigned_cuts_status_to_8_so_summary_keeps_18() {
-        let widths = |width| ticket_column_widths(Rect::new(0, 0, width, 10), 20);
-        assert_eq!(widths(79), (20, 19));
-        assert_eq!(widths(78), (20, 18));
-        assert_eq!(widths(77), (19, 18));
-        assert_eq!(widths(66), (8, 18));
-        assert_eq!(widths(65), (8, 17));
+        let widths = |width| ticket_column_widths(Rect::new(0, 0, width, 10), GUTTER, 8, 20);
+        assert_eq!(widths(62), (20, 19));
+        assert_eq!(widths(61), (20, 18));
+        assert_eq!(widths(60), (19, 18));
+        assert_eq!(widths(49), (8, 18));
+        assert_eq!(widths(48), (8, 17));
+    }
+
+    #[test]
+    fn marking_moves_every_unassigned_boundary_two_columns() {
+        let widths = |width| {
+            ticket_column_widths(Rect::new(0, 0, width, 10), GUTTER + CHECKBOX_WIDTH, 8, 20)
+        };
+        assert_eq!(widths(64), (20, 19));
+        assert_eq!(widths(63), (20, 18));
+        assert_eq!(widths(62), (19, 18));
+        assert_eq!(widths(51), (8, 18));
+        assert_eq!(widths(50), (8, 17));
     }
 }

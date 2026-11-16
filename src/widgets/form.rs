@@ -288,7 +288,7 @@ pub fn render_modal_frame(
     f.render_widget(Clear, area);
     let block = panel().title(format!(" {} ", title));
     let inner = block.inner(area);
-    app.text_selection.borrow_mut().area = inner;
+    app.text_selection.borrow_mut().areas = vec![inner];
     f.render_widget(block, area);
     inner
 }
