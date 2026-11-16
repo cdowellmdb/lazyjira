@@ -156,19 +156,14 @@ fn config_path_display() -> String {
         .unwrap_or_else(|_| "~/.config/lazyjira/config.toml".to_string())
 }
 
-/// Cells of a field's label: the longest, "Project key", and two spaces.
-const LABEL_WIDTH: usize = 13;
-
 /// A field: its `label` (the accent while it has focus, muted otherwise), then `value`, then the
 /// cursor while it has focus.
 fn field(label: &str, value: &str, focused: bool) -> Line<'static> {
-    let label_style = if focused {
-        style::accent().patch(style::heading())
-    } else {
-        style::secondary()
-    };
     let mut spans = vec![
-        Span::styled(format!("{label:<LABEL_WIDTH$}"), label_style),
+        Span::styled(
+            format!("{label:<width$}", width = form::LABEL_WIDTH),
+            form::label_style(focused),
+        ),
         Span::styled(value.to_string(), style::primary()),
     ];
     if focused {
@@ -180,7 +175,7 @@ fn field(label: &str, value: &str, focused: bool) -> Line<'static> {
 /// A muted line under a field, lined up with its value.
 fn note(text: &str) -> Line<'static> {
     Line::from(Span::styled(
-        format!("{}{text}", " ".repeat(LABEL_WIDTH)),
+        format!("{}{text}", " ".repeat(form::LABEL_WIDTH)),
         style::secondary(),
     ))
 }

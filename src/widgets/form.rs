@@ -52,11 +52,11 @@ pub fn paste(editor: &mut TextArea<'_>, value: &str, multiline: bool) {
     });
 }
 
-/// Cells of an inline field's label: the longest, "Pinned epics", and a space.
-const LABEL_WIDTH: u16 = 13;
+/// Cells of an inline field's label: the longest, "Pinned epics" or "Project key", and a space.
+pub(crate) const LABEL_WIDTH: usize = 13;
 
 /// A field's label: bold accent while it has focus, muted otherwise.
-fn label_style(focused: bool) -> Style {
+pub(crate) fn label_style(focused: bool) -> Style {
     if focused {
         style::accent().patch(style::heading())
     } else {
@@ -82,7 +82,7 @@ pub fn render_editor(
     let (name, detail) = label.split_once(" · ").unwrap_or((label, ""));
     let value = if area.height == 1 {
         let [head, value] = Layout::horizontal([
-            Constraint::Length(LABEL_WIDTH.min(area.width)),
+            Constraint::Length((LABEL_WIDTH as u16).min(area.width)),
             Constraint::Min(0),
         ])
         .areas(area);
