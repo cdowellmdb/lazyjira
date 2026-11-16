@@ -91,7 +91,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::views::common::GUTTER;
+    use crate::views::common::{CHECKBOX_WIDTH, GUTTER};
 
     #[test]
     fn narrow_team_cuts_epic_then_labels_then_status_so_summary_keeps_14() {
@@ -106,5 +106,20 @@ mod tests {
         assert_eq!(widths(78), (19, 14, 10, 8));
         assert_eq!(widths(67), (8, 14, 10, 8));
         assert_eq!(widths(66), (8, 13, 10, 8));
+    }
+
+    #[test]
+    fn marking_moves_every_team_boundary_two_columns() {
+        let widths =
+            |width| team_column_widths(Rect::new(0, 0, width, 10), GUTTER + CHECKBOX_WIDTH, 8, 20);
+        assert_eq!(widths(102), (20, 15, 20, 18));
+        assert_eq!(widths(101), (20, 14, 20, 18));
+        assert_eq!(widths(100), (20, 14, 19, 18));
+        assert_eq!(widths(91), (20, 14, 10, 18));
+        assert_eq!(widths(90), (20, 14, 10, 17));
+        assert_eq!(widths(81), (20, 14, 10, 8));
+        assert_eq!(widths(80), (19, 14, 10, 8));
+        assert_eq!(widths(69), (8, 14, 10, 8));
+        assert_eq!(widths(68), (8, 13, 10, 8));
     }
 }

@@ -157,6 +157,15 @@ mod tests {
     /// The Epics tab drawn `width` wide with one child assigned to `assignee`, and the drawn
     /// widths of its Status, Assignee and Summary cells.
     fn epic_columns(width: u16, assignee: &str) -> (Vec<(String, Color)>, [usize; 3]) {
+        epic_columns_marking(width, assignee, false)
+    }
+
+    /// `epic_columns`, with DEMO-1 marked when `marking`.
+    fn epic_columns_marking(
+        width: u16,
+        assignee: &str,
+        marking: bool,
+    ) -> (Vec<(String, Color)>, [usize; 3]) {
         let mut waiting = Ticket::for_test("DEMO-1", "Waiting for Approval");
         waiting.assignee = Some(assignee.into());
         let mut app = App::new();
@@ -167,6 +176,9 @@ mod tests {
             summary: "Epic".into(),
             children: vec![waiting, Ticket::for_test("DEMO-2", "In Progress")],
         }];
+        if marking {
+            app.selected_ticket_keys.insert("DEMO-1".into());
+        }
         let rows = draw(&app, Tab::Epics, width);
         let widths = columns_in(&line_with(&rows, "DEMO-2").unwrap().0, width);
         (rows, widths)
@@ -245,5 +257,16 @@ mod tests {
             [6, 8]
         );
         assert!(line_with(&rows, "DEMO-1").is_none());
+    }
+
+    #[test]
+    fn marking_moves_every_epics_boundary_two_columns() {
+        let name = "Alexandria Montgomery-Jo";
+        let widths = |width| epic_columns_marking(width, name, true).1;
+        assert_eq!(widths(81), [20, 24, 18]);
+        assert_eq!(widths(80), [20, 23, 18]);
+        assert_eq!(widths(54), [9, 8, 18]);
+        assert_eq!(widths(53), [8, 8, 18]);
+        assert_eq!(widths(52), [8, 8, 17]);
     }
 }

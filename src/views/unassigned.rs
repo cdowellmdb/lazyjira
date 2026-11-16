@@ -78,7 +78,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::views::common::GUTTER;
+    use crate::views::common::{CHECKBOX_WIDTH, GUTTER};
 
     #[test]
     fn narrow_unassigned_cuts_status_to_8_so_summary_keeps_18() {
@@ -88,5 +88,17 @@ mod tests {
         assert_eq!(widths(60), (19, 18));
         assert_eq!(widths(49), (8, 18));
         assert_eq!(widths(48), (8, 17));
+    }
+
+    #[test]
+    fn marking_moves_every_unassigned_boundary_two_columns() {
+        let widths = |width| {
+            ticket_column_widths(Rect::new(0, 0, width, 10), GUTTER + CHECKBOX_WIDTH, 8, 20)
+        };
+        assert_eq!(widths(64), (20, 19));
+        assert_eq!(widths(63), (20, 18));
+        assert_eq!(widths(62), (19, 18));
+        assert_eq!(widths(51), (8, 18));
+        assert_eq!(widths(50), (8, 17));
     }
 }

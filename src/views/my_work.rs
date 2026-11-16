@@ -6,8 +6,9 @@ use crate::app::App;
 use crate::style;
 use crate::views::common::{key_width, Columns, ListLines, Shared, COLUMN_GAP, UPDATED_WIDTH};
 
-/// (summary, epic, labels) widths: Summary takes what the other cells leave, and gives up columns
-/// to Epic and Labels (down to 12) on narrow terminals, those to their floors only after it.
+/// (summary, epic, labels) widths: Summary takes what the other cells leave. On a narrow terminal
+/// it gives up columns first, down to 16, then Epic gives up its down to 12, then Labels its down
+/// to 10, and last Summary goes on down to 12. Below that a row is wider than the terminal.
 fn my_work_column_widths(area: Rect, lead: usize, key_w: usize) -> (usize, usize, usize) {
     let mut summary_w = 34usize;
     let mut epic_w = 24usize;
@@ -124,4 +125,63 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     lines.render(f, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::views::common::{CHECKBOX_WIDTH, GUTTER};
+
+    /// Lead 3, Key 8: the cells beside the three columns take 23, so their 34, 24 and 22 want 103.
+    fn widths(width: u16, lead: usize) -> (usize, usize, usize) {
+        my_work_column_widths(Rect::new(0, 0, width, 10), lead, 8)
+    }
+
+    #[test]
+    fn narrow_my_work_trims_summary_to_16_then_epic_to_12_then_labels_to_10_then_summary_to_12() {
+        for (width, expected) in [
+            // Wider than the columns want: Summary takes the rest.
+            (104, (35, 24, 22)),
+            (103, (34, 24, 22)),
+            // One cell narrower: Summary gives it up, and goes on to 16.
+            (102, (33, 24, 22)),
+            (86, (17, 24, 22)),
+            (85, (16, 24, 22)),
+            // Epic next, to 12.
+            (84, (16, 23, 22)),
+            (73, (16, 12, 22)),
+            // Then Labels, to 10.
+            (72, (16, 12, 21)),
+            (61, (16, 12, 10)),
+            // Then Summary again, to 12.
+            (60, (15, 12, 10)),
+            (58, (13, 12, 10)),
+            (57, (12, 12, 10)),
+            // Nothing is left to give: the row is wider than the terminal.
+            (56, (12, 12, 10)),
+            (0, (12, 12, 10)),
+        ] {
+            assert_eq!(widths(width, GUTTER), expected, "{width} columns");
+        }
+    }
+
+    #[test]
+    fn marking_moves_each_my_work_boundary_two_columns() {
+        let lead = GUTTER + CHECKBOX_WIDTH;
+        for (width, expected) in [
+            (105, (34, 24, 22)),
+            (104, (33, 24, 22)),
+            (87, (16, 24, 22)),
+            (86, (16, 23, 22)),
+            (75, (16, 12, 22)),
+            (74, (16, 12, 21)),
+            (63, (16, 12, 10)),
+            (62, (15, 12, 10)),
+            (60, (13, 12, 10)),
+            (59, (12, 12, 10)),
+            (58, (12, 12, 10)),
+        ] {
+            assert_eq!(widths(width, lead), expected, "{width} columns");
+        }
+    }
 }

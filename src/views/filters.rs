@@ -193,7 +193,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::views::common::GUTTER;
+    use crate::views::common::{CHECKBOX_WIDTH, GUTTER};
 
     #[test]
     fn narrow_results_cut_status_to_8_so_summary_keeps_12() {
@@ -203,5 +203,17 @@ mod tests {
         assert_eq!(widths(54), (19, 12));
         assert_eq!(widths(43), (8, 12));
         assert_eq!(widths(42), (8, 11));
+    }
+
+    #[test]
+    fn marking_moves_every_results_boundary_two_columns() {
+        let widths = |width| {
+            results_column_widths(Rect::new(0, 0, width, 10), GUTTER + CHECKBOX_WIDTH, 8, 20)
+        };
+        assert_eq!(widths(58), (20, 13));
+        assert_eq!(widths(57), (20, 12));
+        assert_eq!(widths(56), (19, 12));
+        assert_eq!(widths(45), (8, 12));
+        assert_eq!(widths(44), (8, 11));
     }
 }
