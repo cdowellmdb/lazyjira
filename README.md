@@ -233,7 +233,7 @@ Create tickets with a type (Task, Bug, or Story), summary, assignee, epic, label
 
 At 120 columns or wider the list stays on the left, 50 cells wide with each ticket's key and summary, and the detail fills the rest beside a dim divider. Below 120 columns, or after `z`, the detail covers the list; the top bar and the footer stay. The key hints for the detail replace the footer while it is open, wrapped onto a second row when they don't fit one, so every key stays clickable at any width. A message (an error, or a move waiting on Jira) takes a row above them.
 
-Descriptions and comments render Jira's wiki markup: headings, bold/italic/strikethrough, links, mentions, lists, tables, quotes, code blocks and icons like `(/)`.
+Descriptions and comments render Jira's wiki markup: headings (bold, with a rule under a level 1 heading), bold/italic/strikethrough, links, mentions, lists, tables, quotes, code blocks and icons like `(/)`. Inline code (`{{like this}}`) is a tinted chip in the text color, never red. A backslash before a markup character (`\(`, `\*`, `\[`, `\|` and the like) shows the character itself, and `\\` is a line break. A table too wide for the pane is drawn as one record per row: the first cell in bold, then a line for each other column with its header in muted text. The text ends two cells before the scrollbar, which draws only when there is more to scroll.
 
 | Key | Action |
 |-----|--------|
