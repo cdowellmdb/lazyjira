@@ -216,7 +216,7 @@ Click the red **[×]** in the top-left of ticket or epic detail to close the pop
 
 Forms support clicking fields, positioning the text cursor, choosing picker options, and clicking their action buttons. Type to filter assignee and epic pickers; use arrow keys or the wheel to choose. Bulk actions still require the separate confirmation step.
 
-Drag across visible text in lists, ticket details, or form fields to select it. Click **Copy** or press `Ctrl+C` to copy the selection to the macOS clipboard; `Esc` clears it. Typing or pasting replaces selected text in a form field.
+Drag across visible text in lists, ticket details, or form fields to select it. Dragging across a list copies a row's text without its `›` marker or checkbox, and a drag that starts in the marker cells selects nothing. Click **Copy** or press `Ctrl+C` to copy the selection to the macOS clipboard; `Esc` clears it. Typing or pasting replaces selected text in a form field.
 
 ### Writing
 
