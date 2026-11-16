@@ -266,6 +266,21 @@ async fn every_cell_on_every_tab_and_overlay_is_one_column_wide_at_80_120_and_16
         on_ticket("Epics", Tab::Epics, &[], |_| true),
         on_ticket("Unassigned", Tab::Unassigned, &[], |_| true),
         on_ticket("Filters", Tab::Filters, &[], |_| true),
+        on_ticket("My Work marking", Tab::MyWork, &[' '], |app| {
+            app.selected_ticket_count() == 1
+        }),
+        on_ticket("Team marking", Tab::Team, &[' '], |app| {
+            app.selected_ticket_count() == 1
+        }),
+        on_ticket("Epics marking", Tab::Epics, &[' '], |app| {
+            app.selected_ticket_count() == 1
+        }),
+        on_ticket("Unassigned marking", Tab::Unassigned, &[' '], |app| {
+            app.selected_ticket_count() == 1
+        }),
+        on_ticket("Filters marking", Tab::Filters, &[' '], |app| {
+            app.selected_ticket_count() == 1
+        }),
         in_detail("ticket detail", &[], App::is_detail_open),
         in_detail("comment", &['C'], App::is_comment_open),
         in_detail("assign", &['a'], App::is_assign_open),
@@ -395,4 +410,96 @@ fn keybindings_help_adapts_scrolls_and_keeps_close_visible() {
     app.toggle_keybindings();
     assert_eq!(app.keybindings_scroll, 0);
     draw(&app, 8, 4); // Tiny terminals must not panic.
+}
+
+fn screen(app: &App, width: u16, height: u16) -> Vec<String> {
+    use ratatui::backend::TestBackend;
+
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| ui(f, app, &sample_config())).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+#[test]
+fn the_screen_is_the_top_bar_and_its_rule_the_list_the_bulk_bar_while_marking_and_the_footer() {
+    let mut app = app_with_a_ticket_on_every_tab(Tab::MyWork);
+    let rows = screen(&app, 120, 14);
+    assert!(
+        rows[0].starts_with(" lazyjira   My Work   Team"),
+        "{}",
+        rows[0]
+    );
+    assert!(rows[0].trim_end().ends_with("Settings"), "{}", rows[0]);
+    assert_eq!(rows[1], "─".repeat(120));
+    assert_eq!(rows[3].trim_end(), " ● In Progress 1");
+    assert!(
+        rows[13].starts_with(" Tab switch · j/k move"),
+        "{}",
+        rows[13]
+    );
+    assert!(
+        !rows[12].contains("selected"),
+        "no bulk bar until a ticket is marked"
+    );
+
+    // Marking one ticket adds the bulk bar over the footer, which keeps its row.
+    app.selected_ticket_keys.insert("DEMO-1".into());
+    let rows = screen(&app, 120, 14);
+    assert_eq!(
+        rows[12].trim_end(),
+        " 1 selected   B move or assign · u clear · A all"
+    );
+    assert!(
+        rows[13].starts_with(" Tab switch · j/k move"),
+        "{}",
+        rows[13]
+    );
+    assert!(
+        !rows[13].contains("u clear"),
+        "the keys are named once: {}",
+        rows[13]
+    );
+    assert!(
+        !rows[13].contains("1 selected"),
+        "so is the count: {}",
+        rows[13]
+    );
+    assert_eq!(rows[3].chars().nth(3), Some('☒'), "{}", rows[3]);
+    assert_eq!(rows[4].chars().nth(3), Some('☒'), "{}", rows[4]);
+
+    // Unmarking takes the bar and the checkboxes away.
+    app.clear_selected_tickets();
+    let rows = screen(&app, 120, 14);
+    assert!(!rows[12].contains("selected"));
+    assert!(rows
+        .iter()
+        .all(|row| !row.contains('☒') && !row.contains('☐')));
+}
+
+#[test]
+fn the_error_and_search_lines_are_red_and_yellow_and_the_theme_recolors_them() {
+    use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
+
+    let mut app = App::new();
+    app.loading = false;
+    let mut config = sample_config();
+    let color_of_footer = |app: &App, config: &AppConfig| {
+        let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
+        terminal.draw(|f| ui(f, app, config)).unwrap();
+        terminal.backend().buffer()[(1, 7)].fg
+    };
+    app.flash = Some("Refresh failed".into());
+    assert_eq!(color_of_footer(&app, &config), Color::Red);
+    app.flash = None;
+    app.search = Some("abc".into());
+    assert_eq!(color_of_footer(&app, &config), Color::Yellow);
+    app.search = None;
+    app.theme = theme::resolve("nord", &config.themes);
+    config.preferences.theme = "nord".into();
+    app.flash = Some("Refresh failed".into());
+    assert!(matches!(color_of_footer(&app, &config), Color::Rgb(..)));
 }

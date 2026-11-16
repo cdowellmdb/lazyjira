@@ -740,7 +740,8 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(top_bar::HEIGHT),
-            Constraint::Min(0),    // Content
+            Constraint::Min(0), // Content
+            Constraint::Length((app.selected_ticket_count() > 0) as u16), // Bulk bar
             Constraint::Length(1), // Status bar
         ])
         .split(f.area());
@@ -781,9 +782,12 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     } else if let Some(pending) = app.moves.pending_message() {
         Line::from(Span::styled(pending, style::warning()))
     } else {
-        footer::line(app, &config.preferences.theme, chunks[2].width)
+        footer::line(app, &config.preferences.theme, chunks[3].width)
     };
-    f.render_widget(ratatui::widgets::Paragraph::new(status_line), chunks[2]);
+    f.render_widget(ratatui::widgets::Paragraph::new(status_line), chunks[3]);
+    if let Some(bar) = footer::bulk_bar(app, chunks[2].width) {
+        f.render_widget(ratatui::widgets::Paragraph::new(bar), chunks[2]);
+    }
 
     // Detail overlay
     if app.is_detail_open() {

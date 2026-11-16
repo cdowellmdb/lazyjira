@@ -1,5 +1,6 @@
 //! The status line when nothing else is on it: key hints that drop out as the terminal narrows,
-//! and one muted segment, right-aligned, for what differs from the defaults.
+//! and one muted segment, right-aligned, for what differs from the defaults. While tickets are
+//! marked, the bulk bar above it counts them and names the keys that act on them.
 
 use std::cmp::Reverse;
 
@@ -26,9 +27,6 @@ const fn hint(key: &'static str, label: &'static str, priority: u8) -> Hint {
 }
 
 const MORE: Hint = hint("?", "more", 0);
-/// Shown beside `Space mark` while tickets are marked, so a user can see how to undo it.
-const CLEAR: Hint = hint("u", "clear", 1);
-const ALL: Hint = hint("A", "all", 1);
 
 const MAIN: &[Hint] = &[
     hint("Tab", "switch", 1),
@@ -78,9 +76,6 @@ fn hints(app: &App, theme: &str) -> Vec<Hint> {
     };
     for hint in base {
         hints.push(*hint);
-        if hint.key == "Space" && app.selected_ticket_count() > 0 {
-            hints.extend([CLEAR, ALL]);
-        }
     }
     hints
 }
@@ -88,10 +83,6 @@ fn hints(app: &App, theme: &str) -> Vec<Hint> {
 /// What differs from the defaults, joined, or empty when nothing does.
 fn indicators(app: &App) -> String {
     let mut parts = Vec::new();
-    let selected = app.selected_ticket_count();
-    if selected > 0 {
-        parts.push(format!("{selected} selected"));
-    }
     if app.active_tab == Tab::Filters {
         if app.filter_focus == FilterFocus::Results {
             parts.push("results pane".to_string());
@@ -116,6 +107,50 @@ fn indicators(app: &App) -> String {
         }
     }
     parts.join(SEPARATOR)
+}
+
+/// What the bulk bar offers, in the order it drops them from the right.
+const BULK_HINTS: [(&str, &str); 3] = [("B", "move or assign"), ("u", "clear"), ("A", "all")];
+
+/// The bar above the footer while tickets are marked: `2 selected   B move or assign · u clear ·
+/// A all`, with whole hints dropped from the right in `width` columns. `None` when nothing is
+/// marked.
+pub fn bulk_bar(app: &App, width: u16) -> Option<Line<'static>> {
+    let selected = app.selected_ticket_count();
+    if selected == 0 {
+        return None;
+    }
+    let count = format!("{selected} selected");
+    let width_of = |hints: &[(&str, &str)]| {
+        let text: usize = hints
+            .iter()
+            .map(|(key, label)| key.width() + 1 + label.width())
+            .sum();
+        1 + count.width() + 3 + text + SEPARATOR.width() * hints.len().saturating_sub(1)
+    };
+    let mut hints = &BULK_HINTS[..];
+    while !hints.is_empty() && width_of(hints) > width as usize {
+        hints = &hints[..hints.len() - 1];
+    }
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::styled(
+            selected.to_string(),
+            style::accent().patch(style::heading()),
+        ),
+        Span::styled(" selected", style::secondary()),
+    ];
+    if !hints.is_empty() {
+        spans.push(Span::raw("   "));
+    }
+    for (at, (key, label)) in hints.iter().enumerate() {
+        if at > 0 {
+            spans.push(Span::styled(SEPARATOR, style::secondary()));
+        }
+        spans.push(Span::styled(*key, style::key_hint()));
+        spans.push(Span::styled(format!(" {label}"), style::secondary()));
+    }
+    Some(Line::from(spans))
 }
 
 fn age_in_minutes(age_secs: u64) -> String {
@@ -275,40 +310,6 @@ mod tests {
         "Tab switch",
     ];
 
-    /// The footer while tickets are marked, from the full line down to `? more`.
-    /// Each step is the narrowest width that holds its line.
-    const MARKED_STEPS: [(usize, &str); 11] = [
-        (116, " Tab switch · j/k move · Space mark · u clear · A all · Enter open · B bulk · / search · r refresh · q quit · ? more"),
-        (104, " Tab switch · j/k move · Space mark · u clear · A all · Enter open · B bulk · / search · q quit · ? more"),
-        (95, " Tab switch · j/k move · Space mark · u clear · A all · Enter open · / search · q quit · ? more"),
-        (86, " Tab switch · j/k move · Space mark · u clear · A all · Enter open · / search · ? more"),
-        (73, " Tab switch · j/k move · u clear · A all · Enter open · / search · ? more"),
-        (62, " Tab switch · j/k move · u clear · A all · Enter open · ? more"),
-        (49, " Tab switch · j/k move · u clear · A all · ? more"),
-        (41, " Tab switch · j/k move · u clear · ? more"),
-        (31, " Tab switch · j/k move · ? more"),
-        (20, " Tab switch · ? more"),
-        (7, " ? more"),
-    ];
-    const MARKED_DROPPED: [&str; 10] = [
-        "r refresh",
-        "B bulk",
-        "q quit",
-        "Space mark",
-        "/ search",
-        "Enter open",
-        "A all",
-        "u clear",
-        "j/k move",
-        "Tab switch",
-    ];
-
-    fn marked() -> Vec<Hint> {
-        let mut app = app();
-        app.selected_ticket_keys.insert("DEMO-1".into());
-        hints(&app, "default")
-    }
-
     fn spooky() -> Vec<Hint> {
         let mut app = app();
         app.delight.enabled = true;
@@ -363,14 +364,75 @@ mod tests {
     }
 
     #[test]
-    fn marked_tickets_add_clear_and_all_beside_mark_and_they_drop_at_exact_widths() {
-        assert_steps(&marked(), &MARKED_STEPS, &MARKED_DROPPED);
+    fn marked_tickets_add_no_hint_to_the_footer_because_the_bulk_bar_names_the_keys() {
         let mut app = app();
-        assert!(!text(&line(&app, "default", 200)).contains("u clear"));
+        let idle = text(&line(&app, "default", 200));
         app.selected_ticket_keys.insert("DEMO-1".into());
-        assert!(text(&line(&app, "default", 200)).contains("Space mark · u clear · A all · Enter"));
-        app.active_tab = Tab::Filters;
-        assert!(text(&line(&app, "default", 200)).contains("Space mark · u clear · A all · n new"));
+        assert_eq!(text(&line(&app, "default", 200)), idle);
+        assert!(!idle.contains("u clear"), "{idle}");
+        assert_eq!(indicators(&app), "", "no duplicate count either");
+    }
+
+    fn bulk_text(selected: usize, width: u16) -> Option<String> {
+        let mut app = app();
+        app.selected_ticket_keys = (1..=selected).map(|n| format!("DEMO-{n}")).collect();
+        bulk_bar(&app, width).map(|line| text(&line))
+    }
+
+    #[test]
+    fn the_bulk_bar_counts_the_marked_tickets_and_drops_whole_hints_from_the_right_at_exact_widths()
+    {
+        assert_eq!(bulk_text(0, 200), None);
+        let full = " 2 selected   B move or assign · u clear · A all";
+        assert_eq!(full.width(), 48);
+        assert_eq!(bulk_text(2, 200).as_deref(), Some(full));
+        assert_eq!(
+            bulk_text(2, 48).as_deref(),
+            Some(full),
+            "exactly the room it needs"
+        );
+        for (width, expected) in [
+            (47, " 2 selected   B move or assign · u clear"),
+            (40, " 2 selected   B move or assign · u clear"),
+            (39, " 2 selected   B move or assign"),
+            (30, " 2 selected   B move or assign"),
+            (29, " 2 selected"),
+            (0, " 2 selected"),
+        ] {
+            assert_eq!(bulk_text(2, width).as_deref(), Some(expected), "{width}");
+        }
+        // The count takes its own width: 12 is a column wider than 2.
+        assert_eq!(
+            bulk_text(12, 49).as_deref(),
+            Some(" 12 selected   B move or assign · u clear · A all")
+        );
+        assert_eq!(
+            bulk_text(12, 48).as_deref(),
+            Some(" 12 selected   B move or assign · u clear")
+        );
+    }
+
+    #[test]
+    fn the_bulk_bar_has_an_accent_count_bold_accent_keys_and_muted_words() {
+        let mut app = app();
+        app.selected_ticket_keys.insert("DEMO-1".into());
+        let line = bulk_bar(&app, 80).unwrap();
+        let style_of = |content: &str| {
+            line.spans
+                .iter()
+                .find(|span| span.content == content)
+                .unwrap_or_else(|| panic!("no {content:?} in {line:?}"))
+                .style
+        };
+        assert_eq!(style_of("1").fg, Some(Color::Cyan));
+        assert!(style_of("1").add_modifier.contains(Modifier::BOLD));
+        assert_eq!(style_of(" selected").fg, Some(Color::DarkGray));
+        for key in ["B", "u", "A"] {
+            assert_eq!(style_of(key).fg, Some(Color::Cyan), "{key}");
+            assert!(style_of(key).add_modifier.contains(Modifier::BOLD), "{key}");
+        }
+        assert_eq!(style_of(" move or assign").fg, Some(Color::DarkGray));
+        assert_eq!(style_of(" · ").fg, Some(Color::DarkGray));
     }
 
     #[test]
@@ -517,7 +579,8 @@ mod tests {
             .collect();
         assert!(help.contains("/"), "the search row lists /");
         let mut keys: Vec<&str> = MAIN.iter().chain(FILTERS).map(|hint| hint.key).collect();
-        keys.extend([CLEAR.key, ALL.key, "S"]);
+        keys.extend(BULK_HINTS.iter().map(|(key, _)| *key));
+        keys.push("S");
         for key in keys {
             assert!(help.contains(key), "{key} is not in the help");
         }
