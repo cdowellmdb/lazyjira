@@ -565,3 +565,15 @@ fn a_heading_is_drawn_in_the_text_color_every_theme_gives_plain_text() {
         );
     }
 }
+
+#[test]
+fn a_one_column_table_too_wide_to_align_keeps_its_header_above_the_records() {
+    let lines = render("||Name||\n|alpha beta gamma delta epsilon|\n|zeta|", 20);
+    assert_eq!(
+        text(&lines),
+        vec!["Name", "", "alpha beta gamma", "delta epsilon", "", "zeta"]
+    );
+    let bold = style::primary().add_modifier(Modifier::BOLD);
+    assert_eq!(lines[0].spans, vec![Span::styled("Name", bold)]);
+    assert_eq!(lines[2].spans, vec![Span::styled("alpha beta gamma", bold)]);
+}

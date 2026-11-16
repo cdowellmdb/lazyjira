@@ -98,7 +98,8 @@ fn aligned(rows: &[Row], widths: &[usize], width: usize) -> Vec<Line<'static>> {
 
 /// A table too wide to align, one record per body row: its first cell in bold, then a line for
 /// each other cell, `  Header  value`, with the header muted and padded to the widest one and the
-/// value wrapped under itself. Without a header row the lines have no label.
+/// value wrapped under itself. Without a header row the lines have no label. A header of one
+/// cell has no labels to give, so it heads the records on a line of its own.
 fn records(rows: &[Row], width: usize) -> Vec<Line<'static>> {
     let header = rows.first().filter(|row| rows.len() > 1 && row.header);
     let body = &rows[usize::from(header.is_some())..];
@@ -120,6 +121,9 @@ fn records(rows: &[Row], width: usize) -> Vec<Line<'static>> {
     let lead = if label_width == 0 { 2 } else { label_width + 4 };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    if let Some([title]) = header.map(|row| row.cells.as_slice()) {
+        lines.extend(wrap(vec![], vec![], title.clone(), width));
+    }
     for row in body {
         // A blank line sets each record off from what comes before it.
         if lines.last().is_some_and(|last| last.width() > 0) {
