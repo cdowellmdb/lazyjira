@@ -603,6 +603,17 @@ async fn open_panel(app: &mut App, config: &mut AppConfig, name: &str) {
             press(app, config, KeyCode::Char('B')).await;
         }
         "upload" => press(app, config, KeyCode::Char('U')).await,
+        "move" => {
+            app.open_detail("LAST-30".to_string());
+            let Some(move_picker::JiraCall::FetchTransitions { key, request }) =
+                move_picker::open(app)
+            else {
+                panic!("m should ask Jira for transitions");
+            };
+            let transitions =
+                transitions::parse_transitions(transitions::tests::BACKLOG_EPIC).unwrap();
+            move_picker::receive(app, &key, request, Ok(transitions));
+        }
         "failure" => {
             assert!(app.moves.start("DEMO-9", "Done"));
             app.finish_move("DEMO-9", Err("Jira answered 400 Bad Request.".to_string()));
@@ -612,8 +623,8 @@ async fn open_panel(app: &mut App, config: &mut AppConfig, name: &str) {
     assert!(widgets::dock::open(app).is_some(), "{name} did not open");
 }
 
-const PANELS: [&str; 8] = [
-    "create", "comment", "assign", "edit", "filter", "bulk", "upload", "failure",
+const PANELS: [&str; 9] = [
+    "create", "comment", "assign", "edit", "filter", "bulk", "upload", "move", "failure",
 ];
 
 #[tokio::test]
@@ -630,6 +641,7 @@ async fn a_panel_takes_the_rows_it_needs_up_to_60_percent_of_the_content_at_80x2
         ("filter", 2 + 5, 0),
         ("bulk", 2 + 6, 1),
         ("upload", 2 + 3, 0),
+        ("move", 2 + 5, 0),
         ("failure", 2 + 4, 0),
     ];
     for (width, height) in [(80, 24), (120, 40), (160, 45)] {
@@ -663,7 +675,7 @@ async fn a_panel_takes_the_rows_it_needs_up_to_60_percent_of_the_content_at_80x2
 #[tokio::test]
 async fn a_panel_hides_the_list_under_it_but_leaves_the_list_above_with_its_selection() {
     for (width, height) in [(80, 24), (120, 40), (160, 45)] {
-        for name in PANELS {
+        for name in PANELS.into_iter().filter(|name| *name != "move") {
             let mut config = two_saved_filters();
             let mut app = app_with_a_long_list();
             open_panel(&mut app, &mut config, name).await;

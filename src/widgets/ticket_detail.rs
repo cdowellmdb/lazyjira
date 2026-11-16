@@ -7,8 +7,7 @@ use ratatui::widgets::{
 };
 
 use crate::app::{App, DetailMode};
-use crate::cache::{ActivityKind, Epic, Status, StatusRules, Ticket};
-use crate::move_picker::MovePicker;
+use crate::cache::{ActivityKind, Epic, StatusRules, Ticket};
 use crate::style::status_color;
 use crate::views::common::{epic_bar, fit, panel, truncate, EPIC_BAR_WIDTH};
 use crate::widgets::activity::format_timestamp;
@@ -112,23 +111,11 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         if let Some(ticket) = app.find_ticket(ticket_key) {
             let (area, inner) = render_frame(f, app, ticket_key);
             match &app.detail_mode {
-                DetailMode::View => render_view(f, area, inner, app, ticket),
-                DetailMode::MoveLoading { .. } => render_with_footer(
-                    f,
-                    inner,
-                    vec![Line::from(Span::styled(
-                        format!("Loading {}'s transitions from Jira…", ticket_key),
-                        Style::default().fg(Color::Yellow),
-                    ))],
-                    &[("Esc", "cancel")],
-                    app,
-                ),
-                DetailMode::MovePicker(picker) => {
-                    render_move_picker(f, inner, ticket, picker, app.status_rules(), app)
-                }
-                DetailMode::ResolutionPicker { picker, selected } => {
-                    render_resolution_picker(f, inner, picker, *selected, app)
-                }
+                // The move panel docks under the detail, which keeps showing the ticket.
+                DetailMode::View
+                | DetailMode::MoveLoading { .. }
+                | DetailMode::MovePicker(_)
+                | DetailMode::ResolutionPicker { .. } => render_view(f, area, inner, app, ticket),
                 DetailMode::History { scroll } => {
                     crate::widgets::activity::render(f, inner, &ticket.activity, *scroll);
                     crate::widgets::form::buttons(
@@ -514,183 +501,6 @@ fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, 
     }
 
     render_scrollable(f, app, frame, body, lines);
-}
-
-/// Renders `lines` above the key `hints`.
-fn render_with_footer(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    lines: Vec<Line>,
-    hints: &[(&'static str, &'static str)],
-    app: &App,
-) {
-    let body = render_footer(f, area, hints, app);
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
-}
-
-fn heading(text: String) -> Line<'static> {
-    Line::from(Span::styled(
-        text,
-        Style::default()
-            .fg(Color::Reset)
-            .add_modifier(Modifier::BOLD),
-    ))
-}
-
-pub(crate) fn option_style(color: Color, selected: bool) -> Style {
-    let style = Style::default().fg(color);
-    if selected {
-        style.add_modifier(Modifier::BOLD).bg(Color::DarkGray)
-    } else {
-        style
-    }
-}
-
-pub(crate) fn render_menu(
-    f: &mut ratatui::Frame,
-    app: &App,
-    area: Rect,
-    lines: Vec<Line<'static>>,
-    choices: (&[(usize, usize)], usize),
-    hints: &[(&'static str, &'static str)],
-) {
-    let body = render_footer(f, area, hints, app);
-    let selected_line = choices
-        .0
-        .iter()
-        .find(|(_, index)| *index == choices.1)
-        .map_or(0, |(line, _)| *line);
-    let scroll = selected_line.saturating_sub(body.height.saturating_sub(1) as usize);
-    for &(line, index) in choices.0 {
-        if let Some(y) = line
-            .checked_sub(scroll)
-            .filter(|y| *y < body.height as usize)
-        {
-            app.mouse_targets.borrow_mut().push((
-                Rect::new(body.x, body.y + y as u16, body.width, 1),
-                crate::mouse::Target::Choose { field: 0, index },
-            ));
-        }
-    }
-    f.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), body);
-}
-
-fn render_move_picker(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    ticket: &crate::cache::Ticket,
-    picker: &MovePicker,
-    rules: &StatusRules,
-    app: &App,
-) {
-    let mut lines = vec![
-        heading(match &picker.only_to {
-            Some(status) => format!(
-                "Transitions to {} from {}:",
-                status.as_str(),
-                ticket.status.as_str()
-            ),
-            None => format!("Move from {}:", ticket.status.as_str()),
-        }),
-        Line::from(""),
-    ];
-
-    let mut choices = Vec::new();
-    let rows = picker.rows();
-    if rows.is_empty() {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "Jira offers no transitions from {}.",
-                ticket.status.as_str()
-            ),
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    for (i, transition) in rows.iter().enumerate() {
-        choices.push((lines.len(), i));
-        let shortcut = Status::move_shortcut_prefix(&transition.to_name);
-        let prefix = if i == picker.selected { "› " } else { "  " };
-        lines.push(Line::from(Span::styled(
-            format!(
-                "{}{}{}",
-                prefix,
-                shortcut,
-                transition.label(&picker.transitions)
-            ),
-            option_style(
-                status_color(&transition.to_name, rules),
-                i == picker.selected,
-            ),
-        )));
-    }
-
-    if let Some(transition) = picker.selected_transition().filter(|_| picker.confirming) {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!(
-                "Move with {}? Press Enter or y. Esc cancels.",
-                transition.label(&picker.transitions)
-            ),
-            Style::default().fg(Color::Yellow),
-        )));
-    }
-
-    render_menu(
-        f,
-        app,
-        area,
-        lines,
-        (&choices, picker.selected),
-        &[
-            ("j/k", "choose"),
-            (
-                "Enter",
-                if picker.confirming {
-                    "confirm"
-                } else {
-                    "select"
-                },
-            ),
-            (crate::cache::MOVE_SHORTCUTS, "pick by status"),
-            ("Shift+key", "move now"),
-            ("Esc", "cancel"),
-        ],
-    );
-}
-
-fn render_resolution_picker(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    picker: &MovePicker,
-    selected: usize,
-    app: &App,
-) {
-    let transition = picker
-        .selected_transition()
-        .map(|t| t.label(&picker.transitions))
-        .unwrap_or_default();
-    let mut lines = vec![
-        heading(format!("{} — select a resolution:", transition)),
-        Line::from(""),
-    ];
-    let mut choices = Vec::new();
-    for (i, choice) in picker.resolution_choices().iter().enumerate() {
-        choices.push((lines.len(), i));
-        let prefix = if i == selected { "› " } else { "  " };
-        let name = choice.as_ref().map_or("No resolution", |r| r.name.as_str());
-        lines.push(Line::from(Span::styled(
-            format!("{}{}", prefix, name),
-            option_style(Color::Reset, i == selected),
-        )));
-    }
-    render_menu(
-        f,
-        app,
-        area,
-        lines,
-        (&choices, selected),
-        &[("j/k", "choose"), ("Enter", "move"), ("Esc", "back")],
-    );
 }
 
 #[cfg(test)]

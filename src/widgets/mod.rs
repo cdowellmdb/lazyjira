@@ -11,4 +11,5 @@ pub mod form;
 pub mod keybindings_help;
 pub mod markup;
 pub mod move_failure;
+pub mod move_status;
 pub mod ticket_detail;
