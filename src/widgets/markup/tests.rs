@@ -144,7 +144,7 @@ fn headings_lists_and_rules() {
     assert_eq!(
         text(&lines),
         vec![
-            "Title",
+            &format!("── Title {}", "─".repeat(21)),
             &"─".repeat(30),
             "intro",
             "1. one",
@@ -159,20 +159,48 @@ fn headings_lists_and_rules() {
 }
 
 #[test]
-fn headings_are_bold_in_the_text_color_and_only_level_one_gets_a_muted_rule() {
-    let bold = style::heading();
+fn a_heading_is_a_muted_divider_around_bold_text_and_only_level_one_adds_a_rule_below() {
     let lines = render("h1. One\nh2. Two\nh3. Three\nh6. Six", 12);
     assert_eq!(
         text(&lines),
-        vec!["One", &"─".repeat(12), "", "Two", "", "Three", "", "Six"]
+        vec![
+            "── One ─────",
+            &"─".repeat(12),
+            "",
+            "── Two ─────",
+            "",
+            "── Three ───",
+            "",
+            "── Six ─────",
+        ]
     );
-    for at in [0, 3, 5, 7] {
+    for (at, title) in [(0, "One"), (3, "Two"), (5, "Three"), (7, "Six")] {
+        let rest = text(&lines)[at].chars().count() - 4 - title.chars().count();
         assert_eq!(
             lines[at].spans,
-            vec![Span::styled(text(&lines)[at].clone(), bold)]
+            vec![
+                Span::styled("── ", style::secondary()),
+                Span::styled(title, style::heading()),
+                Span::styled(format!(" {}", "─".repeat(rest)), style::secondary()),
+            ]
         );
     }
     assert_eq!(lines[1].spans[0].style, style::secondary());
+}
+
+#[test]
+fn a_heading_too_long_to_leave_a_rule_wraps_as_bold_text_without_one() {
+    // The lead (3 cells), the text, a space and one rule cell: the text may be 5 shorter.
+    let fits = render("h2. abcdefg", 12);
+    assert_eq!(text(&fits), vec!["── abcdefg ─"]);
+    let full = render("h2. abcdefgh", 12);
+    assert_eq!(text(&full), vec!["abcdefgh"]);
+    assert_eq!(
+        full[0].spans,
+        vec![Span::styled("abcdefgh", style::heading())]
+    );
+    let long = render("h2. alpha beta gamma delta", 12);
+    assert_eq!(text(&long), vec!["alpha beta", "gamma delta"]);
 }
 
 #[test]
@@ -647,10 +675,10 @@ fn a_heading_is_drawn_in_the_text_color_every_theme_gives_plain_text() {
             buffer.set_line(0, y as u16, line, 20);
         }
         crate::theme::resolve(&name, &BTreeMap::new()).apply(&mut buffer);
-        let (head, plain) = (&buffer[(0, 0)], &buffer[(0, 2)]);
+        let (head, plain) = (&buffer[(3, 0)], &buffer[(0, 2)]);
         assert_eq!((head.fg, head.bg), (plain.fg, plain.bg), "{name}");
         assert!(head.modifier.contains(Modifier::BOLD), "{name}");
-        let (head_chip, plain_chip) = (&buffer[(5, 0)], &buffer[(6, 2)]);
+        let (head_chip, plain_chip) = (&buffer[(8, 0)], &buffer[(6, 2)]);
         assert_eq!(head_chip.symbol(), "x");
         assert_eq!(
             (head_chip.fg, head_chip.bg),

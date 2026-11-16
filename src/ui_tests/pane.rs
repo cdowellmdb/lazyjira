@@ -166,8 +166,8 @@ async fn one_blank_row_follows_the_rule_under_the_header_fields() {
         assert_eq!(cells(&rows[rule - 1], 51, 60).trim(), "", "{case}");
         assert_eq!(cells(&rows[rule + 1], 51, 60).trim(), "", "{case}");
         assert_eq!(
-            cells(&rows[rule + 2], 51, 18),
-            " Problem statement",
+            cells(&rows[rule + 2], 51, 21),
+            " ── Problem statement",
             "{case}"
         );
     }

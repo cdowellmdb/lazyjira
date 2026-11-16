@@ -151,7 +151,21 @@ impl Renderer {
 
     fn heading(&mut self, level: u8, text: &str) {
         self.blank();
-        self.push_wrapped(vec![], vec![], inline(text, style::heading()));
+        let content = inline(text, style::heading());
+        // `── Title ────`, the pane's Comments divider, so a heading reads without relying on
+        // bold. One too long to leave a rule wraps as plain bold text.
+        let used = 3 + wrap::spans_width(&content) + 1;
+        if used < self.width {
+            let mut spans = vec![Span::styled("── ", style::secondary())];
+            spans.extend(content);
+            spans.push(Span::styled(
+                format!(" {}", "─".repeat(self.width - used)),
+                style::secondary(),
+            ));
+            self.lines.push(Line::from(spans));
+        } else {
+            self.push_wrapped(vec![], vec![], content);
+        }
         if level == 1 {
             self.rule();
         }
