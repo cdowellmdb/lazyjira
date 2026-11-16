@@ -121,10 +121,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let kept: usize = groups.iter().map(|group| group.total).sum();
 
     if app.filter_loading {
-        lines.push(Span::styled(
-            "  Loading...",
-            Style::default().fg(Color::Yellow),
-        ));
+        lines.push(Span::styled("  Loading...", style::warning()));
     } else if app.filter_results.is_empty() {
         lines.push(Span::styled(
             "  Select a filter and press Enter to run it",

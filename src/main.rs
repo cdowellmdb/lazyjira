@@ -815,15 +815,12 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         // One line: the terminal drops a line break, which would run Jira's messages together.
         Line::from(Span::styled(
             flash.lines().collect::<Vec<_>>().join("; "),
-            Style::default().fg(Color::Red),
+            style::error(),
         ))
     } else if let Some(ref search) = app.search {
-        Line::from(Span::styled(
-            format!("/{}", search),
-            Style::default().fg(Color::Yellow),
-        ))
+        Line::from(Span::styled(format!("/{}", search), style::warning()))
     } else if let Some(pending) = app.moves.pending_message() {
-        Line::from(Span::styled(pending, Style::default().fg(Color::Yellow)))
+        Line::from(Span::styled(pending, style::warning()))
     } else {
         footer::line(app, &config.preferences.theme, chunks[2].width)
     };

@@ -15,6 +15,16 @@ pub fn secondary() -> Style {
     Style::default().fg(Color::DarkGray)
 }
 
+/// Errors and failed actions.
+pub fn error() -> Style {
+    Style::default().fg(Color::Red)
+}
+
+/// What is pending or in progress: the search line, a move under way, "Loading...".
+pub fn warning() -> Style {
+    Style::default().fg(Color::Yellow)
+}
+
 /// Focus, links, the active tab.
 pub fn accent() -> Style {
     Style::default().fg(Color::Cyan)
@@ -89,6 +99,8 @@ mod tests {
         let styles = [
             primary(),
             secondary(),
+            error(),
+            warning(),
             accent(),
             key_hint(),
             heading(),
