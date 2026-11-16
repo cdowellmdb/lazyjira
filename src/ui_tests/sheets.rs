@@ -150,7 +150,7 @@ async fn help_and_settings_register_these_exact_click_cells_at_80x24() {
             '?',
             vec![
                 (74, 0, 5, 1, Target::Key(KeyCode::Esc)),
-                (2, 23, 76, 1, Target::Key(KeyCode::Esc)),
+                (30, 23, 11, 1, Target::Key(KeyCode::Esc)),
             ],
         ),
         (
@@ -243,4 +243,29 @@ fn settings_at_80x24_shows_all_five_starting_tabs_and_all_five_themes() {
         ]
     );
     assert!(rows[23].trim_start().starts_with("Save"), "{}", rows[23]);
+}
+
+#[tokio::test]
+async fn only_help_s_close_hint_closes_it_and_the_scroll_hint_before_it_does_not() {
+    use crate::mouse::Target;
+    let mut config = two_saved_filters();
+    // Scrolling help has "↑↓/j/k · PgUp/PgDn scroll   " (28 cells) before it, from column 2.
+    for (x, closes) in [(29, false), (30, true), (40, true), (41, false)] {
+        let mut app = app_with_a_long_list();
+        press(&mut app, &mut config, KeyCode::Char('?')).await;
+        screen(&app, 80, 24);
+        click(&mut app, &mut config, x, 23).await;
+        assert_eq!(!app.show_keybindings, closes, "clicked at {x}");
+    }
+    // Help that fits has nothing before the close hint.
+    let mut app = app_with_a_long_list();
+    press(&mut app, &mut config, KeyCode::Char('?')).await;
+    screen(&app, 160, 55);
+    let close = app
+        .mouse_targets
+        .borrow()
+        .iter()
+        .rfind(|(_, target)| *target == Target::Key(KeyCode::Esc))
+        .map(|(area, _)| (area.x, area.y, area.width, area.height));
+    assert_eq!(close, Some((2, 54, 11, 1)));
 }
