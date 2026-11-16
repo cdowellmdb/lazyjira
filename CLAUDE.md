@@ -35,7 +35,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/settings.rs** — In-app team, epic, startup, and theme preferences
 - **src/delight.rs** — Confetti, the quit receipt, stale-ticket fading, the empty My Work scene and spooky season; all off with `preferences.delight = false`
 - **src/theme.rs** — Color themes: presets, custom themes from `[themes]`, and the pass that recolors a drawn frame; a test keeps every preset's text and roles readable
-- **src/top_bar.rs** — The one-line top bar (`lazyjira`, the tabs, a Settings button) and its rule; registers the tab and Settings mouse targets
+- **src/top_bar.rs** — The one-line top bar (`lazyjira`, the tabs, and `Settings` as muted text at the right) and its rule; registers the tab and Settings mouse targets
 - **src/style.rs** — The shared styles, one function per role in `docs/tui-style.md` (primary, secondary, subtle, error, warning, accent, key hint, heading, selected row, status) and `status_color`, in the ANSI colors `theme.rs` recolors
 - **src/footer.rs** — The idle footer: `Hint`s (key, label, priority) that drop as the terminal narrows, the muted segment of non-default state at the right, and the bulk bar shown above it while tickets are marked
 - **src/status.rs** — The status area under the content: a flash error, the search, a pending move or the footer, and while a detail is open its hints wrapped onto as many rows as the width needs, with a message on a row above

@@ -1,4 +1,4 @@
-//! The top bar: `lazyjira`, the tabs and the Settings button on one line, a muted rule under it.
+//! The top bar: `lazyjira`, the tabs and `Settings` on one line, a muted rule under it.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
@@ -16,10 +16,8 @@ const TAB_GAP: u16 = 3;
 /// A tab's click target is its title and the cell either side.
 const TAB_PAD: u16 = 1;
 const SETTINGS_LABEL: &str = "Settings";
-/// A button's label has this many cells either side.
-const BUTTON_PAD: u16 = 1;
-/// The Settings button is its label with its padding, and ends two cells from the edge.
-const SETTINGS_WIDTH: u16 = SETTINGS_LABEL.len() as u16 + 2 * BUTTON_PAD;
+/// Settings' click target is its label and the cell either side, and ends two cells from the edge.
+const SETTINGS_WIDTH: u16 = SETTINGS_LABEL.len() as u16 + 2;
 const SETTINGS_EDGE: u16 = 2;
 
 pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
@@ -55,17 +53,22 @@ pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
         line,
     );
     if area.right().saturating_sub(x) >= SETTINGS_WIDTH + SETTINGS_EDGE {
-        crate::widgets::form::buttons(
-            f,
-            app,
-            Rect::new(
-                area.right() - SETTINGS_WIDTH - SETTINGS_EDGE,
-                area.y,
-                SETTINGS_WIDTH,
-                1,
-            ),
-            &[(SETTINGS_LABEL, crossterm::event::KeyCode::Char('S'))],
+        let rect = Rect::new(
+            area.right() - SETTINGS_WIDTH - SETTINGS_EDGE,
+            area.y,
+            SETTINGS_WIDTH,
+            1,
         );
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                format!(" {SETTINGS_LABEL} "),
+                style::secondary(),
+            )),
+            rect,
+        );
+        app.mouse_targets
+            .borrow_mut()
+            .push((rect, Target::Key(crossterm::event::KeyCode::Char('S'))));
     }
     f.render_widget(
         Block::default()
@@ -113,6 +116,21 @@ mod tests {
         assert_eq!(line.find("Settings"), Some(149));
         assert_eq!(row(&buffer, 1), "─".repeat(160));
         assert!(buffer.content.iter().all(|cell| cell.symbol() != "│"));
+    }
+
+    #[test]
+    fn settings_is_muted_text_like_an_inactive_tab_with_no_fill_or_underline() {
+        let buffer = draw(&App::new(), 160);
+        for x in 148..158 {
+            let cell = &buffer[(x, 0)];
+            assert_eq!(cell.fg, Color::DarkGray, "x = {x}");
+            assert_eq!(cell.bg, Color::Reset, "x = {x}");
+            assert!(cell.modifier.is_empty(), "x = {x}");
+        }
+        assert_eq!(buffer[(148, 0)].symbol(), " ");
+        assert_eq!(buffer[(149, 0)].symbol(), "S");
+        assert_eq!(buffer[(156, 0)].symbol(), "s");
+        assert_eq!(buffer[(157, 0)].symbol(), " ");
     }
 
     #[test]
