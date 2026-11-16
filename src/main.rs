@@ -2027,6 +2027,137 @@ mod tests {
         }
     }
 
+    /// An app with a fossil, spooky season and a description full of Jira's icon markers, so the
+    /// glyphs the app draws on its own are all on screen.
+    fn app_that_draws_every_glyph(tab: Tab, selected_index: usize) -> App {
+        let mut app = app_with_a_ticket_on_every_tab(tab);
+        app.selected_index = selected_index;
+        app.delight.enabled = true;
+        app.delight.today = Some(delight::Today {
+            weekday: 5,
+            month: 10,
+            day: 23,
+        });
+        let lists = [
+            &mut app.cache.my_tickets,
+            &mut app.cache.team_tickets,
+            &mut app.filter_results,
+        ];
+        let tickets = lists.into_iter().flatten().chain(
+            app.cache
+                .epics
+                .iter_mut()
+                .flat_map(|epic| &mut epic.children),
+        );
+        for ticket in tickets {
+            ticket.updated = Some("2020-01-02T03:04:05.000+0000".to_string());
+            ticket.detail_loaded = true;
+            ticket.labels = vec!["label".to_string()];
+            ticket.description = Some("(!) careful (i) note (/) ok (x) no (*) star".to_string());
+        }
+        app.mark_cache_changed();
+        app
+    }
+
+    #[tokio::test]
+    async fn every_cell_on_every_tab_and_overlay_is_one_column_wide_at_80_120_and_160_columns() {
+        use ratatui::backend::TestBackend;
+        use unicode_width::UnicodeWidthStr;
+
+        fn assert_one_column_cells(app: &App, config: &AppConfig, scene: &str) {
+            for width in [80, 120, 160] {
+                let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
+                terminal.draw(|f| ui(f, app, config)).unwrap();
+                for cell in &terminal.backend().buffer().content {
+                    assert_eq!(
+                        cell.symbol().width(),
+                        1,
+                        "{scene} at {width} columns drew {:?}",
+                        cell.symbol()
+                    );
+                }
+            }
+        }
+
+        type Scene = (&'static str, Tab, usize, Vec<KeyCode>, fn(&App) -> bool);
+        let on_ticket = |scene, tab, keys: &[char], is_open| -> Scene {
+            let presses = keys.iter().map(|key| KeyCode::Char(*key)).collect();
+            (scene, tab, 1, presses, is_open)
+        };
+        let in_detail = |scene, keys: &[char], is_open| -> Scene {
+            let mut scene = on_ticket(scene, Tab::MyWork, keys, is_open);
+            scene.3.insert(0, KeyCode::Enter);
+            scene
+        };
+        let scenes: Vec<Scene> = vec![
+            on_ticket("My Work", Tab::MyWork, &[], |_| true),
+            on_ticket("Team", Tab::Team, &[], |_| true),
+            on_ticket("Epics", Tab::Epics, &[], |_| true),
+            on_ticket("Unassigned", Tab::Unassigned, &[], |_| true),
+            on_ticket("Filters", Tab::Filters, &[], |_| true),
+            in_detail("ticket detail", &[], App::is_detail_open),
+            in_detail("comment", &['C'], App::is_comment_open),
+            in_detail("assign", &['a'], App::is_assign_open),
+            in_detail("edit", &['e'], App::is_edit_open),
+            in_detail("activity", &['h'], |app| {
+                matches!(app.detail_mode, DetailMode::History { .. })
+            }),
+            ("epic detail", Tab::Epics, 0, vec![KeyCode::Enter], |app| {
+                app.detail_epic_key.is_some()
+            }),
+            on_ticket(
+                "create ticket",
+                Tab::MyWork,
+                &['c'],
+                App::is_create_ticket_open,
+            ),
+            on_ticket("bulk actions", Tab::MyWork, &['B'], App::is_bulk_open),
+            on_ticket("bulk upload", Tab::MyWork, &['U'], App::is_bulk_upload_open),
+            on_ticket(
+                "filter editor",
+                Tab::Filters,
+                &['n'],
+                App::is_filter_edit_open,
+            ),
+            on_ticket("help", Tab::MyWork, &['?'], |app| app.show_keybindings),
+            on_ticket("settings", Tab::MyWork, &['S'], |app| {
+                app.settings.is_some()
+            }),
+        ];
+        for (scene, tab, index, keys, is_open) in scenes {
+            let mut config = two_saved_filters();
+            let mut app = app_that_draws_every_glyph(tab, index);
+            for key in keys {
+                press(&mut app, &mut config, key).await;
+            }
+            assert!(is_open(&app), "{scene} did not open");
+            assert_one_column_cells(&app, &config, scene);
+        }
+
+        let config = two_saved_filters();
+        let mut app = app_that_draws_every_glyph(Tab::MyWork, 1);
+        app.open_detail("DEMO-1".to_string());
+        let Some(move_picker::JiraCall::FetchTransitions { key, request }) =
+            move_picker::open(&mut app)
+        else {
+            panic!("m should ask Jira for transitions");
+        };
+        let transitions = transitions::parse_transitions(transitions::tests::BACKLOG_EPIC).unwrap();
+        move_picker::receive(&mut app, &key, request, Ok(transitions));
+        assert!(matches!(app.detail_mode, DetailMode::MovePicker(_)));
+        assert_one_column_cells(&app, &config, "move picker");
+
+        let mut app = app_that_draws_every_glyph(Tab::MyWork, 1);
+        assert!(app.moves.start("DEMO-1", "Done"));
+        app.finish_move("DEMO-1", Err("Jira answered 400 Bad Request.".to_string()));
+        assert!(!app.moves.failures().is_empty());
+        assert_one_column_cells(&app, &config, "move failure");
+
+        let mut app = app_that_draws_every_glyph(Tab::MyWork, 1);
+        app.record_move("DEMO-1", "Done");
+        assert_one_column_cells(&app, &config, "after a move to done");
+    }
+
     #[test]
     fn keybindings_help_adapts_scrolls_and_keeps_close_visible() {
         use ratatui::backend::TestBackend;
