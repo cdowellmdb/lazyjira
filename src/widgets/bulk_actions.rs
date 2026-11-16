@@ -148,7 +148,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let mut scroll = 0;
     let mut choices = Vec::new();
     let choose = [("j/k", "choose"), ("Enter", "next"), ("Esc", "cancel")];
-    let hints: &[(&str, &str)] = match state {
+    let hints: &[(&'static str, &'static str)] = match state {
         BulkState::AssignPicker { .. } => &[
             ("type", "filter"),
             ("↑↓", "choose"),

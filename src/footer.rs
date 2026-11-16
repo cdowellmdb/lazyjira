@@ -4,10 +4,13 @@
 
 use std::cmp::Reverse;
 
+use crossterm::event::KeyCode;
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, FilterFocus, Tab};
+use crate::mouse::Target;
 use crate::style;
 
 #[derive(Debug, Clone, Copy)]
@@ -148,6 +151,44 @@ pub fn bulk_bar(app: &App, width: u16) -> Option<Line<'static>> {
         spans.extend(hint_spans(&hints));
     }
     Some(Line::from(spans))
+}
+
+/// An overlay's hints (key, label) as one line in `width` columns, drawn like the footer's.
+/// `Esc` is never dropped; the others go from the right, so their order is the drop order.
+pub fn pairs_line(pairs: &[(&'static str, &'static str)], width: u16) -> Line<'static> {
+    let hints: Vec<Hint> = pairs
+        .iter()
+        .enumerate()
+        .map(|(at, &(key, label))| hint(key, label, if key == "Esc" { 0 } else { 1 + at as u8 }))
+        .collect();
+    fit(&hints, "", width as usize)
+}
+
+/// Registers a click target over each key of `line` that is one key press (`Esc`, `Enter` or a
+/// character), and over each arrow of `←→`, for a line drawn at the start of `area`'s first row.
+pub fn register_keys(app: &App, line: &Line, area: Rect) {
+    let mut x = area.x;
+    for span in &line.spans {
+        let width = span.width() as u16;
+        if span.style == style::key_hint() {
+            let key = match span.content.as_ref() {
+                "Esc" => Some(KeyCode::Esc),
+                "Enter" => Some(KeyCode::Enter),
+                value if value.chars().count() == 1 => value.chars().next().map(KeyCode::Char),
+                _ => None,
+            };
+            let mut targets = app.mouse_targets.borrow_mut();
+            if let Some(key) = key {
+                let room = area.right().saturating_sub(x);
+                targets.push((Rect::new(x, area.y, width.min(room), 1), Target::Key(key)));
+            }
+            if span.content == "←→" {
+                targets.push((Rect::new(x, area.y, 1, 1), Target::Key(KeyCode::Left)));
+                targets.push((Rect::new(x + 1, area.y, 1, 1), Target::Key(KeyCode::Right)));
+            }
+        }
+        x = x.saturating_add(width);
+    }
 }
 
 fn age_in_minutes(age_secs: u64) -> String {
@@ -365,6 +406,40 @@ mod tests {
     #[test]
     fn the_spooky_hint_drops_after_the_priority_two_hints_to_its_right() {
         assert_steps(&spooky(), &SPOOKY_STEPS, &SPOOKY_DROPPED);
+    }
+
+    #[test]
+    fn overlay_hints_drop_from_the_right_but_esc_stays_and_each_key_is_clickable() {
+        let pairs = [
+            ("↑↓", "scroll"),
+            ("←→", "prev/next"),
+            ("m", "move"),
+            ("Esc", "close"),
+        ];
+        for (width, expected) in [
+            (50, " ↑↓ scroll · ←→ prev/next · m move · Esc close"),
+            (46, " ↑↓ scroll · ←→ prev/next · m move · Esc close"),
+            (45, " ↑↓ scroll · ←→ prev/next · Esc close"),
+            (37, " ↑↓ scroll · ←→ prev/next · Esc close"),
+            (36, " ↑↓ scroll · Esc close"),
+            (22, " ↑↓ scroll · Esc close"),
+            (21, " Esc close"),
+            (0, " Esc close"),
+        ] {
+            assert_eq!(text(&pairs_line(&pairs, width)), expected, "{width}");
+        }
+        let app = app();
+        register_keys(&app, &pairs_line(&pairs, 50), Rect::new(10, 7, 50, 1));
+        let targets: Vec<(Rect, Target)> = app.mouse_targets.borrow().clone();
+        assert_eq!(
+            targets,
+            [
+                (Rect::new(23, 7, 1, 1), Target::Key(KeyCode::Left)),
+                (Rect::new(24, 7, 1, 1), Target::Key(KeyCode::Right)),
+                (Rect::new(38, 7, 1, 1), Target::Key(KeyCode::Char('m'))),
+                (Rect::new(47, 7, 3, 1), Target::Key(KeyCode::Esc)),
+            ]
+        );
     }
 
     #[test]

@@ -160,86 +160,24 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     render_epic_view(f, area, inner, app, epic);
 }
 
-/// Key hints, wrapped to `width` without splitting a hint.
-fn hint_lines(hints: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
-    let mut content = Vec::new();
-    for (i, (key, label)) in hints.iter().enumerate() {
-        if i > 0 {
-            content.push(Span::raw("  "));
-        }
-        content.push(Span::styled(
-            key.replace(' ', "\u{a0}"),
-            Style::default().fg(Color::Cyan),
-        ));
-        content.push(Span::styled(
-            format!("\u{a0}{}", label.replace(' ', "\u{a0}")),
-            muted(),
-        ));
-    }
-    markup::wrap(vec![], vec![], content, width as usize)
-}
-
-/// Draws `hints` at the bottom of `area`, after a blank line, and returns the
-/// area above them.
+/// Draws `hints` on the bottom row of `area`, after a blank line, and returns the area above
+/// them.
 pub(crate) fn render_footer(
     f: &mut ratatui::Frame,
     area: Rect,
-    hints: &[(&str, &str)],
+    hints: &[(&'static str, &'static str)],
     app: &App,
 ) -> Rect {
-    let footer = hint_lines(hints, area.width);
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(footer.len() as u16 + 1),
-        ])
-        .split(area);
-    let footer_area = Rect {
-        y: chunks[1].y + 1,
-        height: chunks[1].height.saturating_sub(1),
-        ..chunks[1]
-    };
-    for (row, line) in footer.iter().take(footer_area.height as usize).enumerate() {
-        let mut x = footer_area.x;
-        for span in &line.spans {
-            let width = span.width() as u16;
-            if span.style.fg == Some(Color::Cyan) {
-                let key = match span.content.as_ref() {
-                    "Esc" => Some(crossterm::event::KeyCode::Esc),
-                    "Enter" => Some(crossterm::event::KeyCode::Enter),
-                    value if value.chars().count() == 1 => {
-                        value.chars().next().map(crossterm::event::KeyCode::Char)
-                    }
-                    _ => None,
-                };
-                if let Some(key) = key {
-                    app.mouse_targets.borrow_mut().push((
-                        Rect::new(
-                            x,
-                            footer_area.y + row as u16,
-                            width.min(footer_area.right().saturating_sub(x)),
-                            1,
-                        ),
-                        crate::mouse::Target::Key(key),
-                    ));
-                }
-                if span.content == "←→" {
-                    app.mouse_targets.borrow_mut().push((
-                        Rect::new(x, footer_area.y + row as u16, 1, 1),
-                        crate::mouse::Target::Key(crossterm::event::KeyCode::Left),
-                    ));
-                    app.mouse_targets.borrow_mut().push((
-                        Rect::new(x + 1, footer_area.y + row as u16, 1, 1),
-                        crate::mouse::Target::Key(crossterm::event::KeyCode::Right),
-                    ));
-                }
-            }
-            x = x.saturating_add(width);
-        }
-    }
-    f.render_widget(Paragraph::new(footer), footer_area);
-    chunks[0]
+    let [body, _, footer] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(u16::from(area.height > 1)),
+        Constraint::Length(u16::from(area.height > 0)),
+    ])
+    .areas(area);
+    let line = crate::footer::pairs_line(hints, footer.width);
+    crate::footer::register_keys(app, &line, footer);
+    f.render_widget(Paragraph::new(line), footer);
+    body
 }
 
 /// Draws `lines` in `body` at the overlay's scroll position, with a scrollbar
@@ -583,7 +521,7 @@ fn render_with_footer(
     f: &mut ratatui::Frame,
     area: Rect,
     lines: Vec<Line>,
-    hints: &[(&str, &str)],
+    hints: &[(&'static str, &'static str)],
     app: &App,
 ) {
     let body = render_footer(f, area, hints, app);
@@ -614,7 +552,7 @@ pub(crate) fn render_menu(
     area: Rect,
     lines: Vec<Line<'static>>,
     choices: (&[(usize, usize)], usize),
-    hints: &[(&str, &str)],
+    hints: &[(&'static str, &'static str)],
 ) {
     let body = render_footer(f, area, hints, app);
     let selected_line = choices
