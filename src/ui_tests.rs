@@ -503,3 +503,38 @@ fn the_error_and_search_lines_are_red_and_yellow_and_the_theme_recolors_them() {
     app.flash = Some("Refresh failed".into());
     assert!(matches!(color_of_footer(&app, &config), Color::Rgb(..)));
 }
+
+#[test]
+fn the_whole_my_work_screen_at_80_columns_is_the_top_bar_the_list_and_the_footer() {
+    let mut app = app_with_a_ticket_on_every_tab(Tab::MyWork);
+    let rows = screen(&app, 80, 12);
+    let expected = [
+        " lazyjira   My Work   Team   Epics   Unassigned   Filters            Settings",
+        &"─".repeat(80),
+        "",
+        " ● In Progress 1",
+        " › DEMO-1  Mine                                                                -",
+    ];
+    for (row, expected) in rows.iter().zip(expected) {
+        assert_eq!(row.trim_end(), expected);
+    }
+    assert!(
+        rows[5..11].iter().all(|row| row.trim().is_empty()),
+        "{rows:?}"
+    );
+    assert_eq!(
+        rows[11].trim_end(),
+        " Tab switch · j/k move · Space mark · Enter open · / search · q quit · ? more"
+    );
+
+    app.selected_ticket_keys.insert("DEMO-1".into());
+    let rows = screen(&app, 80, 12);
+    assert_eq!(
+        rows[10].trim_end(),
+        " 1 selected   B move or assign · u clear · A all"
+    );
+    assert_eq!(
+        rows[4].trim_end(),
+        " › ☒ DEMO-1  Mine                                                              -"
+    );
+}

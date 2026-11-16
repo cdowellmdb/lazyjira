@@ -374,6 +374,28 @@ fn my_work_at_120_columns_is_the_mockup_with_groups_rows_and_sub_tasks_in_their_
 }
 
 #[test]
+fn my_work_at_80_columns_shortens_summary_epic_and_labels_but_keeps_every_column() {
+    let mut app = mockup_app();
+    app.selected_index = 1;
+    let rows = trimmed(&draw(&app, Tab::MyWork, 80));
+    let expected = [
+        "",
+        " ● In Progress 2",
+        " › DEMO-101 ▼    Add saved pay...  Checkout red...     -  checkout, frontend",
+        "     └ DEMO-111  Migrate store...  Checkout red...     -  checkout",
+        "",
+        " ● Ready for Work 1",
+        "   DEMO-201      Profile slow ...  Search perfo...     -  search, perf",
+        "",
+        " ● In Review 1",
+        "   DEMO-102      Fix tax round...  Checkout red...     -  checkout, billing",
+        "",
+    ];
+    assert_eq!(rows[..expected.len()], expected, "{rows:#?}");
+    assert!(rows[expected.len()..].iter().all(String::is_empty));
+}
+
+#[test]
 fn rows_put_the_marker_the_key_and_the_summary_in_exact_columns() {
     let mut app = mockup_app();
     app.selected_index = 1;
