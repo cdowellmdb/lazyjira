@@ -939,6 +939,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_top_bar_takes_clicks_on_each_tab_and_on_settings_and_nowhere_between() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new();
+        app.loading = false;
+        // (column, tab it switches to): each tab's title and the cell either side.
+        for (x, tab) in [
+            (11, Tab::MyWork),
+            (19, Tab::MyWork),
+            (21, Tab::Team),
+            (26, Tab::Team),
+            (28, Tab::Epics),
+            (36, Tab::Unassigned),
+            (47, Tab::Unassigned),
+            (49, Tab::Filters),
+            (57, Tab::Filters),
+        ] {
+            app.switch_tab(Tab::Epics);
+            if tab == Tab::Epics {
+                app.switch_tab(Tab::Team);
+            }
+            draw(&app, &config);
+            click_at(&mut app, &mut config, &tx, Position::new(x, 0)).await;
+            assert_eq!(app.active_tab, tab, "column {x}");
+        }
+        // The cell between two tabs, and the rule, are no tab.
+        for at in [
+            Position::new(20, 0),
+            Position::new(35, 0),
+            Position::new(12, 1),
+        ] {
+            app.switch_tab(Tab::Epics);
+            draw(&app, &config);
+            click_at(&mut app, &mut config, &tx, at).await;
+            assert_eq!(app.active_tab, Tab::Epics, "{at:?}");
+        }
+        for x in [68, 77] {
+            app.settings = None;
+            draw(&app, &config);
+            click_at(&mut app, &mut config, &tx, Position::new(x, 0)).await;
+            assert!(app.settings.is_some(), "column {x}");
+        }
+        app.settings = None;
+        draw(&app, &config);
+        click_at(&mut app, &mut config, &tx, Position::new(67, 0)).await;
+        assert!(app.settings.is_none());
+    }
+
+    #[tokio::test]
     async fn clicking_a_cell_either_side_of_a_mark_still_toggles_selection() {
         let mut config: AppConfig =
             toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();

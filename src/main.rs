@@ -26,6 +26,7 @@ mod setup;
 mod style;
 mod subtasks;
 mod theme;
+mod top_bar;
 mod transitions;
 #[cfg(test)]
 mod ui_tests;
@@ -732,64 +733,21 @@ fn edit_externally(
 }
 
 fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
-    use crate::views::common::panel;
     use ratatui::layout::{Constraint, Direction, Layout};
-    use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
-    use ratatui::widgets::Tabs;
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Tab bar
+            Constraint::Length(top_bar::HEIGHT),
             Constraint::Min(0),    // Content
             Constraint::Length(1), // Status bar
         ])
         .split(f.area());
 
     mouse::begin_layer(app);
-    app.text_selection.borrow_mut().area = panel().inner(chunks[1]);
-    // Tab bar
-    let mut tab_x = chunks[0].x + 2;
-    for tab in Tab::all() {
-        let width = tab.title().len() as u16;
-        let rect = ratatui::layout::Rect::new(
-            tab_x,
-            chunks[0].y + 1,
-            (width + 2).min(chunks[0].right().saturating_sub(tab_x)),
-            1,
-        );
-        app.mouse_targets
-            .borrow_mut()
-            .push((rect, mouse::Target::Tab(*tab)));
-        tab_x += width + 5;
-    }
-    let tab_titles: Vec<Line> = Tab::all().iter().map(|t| Line::from(t.title())).collect();
-    let tabs = Tabs::new(tab_titles)
-        .block(panel().title(" lazyjira "))
-        .divider(Span::styled(" · ", style::secondary()))
-        .select(match app.active_tab {
-            Tab::MyWork => 0,
-            Tab::Team => 1,
-            Tab::Epics => 2,
-            Tab::Unassigned => 3,
-            Tab::Filters => 4,
-        })
-        .style(style::primary())
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        );
-    f.render_widget(tabs, chunks[0]);
-    if chunks[0].right().saturating_sub(tab_x) >= 12 {
-        widgets::form::buttons(
-            f,
-            app,
-            ratatui::layout::Rect::new(chunks[0].right() - 12, chunks[0].y + 1, 10, 1),
-            &[("Settings", KeyCode::Char('S'))],
-        );
-    }
+    app.text_selection.borrow_mut().area = chunks[1];
+    top_bar::render(f, app, chunks[0]);
 
     // Content area
     if app.loading
@@ -798,7 +756,8 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         && app.cache.epics.is_empty()
         && app.filter_results.is_empty()
     {
-        let loading = ratatui::widgets::Paragraph::new("Loading...").block(panel());
+        let loading =
+            ratatui::widgets::Paragraph::new(Span::styled(" Loading...", style::warning()));
         f.render_widget(loading, chunks[1]);
     } else {
         match app.active_tab {
