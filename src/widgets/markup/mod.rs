@@ -18,6 +18,10 @@ fn text_style() -> Style {
     Style::default().fg(Color::Reset)
 }
 
+fn bold() -> Style {
+    text_style().add_modifier(Modifier::BOLD)
+}
+
 fn muted() -> Style {
     Style::default().fg(Color::DarkGray)
 }
@@ -128,11 +132,7 @@ impl Renderer {
         if body.starts_with("{panel") {
             if let Some(title) = panel_title(body) {
                 self.blank();
-                self.push_wrapped(
-                    vec![],
-                    vec![],
-                    inline(title, text_style().add_modifier(Modifier::BOLD)),
-                );
+                self.push_wrapped(vec![], vec![], inline(title, bold()));
             }
             return;
         }
@@ -146,8 +146,7 @@ impl Renderer {
             self.quote(rest);
         } else if body.len() >= 4 && body.chars().all(|c| c == '-') {
             self.list_counters.clear();
-            self.lines
-                .push(Line::from(Span::styled("─".repeat(self.width), muted())));
+            self.rule();
         } else if let Some((level, text)) = parse_heading(body) {
             self.list_counters.clear();
             self.heading(level, text);
@@ -170,18 +169,10 @@ impl Renderer {
 
     fn heading(&mut self, level: u8, text: &str) {
         self.blank();
-        let style = match level {
-            1 => Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            2 => Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-            _ => Style::default()
-                .fg(Color::Reset)
-                .add_modifier(Modifier::BOLD),
-        };
-        self.push_wrapped(vec![], vec![], inline(text, style));
+        self.push_wrapped(vec![], vec![], inline(text, bold()));
+        if level == 1 {
+            self.rule();
+        }
     }
 
     fn list_item(&mut self, markers: &str, item: &str) {
@@ -197,10 +188,7 @@ impl Renderer {
         };
 
         let indent = "  ".repeat(depth - 1);
-        let first = vec![Span::styled(
-            format!("{}{} ", indent, marker),
-            Style::default().fg(Color::Cyan),
-        )];
+        let first = vec![Span::styled(format!("{}{} ", indent, marker), muted())];
         let hang = vec![Span::raw(
             " ".repeat(indent.len() + marker.chars().count() + 1),
         )];
@@ -211,7 +199,7 @@ impl Renderer {
     }
 
     fn quote(&mut self, text: &str) {
-        let gutter = vec![Span::styled("▎ ", Style::default().fg(Color::Blue))];
+        let gutter = vec![Span::styled("▎ ", muted())];
         let style = text_style().add_modifier(Modifier::ITALIC);
         for segment in split_breaks(text) {
             self.push_wrapped(gutter.clone(), gutter.clone(), inline(segment, style));
@@ -225,6 +213,11 @@ impl Renderer {
             Style::default().fg(Color::Reset),
         )];
         self.push_wrapped(gutter.clone(), gutter, content);
+    }
+
+    fn rule(&mut self) {
+        self.lines
+            .push(Line::from(Span::styled("─".repeat(self.width), muted())));
     }
 
     fn blank(&mut self) {

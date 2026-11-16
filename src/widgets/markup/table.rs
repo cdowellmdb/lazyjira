@@ -1,9 +1,8 @@
 //! The table rows of a description or comment, aligned in columns.
 
-use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
-use super::{inline, muted, spans_width, text_style, Renderer};
+use super::{bold, inline, muted, spans_width, text_style, Renderer};
 
 impl Renderer {
     pub(super) fn table(&mut self, rows: &[String]) {
@@ -13,11 +12,7 @@ impl Renderer {
                 parse_table_row(row)
                     .into_iter()
                     .map(|(header, cell)| {
-                        let style = if header {
-                            text_style().add_modifier(Modifier::BOLD)
-                        } else {
-                            text_style()
-                        };
+                        let style = if header { bold() } else { text_style() };
                         (header, inline(cell.trim(), style))
                     })
                     .collect()

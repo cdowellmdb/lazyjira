@@ -135,6 +135,7 @@ fn headings_lists_and_rules() {
         text(&lines),
         vec![
             "Title",
+            &"─".repeat(30),
             "intro",
             "1. one",
             "2. two",
@@ -145,10 +146,34 @@ fn headings_lists_and_rules() {
             &"─".repeat(30),
         ]
     );
-    assert!(lines[0].spans[0]
-        .style
-        .add_modifier
-        .contains(Modifier::BOLD));
+}
+
+#[test]
+fn headings_are_bold_in_the_text_color_and_only_level_one_gets_a_muted_rule() {
+    let bold = Style::default()
+        .fg(Color::Reset)
+        .add_modifier(Modifier::BOLD);
+    let lines = render("h1. One\nh2. Two\nh3. Three\nh6. Six", 12);
+    assert_eq!(
+        text(&lines),
+        vec!["One", &"─".repeat(12), "", "Two", "", "Three", "", "Six"]
+    );
+    for at in [0, 3, 5, 7] {
+        assert_eq!(
+            lines[at].spans,
+            vec![Span::styled(text(&lines)[at].clone(), bold)]
+        );
+    }
+    assert_eq!(lines[1].spans[0].style, muted());
+}
+
+#[test]
+fn bullets_numbers_and_the_quote_bar_are_muted() {
+    let lines = render("* dot\n# one\nbq. said", 20);
+    assert_eq!(text(&lines), vec!["• dot", "1. one", "▎ said"]);
+    assert_eq!(lines[0].spans[0], Span::styled("• ", muted()));
+    assert_eq!(lines[1].spans[0], Span::styled("1. ", muted()));
+    assert_eq!(lines[2].spans[0], Span::styled("▎ ", muted()));
 }
 
 #[test]
