@@ -1,3 +1,4 @@
+pub mod columns;
 pub mod common;
 pub mod epics;
 pub mod filters;

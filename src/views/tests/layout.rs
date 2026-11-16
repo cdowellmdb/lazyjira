@@ -234,10 +234,9 @@ fn a_long_or_wide_status_keeps_summaries_in_line_on_every_tab_with_a_status_colu
         assert!(row.contains("Waiting for Approval  "), "{tab:?}: {row}");
     }
 
-    // Narrow, Status gives up columns so the row still ends inside the screen. Team's
-    // narrowest fit is 65 (its Epic and Labels keep their floors even while hidden), and
-    // Filters shares its width with the list of filters.
-    for (tab, width) in [(Tab::Team, 65), (Tab::Unassigned, 47), (Tab::Filters, 56)] {
+    // Narrow, Status gives up columns so the row still ends inside the screen. Filters shares its
+    // width with the list of filters.
+    for (tab, width) in [(Tab::Team, 50), (Tab::Unassigned, 47), (Tab::Filters, 56)] {
         app.active_tab = tab;
         app.mark_cache_changed();
         let rows = draw(&app, tab, width);
@@ -302,54 +301,6 @@ fn a_sub_tasks_parent_key_prefix_is_muted_and_readable_when_selected() {
     assert_ne!(prefix.0, summary.0);
 }
 
-/// The mockup's My Work: DEMO-101 with its sub-task DEMO-111 under In Progress, DEMO-201
-/// under Ready for Work, DEMO-102 under In Review. The epics differ, so Epic shows.
-fn mockup_app() -> App {
-    let ticket = |key: &str, summary: &str, status: &str, epic: &str, labels: &[&str]| {
-        let mut ticket = Ticket::for_test(key, status);
-        ticket.summary = summary.into();
-        ticket.epic_name = Some(epic.into());
-        ticket.labels = labels.iter().map(|label| label.to_string()).collect();
-        ticket
-    };
-    let mut child = ticket(
-        "DEMO-111",
-        "Migrate stored cards to the new vault",
-        "In Progress",
-        "Checkout redesign",
-        &["checkout"],
-    );
-    child.parent_key = Some("DEMO-101".into());
-    let mut app = App::new();
-    app.loading = false;
-    app.cache.my_tickets = vec![
-        ticket(
-            "DEMO-101",
-            "Add saved payment methods to checkout",
-            "In Progress",
-            "Checkout redesign",
-            &["checkout", "frontend"],
-        ),
-        child,
-        ticket(
-            "DEMO-201",
-            "Profile slow facet queries",
-            "Ready for Work",
-            "Search performance",
-            &["search", "perf"],
-        ),
-        ticket(
-            "DEMO-102",
-            "Fix tax rounding for multi-currency carts",
-            "In Review",
-            "Checkout redesign",
-            &["checkout", "billing"],
-        ),
-    ];
-    app.mark_cache_changed();
-    app
-}
-
 #[test]
 fn my_work_at_120_columns_is_the_mockup_with_groups_rows_and_sub_tasks_in_their_cells() {
     let mut app = mockup_app();
@@ -382,28 +333,6 @@ fn a_marked_sub_task_row_is_the_gutter_the_checkbox_and_a_space_then_its_indent_
     // Three cells of gutter, `☒`, a space, then the two cells of indent and `└ `: three spaces
     // between the checkbox and the arrow.
     assert!(row.starts_with("   ☒   └ DEMO-111  Migrate"), "{row:?}");
-}
-
-#[test]
-fn my_work_at_80_columns_shortens_summary_epic_and_labels_but_keeps_every_column() {
-    let mut app = mockup_app();
-    app.selected_index = 1;
-    let rows = trimmed(&draw(&app, Tab::MyWork, 80));
-    let expected = [
-        "",
-        " ● In Progress 2",
-        " › DEMO-101 ▼    Add saved pay...  Checkout red...     -  checkout, frontend",
-        "     └ DEMO-111  Migrate store...  Checkout red...     -  checkout",
-        "",
-        " ● Ready for Work 1",
-        "   DEMO-201      Profile slow ...  Search perfo...     -  search, perf",
-        "",
-        " ● In Review 1",
-        "   DEMO-102      Fix tax round...  Checkout red...     -  checkout, billing",
-        "",
-    ];
-    assert_eq!(rows[..expected.len()], expected, "{rows:#?}");
-    assert!(rows[expected.len()..].iter().all(String::is_empty));
 }
 
 #[test]

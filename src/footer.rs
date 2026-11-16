@@ -173,9 +173,12 @@ pub fn render_pairs(f: &mut ratatui::Frame, app: &App, area: Rect, pairs: Pairs)
         return;
     }
     let row = Rect::new(area.x, area.y, area.width, 1);
+    f.render_widget(
+        ratatui::widgets::Paragraph::new(pairs_line(pairs, row.width)),
+        row,
+    );
     let hints = pair_hints(pairs);
     let kept = choose(&hints, "", row.width as usize).kept;
-    f.render_widget(ratatui::widgets::Paragraph::new(hints_line(&kept)), row);
     let mut x = row.x.saturating_add(1);
     let mut targets = app.mouse_targets.borrow_mut();
     for hint in kept {
@@ -196,6 +199,11 @@ pub fn render_pairs(f: &mut ratatui::Frame, app: &App, area: Rect, pairs: Pairs)
         }
         x = x.saturating_add(width + 1 + hint.label.width() as u16 + SEPARATOR.width() as u16);
     }
+}
+
+/// The line `render_pairs` draws for `pairs` in `width` columns, with no click targets.
+pub fn pairs_line(pairs: Pairs, width: u16) -> Line<'static> {
+    hints_line(&choose(&pair_hints(pairs), "", width as usize).kept)
 }
 
 /// `pairs` split into as few rows of at most `width` columns as hold them, in order, each hint

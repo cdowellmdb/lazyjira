@@ -1,6 +1,7 @@
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::style;
@@ -112,6 +113,9 @@ fn rows(bindings: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
     lines
 }
 
+/// The close hint's words after its key.
+const CLOSE_LABEL: &str = " close";
+
 /// The help as a sheet over the whole frame: two columns when the width allows, one below.
 pub fn render(f: &mut ratatui::Frame, app: &App) {
     let inner = form::render_sheet(f, app, "Keyboard shortcuts");
@@ -141,7 +145,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     app.keybindings_scroll_max.set(max);
     app.keybindings_page_height.set(body.height.max(1));
     if max > 0 {
-        // Where the view is, ending before the `[×]`.
+        // Where the view is, ending before the `×`.
         let head = Rect::new(inner.x, 0, inner.width.saturating_sub(7), 1);
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
@@ -178,17 +182,32 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         (_, true) => "↑↓/j/k · PgUp/PgDn ",
         (_, false) => "↑↓ ",
     };
+    let scroll_label = if max > 0 { "scroll   " } else { "" };
+    // Only the close hint is a click target, as a footer hint is its own: the scroll hint names
+    // several keys, so it has none.
+    let before = (scroll_hint.width() + scroll_label.width()) as u16;
+    let [scroll_area, close] = Layout::horizontal([
+        Constraint::Length(before),
+        Constraint::Length(("Esc/?".width() + CLOSE_LABEL.width()) as u16),
+    ])
+    .flex(Flex::Start)
+    .areas(hint);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(scroll_hint, style::key_hint()),
-            Span::styled(if max > 0 { "scroll   " } else { "" }, style::secondary()),
-            Span::styled("Esc/?", style::key_hint()),
-            Span::styled(" close", style::secondary()),
+            Span::styled(scroll_label, style::secondary()),
         ])),
-        hint,
+        scroll_area,
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Esc/?", style::key_hint()),
+            Span::styled(CLOSE_LABEL, style::secondary()),
+        ])),
+        close,
     );
     app.mouse_targets.borrow_mut().push((
-        hint,
+        close,
         crate::mouse::Target::Key(crossterm::event::KeyCode::Esc),
     ));
 }

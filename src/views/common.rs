@@ -10,6 +10,7 @@ use crate::cache::{Epic, Status, StatusKind, StatusRules, Ticket};
 use crate::delight::Delight;
 use crate::style;
 use crate::subtasks::Family;
+use crate::views::columns::Shared;
 use unicode_width::UnicodeWidthStr;
 
 /// Cells before a row's content: a margin, the `›` marker (a header's glyph), and a space.
@@ -154,44 +155,6 @@ pub fn fit(text: &str, width: usize) -> String {
     let cell = truncate(text, width);
     let pad = width.saturating_sub(cell.width());
     cell + &" ".repeat(pad)
-}
-
-/// Summary's width in `room` columns beside `columns`: when Summary would get fewer than
-/// `min_summary`, each column in turn gives up columns, down to its floor, until Summary has them.
-/// A terminal too narrow even then leaves Summary what is left.
-pub fn narrow_for_summary(
-    room: usize,
-    min_summary: usize,
-    columns: &mut [(&mut usize, usize)],
-) -> usize {
-    let mut used: usize = columns.iter().map(|(width, _)| **width).sum();
-    for (width, floor) in columns.iter_mut() {
-        let cut = (used + min_summary)
-            .saturating_sub(room)
-            .min(width.saturating_sub(*floor));
-        **width -= cut;
-        used -= cut;
-    }
-    room.saturating_sub(used)
-}
-
-/// The display width of the widest `value` among the rows `groups` draw, or of `heading` when
-/// that is wider: a column as wide as what is on screen.
-pub fn column_width<H>(
-    groups: &[VisibleGroup<'_, H>],
-    heading: &str,
-    value: fn(&Ticket) -> &str,
-) -> usize {
-    groups
-        .iter()
-        .flat_map(|group| group.tickets.iter().flatten())
-        .map(|(_, ticket)| value(ticket).width())
-        .fold(heading.width(), usize::max)
-}
-
-/// The Status column's width: the longest status drawn.
-pub fn status_width<H>(groups: &[VisibleGroup<'_, H>]) -> usize {
-    column_width(groups, "STATUS", |ticket| ticket.status.as_str())
 }
 
 const UNSELECTED: char = '☐';
@@ -621,138 +584,6 @@ pub fn status_label<'a>(app: &App, status: &'a str) -> &'a str {
     }
 }
 
-/// The columns a tab has that `Shared` may hide, which decides what its shared line names.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Columns {
-    /// Epic and Labels columns, each hidden while every row shares its value (My Work, Team).
-    EpicAndLabels,
-    /// Neither: the shared line names a shared epic and labels (Filters).
-    Neither,
-    /// Neither, and the groups are epics, whose headers name them, so the shared line names only
-    /// labels (Unassigned).
-    GroupedByEpic,
-}
-
-/// What every row a tab draws has in common, so it is shown once instead of on every row.
-/// Rows with no epic don't count when deciding whether an epic is shared.
-pub struct Shared {
-    epic: Option<String>,
-    labels: Vec<String>,
-    /// Some rows' epics differ, so rows need their Epic column.
-    epic_column: bool,
-    /// Some row has a label not every row has, so rows need their Labels column.
-    labels_column: bool,
-}
-
-impl Shared {
-    /// The shared values of the rows `groups` draw, in a tab with `columns`, counting the
-    /// sub-tasks of folded parents (as group totals do) but nothing in a folded group.
-    pub fn of<H>(groups: &[VisibleGroup<'_, H>], columns: Columns) -> Self {
-        let rows: Vec<&Ticket> = groups
-            .iter()
-            .flat_map(|group| {
-                let drawn = group.tickets.iter().flatten().map(|(_, ticket)| *ticket);
-                drawn.chain(group.folded_subtasks.iter().copied())
-            })
-            .collect();
-        let mut epics: Vec<&str> = rows.iter().filter_map(|t| t.epic_name.as_deref()).collect();
-        epics.sort_unstable();
-        epics.dedup();
-        let labels: Vec<String> = rows.first().map_or_else(Vec::new, |first| {
-            first
-                .labels
-                .iter()
-                .filter(|label| rows.iter().all(|t| t.labels.contains(label)))
-                .cloned()
-                .collect()
-        });
-        let has_columns = columns == Columns::EpicAndLabels;
-        Shared {
-            epic: (epics.len() == 1 && columns != Columns::GroupedByEpic)
-                .then(|| epics[0].to_string()),
-            epic_column: has_columns && epics.len() > 1,
-            labels_column: has_columns
-                && rows
-                    .iter()
-                    .any(|t| t.labels.iter().any(|label| !labels.contains(label))),
-            labels,
-        }
-    }
-
-    /// The summary's width once the hidden Epic and Labels columns, and their separators, give
-    /// it theirs. For `Columns::EpicAndLabels` tabs, whose widths count both columns.
-    pub fn summary_width(&self, summary_w: usize, epic_w: usize, labels_w: usize) -> usize {
-        [(self.epic_column, epic_w), (self.labels_column, labels_w)]
-            .into_iter()
-            .filter(|(shown, _)| !shown)
-            .fold(summary_w, |w, (_, hidden)| w + hidden + COLUMN_GAP)
-    }
-
-    /// Pushes a row's trailing cells, a `COLUMN_GAP` apart: Epic (when shown), Updated
-    /// (`Ages::updated_cell`), and Labels (when shown), muted in `base`, the row's style.
-    pub fn push_trailing_cells(
-        &self,
-        ages: Ages,
-        row: &mut Line<'static>,
-        ticket: &Ticket,
-        base: Style,
-        epic_w: usize,
-        labels_w: usize,
-    ) {
-        let gap = Span::raw(" ".repeat(COLUMN_GAP));
-        if self.epic_column {
-            let epic = ticket.epic_name.as_deref().unwrap_or("-");
-            row.push_span(gap.clone());
-            row.push_span(Span::styled(fit(epic, epic_w), muted(base)));
-        }
-        row.push_span(gap.clone());
-        row.push_span(Span::styled(ages.updated_cell(ticket), muted(base)));
-        if self.labels_column {
-            row.push_span(gap);
-            row.push_span(Span::styled(
-                fit(&self.row_labels(ticket), labels_w),
-                muted(base),
-            ));
-        }
-    }
-
-    /// A row's Labels cell: its labels that not every row has.
-    pub fn row_labels(&self, ticket: &Ticket) -> String {
-        let own: Vec<&str> = ticket
-            .labels
-            .iter()
-            .filter(|label| !self.labels.contains(label))
-            .map(String::as_str)
-            .collect();
-        if own.is_empty() {
-            "-".to_string()
-        } else {
-            own.join(", ")
-        }
-    }
-
-    /// The muted line over the list, indented `lead` cells as rows are and cut to `width`; `None`
-    /// when nothing is shared.
-    pub fn line(&self, lead: usize, width: usize) -> Option<Line<'static>> {
-        if self.epic.is_none() && self.labels.is_empty() {
-            return None;
-        }
-        let mut text = format!("{}all rows", " ".repeat(lead));
-        if let Some(epic) = &self.epic {
-            text.push_str(" · epic ");
-            text.push_str(epic);
-        }
-        if !self.labels.is_empty() {
-            text.push_str(" · ");
-            text.push_str(&self.labels.join(", "));
-        }
-        Some(Line::from(Span::styled(
-            truncate(&text, width),
-            style::secondary(),
-        )))
-    }
-}
-
 /// Ticket ages at one moment, read once per render so every age on screen is measured to it,
 /// and what `delight` makes of them: a fossil's faded row.
 #[derive(Clone, Copy)]
@@ -939,26 +770,6 @@ mod tests {
         // Two columns is the narrowest that wraps: one wide character a line.
         assert_eq!(lines(true, "山田", 2), ["山", "田"]);
         assert_eq!(lines(true, "山田", 1), ["."]);
-    }
-
-    #[test]
-    fn narrowing_cuts_columns_in_order_to_their_floors_only_until_summary_has_its_minimum() {
-        let narrow = |room: usize| {
-            let (mut epic, mut status) = (20, 20);
-            let summary = narrow_for_summary(room, 14, &mut [(&mut epic, 10), (&mut status, 8)]);
-            [epic, status, summary]
-        };
-        // 54 is exactly enough: nothing narrows, and wider rooms go to Summary.
-        assert_eq!(narrow(55), [20, 20, 15]);
-        assert_eq!(narrow(54), [20, 20, 14]);
-        assert_eq!(narrow(53), [19, 20, 14]);
-        // Epic stops at its floor before Status gives up anything.
-        assert_eq!(narrow(44), [10, 20, 14]);
-        assert_eq!(narrow(43), [10, 19, 14]);
-        assert_eq!(narrow(32), [10, 8, 14]);
-        // Too narrow even with every column at its floor: Summary gets what is left.
-        assert_eq!(narrow(31), [10, 8, 13]);
-        assert_eq!(narrow(0), [10, 8, 0]);
     }
 
     #[test]

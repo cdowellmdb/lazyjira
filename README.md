@@ -4,7 +4,7 @@ A fast terminal UI for Jira, with keyboard and mouse controls for daily triage a
 
 lazyjira reads tickets and moves them through Jira's REST API, using the [`jira` CLI](https://github.com/ankitpokhrel/jira-cli)'s config and your `JIRA_API_TOKEN`; creating tickets, commenting, assigning and editing fields go through the `jira` CLI itself. It opens instantly from a local cache, and refreshes in the background. See [Limitations](#limitations) for workflow and platform requirements.
 
-![lazyjira showing ticket detail with a close control, live settings, searchable ticket creation, and the five workspace tabs](docs/images/demo.gif)
+![lazyjira's My Work list with a tinted selected row, a ticket detail, live settings, a ticket created in the panel docked under the list, and the five workspace tabs](docs/images/demo.gif)
 
 ## Features
 
@@ -14,6 +14,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 - At 120 columns or wider the detail opens beside the list, which stays in step as you step through tickets with `←`/`→`; narrower, or after `z`, it covers the list (the top bar and the footer stay)
 - Fold status groups and a parent's sub-tasks; `f` focuses one status, `d` hides Done
 - Lists show what differs: each ticket's age, shared epics and labels named once, done groups folded, status columns as wide as the longest status
+- Narrow terminals drop columns, not keys: at 80 columns My Work and Team show key, summary and age (Team adds status), and Epic and Labels return as the terminal widens
 - Sub-tasks nest under their parent, or lead with its key when the parent is elsewhere
 - Opens instantly from a local cache, then refreshes from Jira without losing your place
 - Ticket detail renders Jira markup and shows comments; `h` lists them newest first
@@ -28,7 +29,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 
 **Keyboard or mouse**
 - Click to select, click again to open; works on rows, menus, and pickers
-- Click the left edge of a row (or a checkbox, once you are marking) to mark tickets, fold arrows to fold groups, and **[×]** to close a detail
+- Click the left edge of a row (or a checkbox, once you are marking) to mark tickets, fold arrows to fold groups, and the **×** at the right end of a detail's first line to close it
 - Click into form fields and buttons; scroll lists and details with the wheel
 - Drag across text to select it, then copy with `Ctrl+C`
 - Edit in `$EDITOR`, paste multiple lines, and filter pickers by typing
@@ -87,12 +88,12 @@ cargo install --git https://github.com/cdowellmdb/lazyjira --tag v0.19.0
 lazyjira
 ```
 
-The first run asks for two things:
+The first run opens a short setup screen that asks for two things:
 
 1. **Jira project key**, for example `DEMO`.
 2. **Team name**, which must match your team's value in the Jira `Assigned Teams` field. The Unassigned tab uses it to find your team's unassigned tickets.
 
-lazyjira then saves `~/.config/lazyjira/config.toml`, adds you to the team roster using the email from `jira me`, and loads your tickets. Press `?` at any time to see the keybindings.
+`Enter` continues and `Esc` goes back. A last screen shows what it will save: `Enter` or `y` saves, `Esc` or `n` starts over. lazyjira then saves `~/.config/lazyjira/config.toml`, adds you to the team roster using the email from `jira me`, and loads your tickets. Press `?` at any time to see the keybindings.
 
 Press `S` or click **Settings** to manage teammates, pinned epics, Done visibility, your starting tab, the color theme, and whether long ticket summaries wrap. Team and epic changes refresh without restarting.
 
@@ -204,6 +205,8 @@ The bottom line lists the keys that matter most, like `Tab switch · j/k move ·
 
 Each tab remembers its selection, search, status focus, and folded groups during the session. Folded parents are one set shared by every tab: a parent folded in My Work is folded in Epics too. A folded parent shows `▶` and how many sub-tasks are hidden, and a sub-task whose parent is in another group leads with the parent's key, muted. Done groups start folded in My Work and each time a filter runs, and list the most recently updated tickets first.
 
+On a narrow terminal the Epic and Labels columns are the first to go, Labels first, so a summary keeps room to read: with the demo's keys My Work draws Epic from 86 columns and Labels from 110 (Team, which also has a status column, from 100 and 120), and marking a ticket never adds or drops one, because the checkbox takes its two cells from the summary. Below that the summary takes their width and ends with `...` where it is cut. At 80 columns that holds with the demo's keys and any keys of 7 characters or more; with shorter keys and no sub-tasks Epic still fits. At 80 columns the top bar, group headers, bulk bar and footer all fit, and so they do at 60 columns, where Settings drops out of the top bar.
+
 Marking is a mode: press `Space` and a checkbox column appears (`☐`, or `☒` when selected; a group header shows `⊟` when only some of its tickets are selected). It goes away when nothing is marked. The selected row has a `›` in the margin and a tint across the row. My Work, Team, Unassigned and Filters show an Updated column with how long ago Jira last changed each ticket (`12m`, `5h`, `2d`, `3w`). An active ticket unchanged for 3 weeks keeps its plain age, and after 90 days its row fades. When every row with an epic shares it, or every row carries the same labels, a muted line at the top of the list names them once, like `all rows · epic Payments Platform Revamp · DEMO, Q3` (Unassigned, already grouped by epic, names only labels). My Work and Team then drop the Epic column, and their Labels column keeps only the labels that differ.
 
 Refresh keeps the loaded list visible and follows the selected ticket even when other rows are added or reordered.
@@ -212,7 +215,7 @@ Refresh keeps the loaded list visible and follows the selected ticket even when 
 
 Click a tab or row to select it; click the selected row again to open it. Menus (bulk actions, and the move and resolution pickers) work the same way: click an option to choose it, and click it again to take it. Click the left edge of a row or group to mark it, and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
 
-With a detail open beside the list, click a row of the list to show that ticket. Click **[×]** at the right end of the detail's first line to close it. Forms, pickers and notices open as one panel under the list with their own **[×]**, and Help and Settings are sheets over the whole screen with one at the right end of their title line.
+With a detail open beside the list, click a row of the list to show that ticket. Click the muted **×** at the right end of the detail's first line to close it. Forms, pickers and notices open as one panel under the list with their own **×**, and Help and Settings are sheets over the whole screen with one at the right end of their title line. Help's `Esc/? close` hint closes it too, and its scroll hint does nothing when clicked.
 
 Forms support clicking fields, positioning the text cursor, choosing picker options, and clicking their action buttons. Type to filter assignee and epic pickers; use arrow keys or the wheel to choose. Bulk actions still require the separate confirmation step.
 
@@ -319,7 +322,7 @@ cargo run --release
 
 `lazyjira --dev` (or `--rebuild`) rebuilds and runs the lazyjira checkout in your current directory (or a parent directory). `--dev-release` does the same with an optimized build. The command prints which manifest it builds. Outside a checkout, it falls back to the source directory the binary was built from, if that directory still exists.
 
-To re-record the demo GIF, install [VHS](https://github.com/charmbracelet/vhs) and run `docs/demo/record.sh`. It uses a fake `jira` CLI, a fake Jira REST search endpoint and a throwaway `HOME`, so no real Jira data ends up in the recording.
+To re-record the demo GIF, install [VHS](https://github.com/charmbracelet/vhs) and run `docs/demo/record.sh` (`docs/demo/record.sh docs/demo/themes.tape` for the themes GIF). It uses a fake `jira` CLI, a fake Jira REST search endpoint and a throwaway `HOME`, so no real Jira data ends up in the recording.
 
 Releases are published by pushing a `v*` tag. See [`docs/RELEASING.md`](docs/RELEASING.md).
 

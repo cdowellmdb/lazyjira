@@ -3,25 +3,30 @@ use ratatui::text::Span;
 
 use crate::app::App;
 use crate::style;
+use crate::views::columns::{narrow_for_summary, status_width, Columns, Shared, Trailing};
 use crate::views::common::{
-    key_width, muted, narrow_for_summary, status_cell, status_width, tint, Columns, ListLines,
-    Shared, COLUMN_GAP, STATUS_DOT_WIDTH, UPDATED_WIDTH,
+    key_width, lead_width, muted, status_cell, tint, ListLines, COLUMN_GAP, STATUS_DOT_WIDTH,
+    UPDATED_WIDTH,
 };
 
-/// Summary takes what Status, Epic, Labels and the fixed cells leave; on narrow terminals Epic,
-/// then Labels, then Status give up columns so it keeps 14.
+/// (status, summary, trailing) widths: Epic (20) and Labels (18) are drawn only where Summary keeps
+/// `SUMMARY_MIN` beside them and the full Status, Labels dropped first, judged as if no ticket were
+/// marked so that marking never adds or drops a column. Then Status gives up columns, down to 8, so
+/// Summary keeps 14.
 fn team_column_widths(
     area: Rect,
     lead: usize,
     key_w: usize,
     mut status_w: usize,
-) -> (usize, usize, usize, usize) {
-    let (mut epic_w, mut labels_w) = (20, 18);
-    let fixed = lead + key_w + 5 * COLUMN_GAP + STATUS_DOT_WIDTH + UPDATED_WIDTH;
-    let room = (area.width as usize).saturating_sub(fixed);
-    let columns = &mut [(&mut epic_w, 10), (&mut labels_w, 8), (&mut status_w, 8)];
-    let summary_w = narrow_for_summary(room, 14, columns);
-    (status_w, summary_w, epic_w, labels_w)
+    shared: &Shared,
+) -> (usize, usize, Trailing) {
+    let width = area.width as usize;
+    let fixed = key_w + 3 * COLUMN_GAP + STATUS_DOT_WIDTH + UPDATED_WIDTH;
+    let unmarked_room = width.saturating_sub(lead_width(false) + fixed + status_w);
+    let trailing = shared.trailing(unmarked_room, 20, 18);
+    let room = width.saturating_sub(lead + fixed + trailing.width());
+    let summary_w = narrow_for_summary(room, 14, &mut [(&mut status_w, 8)]);
+    (status_w, summary_w, trailing)
 }
 
 /// `compact` is the list's width beside the detail pane, which shows only keys and summaries.
@@ -31,9 +36,13 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, compact: Option<u16
     let key_w = key_width(&members);
     let mut lines = ListLines::new(app).compact(compact);
     let ages = lines.ages();
-    let (status_w, summary_w, epic_w, labels_w) =
-        team_column_widths(area, lines.lead_width(), key_w, status_width(&members));
-    let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
+    let (status_w, summary_w, trailing) = team_column_widths(
+        area,
+        lines.lead_width(),
+        key_w,
+        status_width(&members),
+        &shared,
+    );
 
     if !members.is_empty() {
         lines.intro(Some(&shared), area.width as usize);
@@ -74,7 +83,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, compact: Option<u16
                 let (line, base) = lines.ticket_row(&group, row, key_w, summary_w, faded, |base| {
                     vec![status_cell(app, row.1, base, status_w)]
                 });
-                shared.push_trailing_cells(ages, line, row.1, base, epic_w, labels_w);
+                shared.push_trailing_cells(ages, line, row.1, base, trailing);
             }
         }
 
@@ -94,33 +103,32 @@ mod tests {
     use super::*;
     use crate::views::common::{CHECKBOX_WIDTH, GUTTER};
 
+    /// (status, summary) of a 20 column status and 6 column keys when Epic and Labels are shared
+    /// by every row, so only Status gives up columns.
+    fn widths(width: u16, lead: usize) -> (usize, usize) {
+        let shared = Shared::of::<()>(&[], Columns::EpicAndLabels);
+        let (status, summary, trailing) =
+            team_column_widths(Rect::new(0, 0, width, 10), lead, 6, 20, &shared);
+        assert_eq!(trailing, Trailing::NONE);
+        (status, summary)
+    }
+
     #[test]
-    fn narrow_team_cuts_epic_then_labels_then_status_so_summary_keeps_14() {
-        // (status, summary, epic, labels) for a 20-column status.
-        let widths = |width| team_column_widths(Rect::new(0, 0, width, 10), GUTTER, 8, 20);
-        assert_eq!(widths(100), (20, 15, 20, 18));
-        assert_eq!(widths(99), (20, 14, 20, 18));
-        assert_eq!(widths(98), (20, 14, 19, 18));
-        assert_eq!(widths(89), (20, 14, 10, 18));
-        assert_eq!(widths(88), (20, 14, 10, 17));
-        assert_eq!(widths(79), (20, 14, 10, 8));
-        assert_eq!(widths(78), (19, 14, 10, 8));
-        assert_eq!(widths(67), (8, 14, 10, 8));
-        assert_eq!(widths(66), (8, 13, 10, 8));
+    fn narrow_team_cuts_status_to_8_so_summary_keeps_14() {
+        assert_eq!(widths(56, GUTTER), (20, 15));
+        assert_eq!(widths(55, GUTTER), (20, 14));
+        assert_eq!(widths(54, GUTTER), (19, 14));
+        assert_eq!(widths(43, GUTTER), (8, 14));
+        assert_eq!(widths(42, GUTTER), (8, 13));
     }
 
     #[test]
     fn marking_moves_every_team_boundary_two_columns() {
-        let widths =
-            |width| team_column_widths(Rect::new(0, 0, width, 10), GUTTER + CHECKBOX_WIDTH, 8, 20);
-        assert_eq!(widths(102), (20, 15, 20, 18));
-        assert_eq!(widths(101), (20, 14, 20, 18));
-        assert_eq!(widths(100), (20, 14, 19, 18));
-        assert_eq!(widths(91), (20, 14, 10, 18));
-        assert_eq!(widths(90), (20, 14, 10, 17));
-        assert_eq!(widths(81), (20, 14, 10, 8));
-        assert_eq!(widths(80), (19, 14, 10, 8));
-        assert_eq!(widths(69), (8, 14, 10, 8));
-        assert_eq!(widths(68), (8, 13, 10, 8));
+        let lead = GUTTER + CHECKBOX_WIDTH;
+        assert_eq!(widths(58, lead), (20, 15));
+        assert_eq!(widths(57, lead), (20, 14));
+        assert_eq!(widths(56, lead), (19, 14));
+        assert_eq!(widths(45, lead), (8, 14));
+        assert_eq!(widths(44, lead), (8, 13));
     }
 }

@@ -7,9 +7,10 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, VisibleGroup};
 use crate::cache::{Epic, Ticket};
 use crate::style;
+use crate::views::columns::{column_width, narrow_for_summary, status_width};
 use crate::views::common::{
-    column_width, epic_bar, fit, key_width, muted, narrow_for_summary, status_cell, status_label,
-    status_width, ListLines, COLUMN_GAP, EPIC_BAR_WIDTH, STATUS_DOT_WIDTH,
+    epic_bar, fit, key_width, muted, status_cell, status_label, ListLines, COLUMN_GAP,
+    EPIC_BAR_WIDTH, STATUS_DOT_WIDTH,
 };
 
 /// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so

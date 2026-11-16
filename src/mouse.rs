@@ -1115,7 +1115,7 @@ mod tests {
             Some(BulkState::AssignPicker { .. })
         ));
 
-        // The [×] in the title closes it, like the ticket detail's.
+        // The × in the title closes it, like the ticket detail's.
         draw(&app, &config);
         let close = app
             .mouse_targets
@@ -1125,7 +1125,7 @@ mod tests {
             .unwrap()
             .0;
         let buffer = draw(&app, &config);
-        assert_eq!(buffer[(close.x + 1, close.y)].symbol(), "[");
+        assert_eq!(buffer[(close.x + 2, close.y)].symbol(), "×");
         click(&mut app, &mut config, &tx, |t| {
             matches!(t, Target::Key(KeyCode::Esc))
         })

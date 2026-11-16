@@ -10,6 +10,7 @@ mod chrome;
 mod detail;
 mod dock;
 mod footer;
+mod narrow;
 mod sheets;
 
 /// A click target as (x, y, width, height, target).

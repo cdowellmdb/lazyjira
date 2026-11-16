@@ -33,5 +33,6 @@ Each feature file has an H1, one paragraph of user-visible behavior, then exactl
 - [Comment and assign](./comment-and-assign.md): jira-cli writes from ticket detail, proven through `calls.log`. Driven 2026-11-11.
 - [Ticket detail](./ticket-detail.md): opening by search, fields, markup, prev/next, zoom. Opening driven 2026-11-11; the rest *not yet driven*.
 - [Search](./search.md): `/` search in a list tab, match and empty states. Match and empty states seen 2026-11-11; clearing *not yet driven*.
-- [Tabs and lists](./tabs-and-lists.md): the five tabs, status groups, status focus, folding, done toggle, refresh. *Not yet driven* beyond My Work loading.
+- [Tabs and lists](./tabs-and-lists.md): the five tabs, status groups, status focus, folding, done toggle, refresh. Narrow widths and Settings at 80x24 driven 2026-11-16; the rest *not yet driven* beyond My Work loading.
+- [First-run setup](./first-run-setup.md): the setup sheet, driven by hand in a private tmux with an empty `HOME`. Driven 2026-11-16.
 - [Wrap summaries](./wrap-summaries.md): the Settings toggle, wrapped rows in every tab, highlight and scroll. Driven 2026-11-11.

@@ -52,7 +52,7 @@ async fn at_120_columns_detail_has_the_list_on_the_left_and_at_119_it_replaces_i
         rows.join("\n")
     );
     assert!(rows[2].starts_with(" LAST-30  30 of 30"), "{}", rows[2]);
-    assert!(rows[2].trim_end().ends_with("[×]"), "{}", rows[2]);
+    assert!(rows[2].trim_end().ends_with("×"), "{}", rows[2]);
     assert!(!column(&rows, 50).contains('│'), "no divider at 119");
 
     for width in [120, 160] {
@@ -159,7 +159,7 @@ async fn beside_the_detail_a_click_on_a_list_row_shows_that_ticket_and_the_close
         assert_eq!(app.active_tab, Tab::MyWork);
         screen(&app, 160, 30);
     }
-    // [×] is 5 cells ending a cell before the right edge of the header.
+    // The × sits in a 5 cell click cell ending a cell before the right edge of the header.
     for (x, closes) in [(153, false), (154, true), (158, true), (159, false)] {
         let (mut app, _) = detail_screen(160).await;
         click(&mut app, &mut config, x, 2).await;

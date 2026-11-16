@@ -4,7 +4,7 @@ How lazyjira looks, and the rules behind it. Read this before changing colors, b
 
 ## Principles
 
-Each principle and each mockup names the PR in the build order below that lands it. PR 1 (the foundation), PR 2 (the top bar, lists and marking mode) and PR 3 (overlays) are in the code. PR 4 is the target.
+Each principle and each mockup names the PR in the build order below that lands it. All four are in the code: PR 1 (the foundation), PR 2 (the top bar, lists and marking mode), PR 3 (overlays) and PR 4 (narrow widths and docs).
 
 1. **Weight and dimness carry hierarchy, color does not.** (PR 1: the roles. PR 2: the lists.) Primary text uses the default foreground. Headers, group names, the active tab and the selected key are bold. Secondary text (epic, age, labels, assignee, footer descriptions, counts) is dim. In this guide, dim means the muted role, which is ANSI DarkGray that `theme.rs` recolors. It never means `Modifier::DIM`, which a theme can't reach.
 2. **One accent.** (PR 2) Cyan marks keys, focus and the active tab, and nothing else. Yellow headers and blue info text are gone.
@@ -15,7 +15,7 @@ Each principle and each mockup names the PR in the build order below that lands 
 7. **No emoji.** (PR 1) Every glyph is single width, so columns and overlays never misalign. Stale tickets show their age in dim text with no icon.
 8. **Footers degrade, they never cut.** (PR 1) Hints read `key action · key action`, with bold keys and dim words. Each hint has a priority. As the terminal narrows, hints are dropped by priority, lowest importance first, then from the right within a priority, and never half a hint. `? more` always stays.
 9. **Overlays do not leak.** (PR 3, in the code) An overlay clears everything behind it. Forms, pickers, bulk actions and notices dock as one panel under the list with a single rule above it and no box, taking the rows they need up to 60% of the content area. Detail sits beside the list at 120 columns or wider (the list 50 cells, one dim `│` between) and replaces it below that or after `z`. Help and Settings are full-width sheets: a bold title with a close cell, the content, and a dim `Esc/? close` hint line. While a detail is open its hints replace the footer, wrapped onto as many rows as the width needs so every key stays clickable, with a message (an error, a move waiting on Jira) on a row above them. `ui_tests` check that no list text shows through and no border glyph is drawn.
-10. **Narrow terminals drop columns, not hints.** (PR 4) At 80 columns the epic and labels columns go first. Key, summary and age stay.
+10. **Narrow terminals drop columns, not hints.** (PR 4, in the code) Epic and Labels are drawn at their full width or not at all, and are dropped, Labels first, once Summary would keep fewer than 37 columns (`SUMMARY_MIN`). At 80 columns My Work and Team show key, summary and age, and Team its status, for the demo's keys and for keys of 7 characters or more (with shorter keys and no sub-tasks Epic still fits at 80); Summary takes the freed width and ends `...` where it is cut. The footer never shows half a hint (`? more` stays; at 60x20 `Space mark` and `q quit` drop), and group headers, the top bar and the bulk bar fit at 80x24 and 60x20.
 
 Two decisions of PR 2:
 
@@ -122,18 +122,21 @@ These screens are the agreed mockup, built from the demo's fake data. Bold, dim,
     c  ● Done
  Enter select · Esc cancel
 
-5. 80 columns: fewer columns, footer drops items from the right (PR 4; the footer is what PR 1 draws)
- lazyjira   My Work   Team   Epics   Unassigned   Filters              Settings 
+5. 80 columns: Epic and Labels are dropped, Summary takes their width, and the footer drops hints from the right (PR 4, in the code, as the app draws it with the demo's data)
+ lazyjira   My Work   Team   Epics   Unassigned   Filters            Settings
 ────────────────────────────────────────────────────────────────────────────────
 
-
  ● In Progress 2
- › DEMO-101  Add saved payment methods…                                 7w     
-   └ DEMO-111  Migrate stored cards to the…                            10w
+   DEMO-101 ▼    Add saved payment methods to checkout                        8w
+     └ DEMO-111  Migrate stored cards to the new vault                       10w
 
  ● Ready for Work 1
-   DEMO-201  Profile slow facet queries                                 9w
+   DEMO-201      Profile slow facet queries                                   9w
 
+ ● Needs Triage 1
+   DEMO-205      Search returns stale results after reindex                   8w
+
+ ● Done 1  (z to open)
  Tab switch · j/k move · Space mark · Enter open · / search · q quit · ? more
 ```
 
@@ -144,7 +147,7 @@ The work ships as a stack of four PRs, each based on the one below.
 1. **Foundation.** This guide, a shared style module for the roles above, the graceful footer, emoji removal, and `TestBackend` snapshot and contrast tests.
 2. **Chrome and lists.** The one-line top bar, no column bars, marking mode, airy groups and the `›` selection on all five tabs.
 3. **Overlays (landed).** The docked panel, the side-by-side detail view, and full-width help and settings.
-4. **Narrow widths and docs.** The 80-column layout, README and keybinding docs, and re-recorded demo GIFs once at the end.
+4. **Narrow widths and docs (landed).** The 80-column layout, the first-run setup sheet, README and keybinding docs, and re-recorded demo GIFs.
 
 ## Rules for new UI
 
@@ -155,29 +158,33 @@ The work ships as a stack of four PRs, each based on the one below.
 
 ### Mockup differences
 
-The code draws mockups 3 and 4 with these differences, kept on purpose:
+Mockups 1 and 2 are the approved sketches and show a list with no Epic or Labels columns. The code draws them with those columns wherever the width allows (86 and 110 columns on My Work with the demo's keys), marked or not, because marking never adds or drops a column. The code draws mockups 3, 4 and 5 with these differences, kept on purpose:
 
 - Group headers keep PR 2's colored `●` and its summary column is cut with `...` where the mockup shows a single `…` and drops the dots. Truncation and the headers are PR 2 and PR 4's, and the 50-cell list pane only has room for a key and a clipped summary.
 - Mockup 3 shows the detail's `Updated` and `Customers hit this...` lines as examples. The pane shows exactly what the detail showed before (status, assignee, reporter, epic, labels, the stale quip, description, comments), so there is no `Updated` row.
-- The detail's `[×]` close cell ends the header line, and the activity view has a `Back` button. The mockup has neither.
+- The detail's close cell, a muted `×` in a 5 cell click cell (`  ×  `, the glyph in the middle), ends the header line, and the activity view has a `Back` button. The mockup has neither.
 - The mockup's move panel has `›  p  ● In Progress` rows. The panel shows the same lines the picker always showed (`[p] Start Progress → In Progress`), because the picker's text is unchanged, and its title reads `Move DEMO-101 from In Progress` with the status muted.
-- The panel has a `[×]` on its title line and its keys in the hint line are clickable. A form's buttons (`Submit`, `Cancel`, `Editor`) share the last row with its hints.
+- The panel has the same muted `×` on its title line and its keys in the hint line are clickable. A form's buttons (`Submit`, `Cancel`, `Editor`) share the last row with its hints.
 - The detail's hints take two rows below 121 columns (at 120 and at 80), split as evenly as whole hints allow, and one row from 121. The mockup's one line fits only above that. A message takes a row above them, so the content is a row shorter.
 - A move failure panel is as tall as Jira's wrapped error needs, up to the 60% cap, and `j/k` scroll it when it is still taller. The bulk result scrolls the same way.
-- The bulk upload preview drops its `Path:` line and its blank lines when the full chrome would leave under 3 ticket rows, which is a body of 11 rows or fewer, so at 80x24 it shows 5 rows instead of 1.- Click cells that changed size from the boxed overlays before PR 3, because the boxes went away. Not every target kept its cell:
+- The bulk upload preview drops its `Path:` line and its blank lines when the full chrome would leave under 3 ticket rows, which is a body of 11 rows or fewer, so at 80x24 it shows 5 rows instead of 1.
+- Click cells that changed size from the boxed overlays before PR 3, because the boxes went away. Not every target kept its cell:
   - A single-line text field (Summary, Labels, Name, CSV path) is 1 row, the label and the value side by side. In a box it was 3 rows. A field of more rows is its label row and its value rows, and an option list is its label and one row per option.
-  - Help's close hint (`Esc/? close`) is a target 76 wide and 1 row tall on the sheet's last row. In its box it was 68 wide and 3 tall.
+  - Help's close hint (`Esc/? close`) is a target 11 wide and 1 row tall on the sheet's last row, after the scroll hint's 28 cells when help scrolls (at 80x24) and from column 2 when it fits. It was the whole 76 wide row until PR 4, and 68 wide and 3 tall in its box. The scroll hint names several keys, so it has no target, as a footer hint without a single key has none.
   `ui_tests` pin the cells of every panel and sheet at 80x24, so a change to one shows as a diff there.
 - The detail pane's last column is a scrollbar thumb when the text is longer than the pane, with no track drawn, so `│` stays the divider's alone.
+- Mockup 5 is what the app draws at 80 columns with the demo's data: a cut summary would end `...` rather than `…`, the group header under the cursor shows only the tint, and the folded Done group reads `(z to open)`.
+- Epic and Labels are not squeezed: a column is drawn full or dropped, so between 86 and 109 columns My Work shows Epic without Labels (Team: 100 to 119, with a 14 wide status), and marking a ticket changes none of this, because the checkbox takes its two cells from Summary. The thresholds shift with the keys and statuses drawn, because they are measured as the room Summary keeps.
+- Settings gives Starting tab and Theme six rows, so all five tabs and the first five themes show at 80x24. Theme has more than five options (the built-in presets and any custom themes), so it scrolls past them with no cue.
+- The first-run setup is a sheet: a bold title, labelled fields with a cursor, and buttons on the last row that the keys drive (they are not clickable, the setup has never read the mouse). It runs before any theme exists, so it draws the terminal's own colors from the `style` roles.
 
 ### Inline colors still in the code
 
-PR 1 moved the selected row and secondary text onto `src/style.rs`. PR 2 moved the top bar, the status line (`style::error` and `style::warning`), the list views and Filters' panes. PR 3 moved the overlays: the detail, the activity view, the forms, the panel and sheet frames, help, settings and the text selection and Copy button in `mouse.rs`. What still names a color or modifier inline:
+PR 1 moved the selected row and secondary text onto `src/style.rs`. PR 2 moved the top bar, the status line (`style::error` and `style::warning`), the list views and Filters' panes. PR 3 moved the overlays: the detail, the activity view, the forms, the panel and sheet frames, help, settings and the text selection and Copy button in `mouse.rs`. PR 4 moved the first-run setup. What still names a color or modifier inline:
 
 - `widgets/markup.rs`: the colors Jira wiki markup asks for in a description or comment (headings, links, code, mentions, table rules, panels). They follow the content, not a role, so they stay inline. Keep them to ANSI colors so a theme still recolors them.
 - `views/common.rs` and `views/my_work.rs`: `Modifier::BOLD` added to a style from `style.rs` (`muted` removes it, the empty-scene text adds it).
 - `delight.rs`: confetti, the rainbow bar and the quit receipt, which are decoration.
-- `setup.rs`: the first-run setup screen, which runs before a theme exists.
 
 ### Known limits
 

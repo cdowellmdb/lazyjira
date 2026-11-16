@@ -106,7 +106,7 @@ pub fn render_divider(f: &mut ratatui::Frame, area: Rect) {
 }
 
 /// Draws the detail of the ticket or epic the app has open in `area`: a header line with the
-/// key, its place among the list's rows and a `[×]`, then the body.
+/// key, its place among the list's rows and a `×`, then the body.
 pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let ticket = app
         .detail_ticket_key
@@ -609,11 +609,11 @@ mod tests {
                 app.detail_mode = mode;
                 let lines = draw(&app, width, height);
                 let at = lines[0]
-                    .find("[×]")
+                    .find("×")
                     .map(|byte| lines[0][..byte].chars().count());
                 assert_eq!(
                     at,
-                    Some(width as usize - 5),
+                    Some(width as usize - 4),
                     "{width}x{height}: {}",
                     lines[0]
                 );
