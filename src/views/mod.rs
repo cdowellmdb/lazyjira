@@ -1149,7 +1149,7 @@ mod tests {
     };
 
     #[test]
-    fn stale_active_tickets_lead_their_age_with_a_mark_and_fossils_fade() {
+    fn stale_active_tickets_show_a_plain_age_and_fossils_fade() {
         const DAY: i64 = 24 * 60 * 60;
         // Ages sit mid-unit, so the clock moving on while the test runs can't change them.
         let now = crate::local_cache::now_unix_secs() as i64;
@@ -1195,8 +1195,8 @@ mod tests {
         };
         for (key, age) in [
             ("DEMO-1", "2w"),
-            ("DEMO-2", "💤 3w"),
-            ("DEMO-3", "🦕 13w"),
+            ("DEMO-2", "3w"),
+            ("DEMO-3", "13w"),
             ("DEMO-4", "13w"),
         ] {
             let drawn = &rows[row(key)];
@@ -1227,9 +1227,7 @@ mod tests {
 
         app.delight.enabled = false;
         let rows = draw(&app, Tab::MyWork, 120);
-        assert!(!rows
-            .iter()
-            .any(|(row, _)| row.contains('💤') || row.contains('🦕')));
+        assert!(line_with(&rows, "DEMO-3").unwrap().0.contains(" 13w"));
     }
 
     #[test]

@@ -294,7 +294,7 @@ mod tests {
         app.delight.enabled = true;
         assert!(app.moves.start(KEY, "Done"));
         app.finish_move(KEY, Ok(()));
-        assert_eq!(app.flash.as_deref(), Some("🎉 Epic DEMO-1 complete: Epic"));
+        assert_eq!(app.flash.as_deref(), Some("Epic DEMO-1 complete: Epic"));
         assert!(app.delight.animating());
         assert!(app
             .delight

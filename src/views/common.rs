@@ -599,7 +599,7 @@ impl Shared {
 }
 
 /// Ticket ages at one moment, read once per render so every age on screen is measured to it,
-/// and what `delight` makes of them: a stale ticket's mark, and a fossil's faded row.
+/// and what `delight` makes of them: a fossil's faded row.
 #[derive(Clone, Copy)]
 pub struct Ages<'a> {
     /// Unix seconds.
@@ -617,18 +617,13 @@ impl<'a> Ages<'a> {
         }
     }
 
-    /// A row's Updated cell: how long before `now` Jira last updated the ticket, after its stale
-    /// mark when it has one, right-aligned by display width, or "-" when the read didn't say.
+    /// A row's Updated cell: how long before `now` Jira last updated the ticket, right-aligned
+    /// by display width, or "-" when the read didn't say.
     pub fn updated_cell(&self, ticket: &Ticket) -> String {
         let age = ticket
             .updated_secs()
             .map_or_else(|| "-".to_string(), |at| age(at, self.now));
-        let cell = match self.delight.stale_mark(self.rules, ticket, self.now) {
-            Some(mark) => format!("{mark} {age}"),
-            None => age,
-        };
-        let pad = UPDATED_WIDTH.saturating_sub(cell.width());
-        format!("{}{cell}", " ".repeat(pad))
+        format!("{age:>width$}", width = UPDATED_WIDTH)
     }
 
     /// `base`, muted when `ticket` is a fossil, so its whole row fades.

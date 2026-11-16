@@ -1,6 +1,6 @@
 //! The fun parts, all off with `preferences.delight = false`: confetti when a ticket reaches a
-//! done status, a receipt of the session printed on quit, marks on active tickets nobody has
-//! touched for weeks, an empty My Work that celebrates, and spooky season in late October.
+//! done status, a receipt of the session printed on quit, a faded row for active tickets nobody has
+//! touched for months, an empty My Work that celebrates, and spooky season in late October.
 
 use std::time::{Duration, Instant};
 
@@ -190,23 +190,6 @@ impl Delight {
         self.staleness(rules, ticket, now) == Staleness::Fossil
     }
 
-    /// The mark the Updated column shows before a stale ticket's age at `now`. Each is two
-    /// columns wide and shown as an emoji by default, so the column stays in line.
-    pub fn stale_mark(
-        &self,
-        rules: &StatusRules,
-        ticket: &Ticket,
-        now: i64,
-    ) -> Option<&'static str> {
-        match (self.staleness(rules, ticket, now), self.spooky()) {
-            (Staleness::Fresh, _) => None,
-            (Staleness::Dusty, false) => Some("💤"),
-            (Staleness::Fossil, false) => Some("🦕"),
-            (Staleness::Dusty, true) => Some("👻"),
-            (Staleness::Fossil, true) => Some("💀"),
-        }
-    }
-
     /// A line for the ticket detail about how long a stale ticket has waited.
     pub fn stale_quip(
         &self,
@@ -218,13 +201,13 @@ impl Delight {
         if idle < DUSTY_AFTER {
             None
         } else if self.spooky() {
-            Some("Untouched for weeks. This one haunts the backlog 👻")
+            Some("Untouched for weeks. This one haunts the backlog")
         } else if idle >= YEAR {
-            Some("Untouched for over a year. It has had a birthday 🎂")
+            Some("Untouched for over a year. It has had a birthday")
         } else if idle >= FOSSIL_AFTER {
-            Some("Untouched for months. Older than most houseplants survive 🪴")
+            Some("Untouched for months. Older than most houseplants survive")
         } else {
-            Some("Untouched for weeks. Older than a carton of milk 🥛")
+            Some("Untouched for weeks. Older than a carton of milk")
         }
     }
 
@@ -251,7 +234,7 @@ impl Delight {
         let stats: Vec<String> = [
             (tally.shipped.len(), "✓", " shipped"),
             (tally.moved, "↻", " moved"),
-            (tally.comments, "💬", ""),
+            (tally.comments, "✎", ""),
             (tally.created, "✚", " created"),
         ]
         .into_iter()
@@ -286,7 +269,7 @@ impl Delight {
             None => "─ lazyjira ".to_string(),
         };
         let sign_off = match self.today {
-            _ if self.spooky() => "happy haunting 🎃",
+            _ if self.spooky() => "happy haunting",
             Some(today) => today.sign_off(),
             None => "see you soon",
         };
@@ -332,8 +315,7 @@ impl App {
                     && epic.done_count(rules) == epic.total()
             })
         });
-        let message =
-            finished.map(|epic| format!("🎉 Epic {} complete: {}", epic.key, epic.summary));
+        let message = finished.map(|epic| format!("Epic {} complete: {}", epic.key, epic.summary));
         let epic = finished.map(|epic| epic.key.clone());
         let now = crate::local_cache::now_unix_secs() as i64;
         self.delight.moved(shipped.as_ref(), epic.as_deref(), now);
@@ -618,21 +600,21 @@ mod tests {
     }
 
     #[test]
-    fn stale_marks_are_two_columns_and_spooky_in_season() {
+    fn only_fossils_are_flagged_and_no_stale_text_carries_an_emoji() {
         let rules = StatusRules::default();
         let ticket = untouched("In Progress");
-        let mark = |delight: &Delight, now| delight.stale_mark(&rules, &ticket, now);
-        let plain = on(date(5, 10, 1));
-        let spooky = on(date(5, 10, 23));
-        assert_eq!(mark(&plain, DUSTY_AFTER - 1), None);
-        assert_eq!(mark(&plain, DUSTY_AFTER), Some("💤"));
-        assert_eq!(mark(&plain, FOSSIL_AFTER), Some("🦕"));
-        assert_eq!(mark(&spooky, DUSTY_AFTER), Some("👻"));
-        assert_eq!(mark(&spooky, FOSSIL_AFTER), Some("💀"));
-        assert!(!plain.is_fossil(&rules, &ticket, FOSSIL_AFTER - 1));
-        assert!(plain.is_fossil(&rules, &ticket, FOSSIL_AFTER));
-        for mark in ["💤", "🦕", "👻", "💀"] {
-            assert_eq!(mark.width(), 2, "{mark}");
+        let delight = on(date(5, 10, 23));
+        assert!(!delight.is_fossil(&rules, &ticket, FOSSIL_AFTER - 1));
+        assert!(delight.is_fossil(&rules, &ticket, FOSSIL_AFTER));
+        let quips = [DUSTY_AFTER, FOSSIL_AFTER, YEAR].map(|now| {
+            let plain = on(date(5, 11, 1));
+            [
+                delight.stale_quip(&rules, &ticket, now),
+                plain.stale_quip(&rules, &ticket, now),
+            ]
+        });
+        for quip in quips.into_iter().flatten().map(Option::unwrap) {
+            assert!(quip.is_ascii(), "{quip}");
         }
     }
 
@@ -774,7 +756,7 @@ mod tests {
         let receipt = delight.receipt().unwrap();
         let expected = [
             "╭─ lazyjira · Fri Oct 9 ───────────────────╮",
-            "│ ✓ 1 shipped  ↻ 2 moved  💬 2             │",
+            "│ ✓ 1 shipped  ↻ 2 moved  ✎ 2              │",
             "│                                          │",
             "│ DEMO-41  Fix login redirect              │",
             "│ oldest slain: DEMO-41 (91 days)          │",
@@ -790,7 +772,7 @@ mod tests {
         delight.today = date(6, 9, 5);
         assert!(delight.receipt().unwrap().contains(" enjoy the weekend "));
         delight.today = date(6, 10, 31);
-        assert!(delight.receipt().unwrap().contains(" happy haunting 🎃 "));
+        assert!(delight.receipt().unwrap().contains(" happy haunting "));
     }
 
     #[test]
