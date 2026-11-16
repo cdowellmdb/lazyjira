@@ -5,9 +5,9 @@ use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 
 use super::inline::{escaped_char, inline};
-use super::wrap::{spans_width, text_width, wrap};
+use super::wrap::{spans_width, wrap};
 use crate::style;
-use crate::views::common::fit;
+use crate::views::common::{fit, text_width};
 
 const SEPARATOR: &str = " │ ";
 

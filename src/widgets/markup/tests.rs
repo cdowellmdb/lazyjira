@@ -522,22 +522,83 @@ fn a_header_only_table_and_empty_cells_draw_what_they_have() {
     );
 }
 
+/// `lines` set into a buffer the way ratatui draws them.
+fn drawn(lines: &[Line], width: u16) -> ratatui::buffer::Buffer {
+    let area = ratatui::layout::Rect::new(0, 0, width, lines.len() as u16);
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    for (y, line) in lines.iter().enumerate() {
+        buffer.set_line(0, y as u16, line, width);
+    }
+    buffer
+}
+
+/// The column of the first cell showing `symbol` on each row of `buffer`.
+fn columns_of(buffer: &ratatui::buffer::Buffer, symbol: &str) -> Vec<Option<u16>> {
+    (0..buffer.area.height)
+        .map(|y| (0..buffer.area.width).find(|&x| buffer[(x, y)].symbol() == symbol))
+        .collect()
+}
+
 #[test]
-fn a_table_fits_by_the_columns_wrap_counts_per_character() {
-    // A sun with an emoji selector is 1 column per character and 2 as a string, and wrap places
-    // text by the character, so the table must be measured that way too.
-    let sun = "\u{2600}\u{FE0F}".repeat(3);
+fn a_table_fits_by_the_columns_ratatui_draws_for_each_grapheme() {
+    // A sun with an emoji selector is two columns as one cluster, though one per character.
+    let sun = "\u{2600}\u{FE0F}\u{2600}\u{FE0F}\u{2600}\u{FE0F}";
     let table = format!("||A||B||\n|{sun}|bbbbbb|");
-    let lines = text(&render(&table, 12));
+    let lines = render(&table, 15);
     assert_eq!(
-        lines,
+        text(&lines),
         vec![
-            "A   │ B".to_string(),
-            "────┼───────".to_string(),
+            "A      │ B".to_string(),
+            "───────┼───────".to_string(),
             format!("{sun} │ bbbbbb")
         ]
     );
-    assert_eq!(text(&render(&table, 11))[0], sun);
+    assert_eq!(
+        columns_of(&drawn(&lines, 15), "│"),
+        [Some(7), None, Some(7)]
+    );
+    assert_eq!(
+        text(&render(&table, 14)),
+        vec![sun.to_string(), "  B  bbbbbb".to_string()]
+    );
+}
+
+#[test]
+fn the_bars_of_a_table_line_up_after_an_emoji_with_a_variation_selector_a_joiner_or_a_wide_label() {
+    for (cell, bar) in [
+        ("\u{26A0}\u{FE0F}", 7),
+        ("\u{1F468}\u{200D}\u{1F469}", 7),
+        ("日本語日本語", 13),
+    ] {
+        let lines = render(
+            &format!("||Status||Note||\n|{cell}|careful|\n|ok|fine|"),
+            40,
+        );
+        let bars = columns_of(&drawn(&lines, 40), "│");
+        assert_eq!(bars, [Some(bar), None, Some(bar), Some(bar)], "{cell}");
+    }
+}
+
+#[test]
+fn wrapped_text_breaks_between_emoji_clusters_not_inside_them() {
+    let warn = "\u{26A0}\u{FE0F}";
+    let lines = render(&warn.repeat(6), 10);
+    assert_eq!(text(&lines), vec![warn.repeat(5), warn.to_string()]);
+    let pair = "\u{1F468}\u{200D}\u{1F469}";
+    let lines = render(&pair.repeat(6), 10);
+    assert_eq!(text(&lines), vec![pair.repeat(5), pair.to_string()]);
+}
+
+#[test]
+fn a_record_label_with_an_emoji_selector_is_not_cut_to_dots() {
+    let lines = render(
+        "||A||\u{26A0}\u{FE0F}||\n|aaaaaaaaaaaaaaaaaaaaaaaaaaaaa|y|",
+        30,
+    );
+    assert_eq!(
+        text(&lines),
+        vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "  \u{26A0}\u{FE0F}  y"]
+    );
 }
 
 #[test]

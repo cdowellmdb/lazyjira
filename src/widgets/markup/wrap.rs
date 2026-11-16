@@ -2,14 +2,11 @@
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
 
-/// The columns `text` takes, counted per character as `wrap` places them.
-pub(super) fn text_width(text: &str) -> usize {
-    text.chars().map(|c| c.width().unwrap_or(0)).sum()
-}
+use crate::views::common::text_width;
 
-/// The columns `spans` take, counted per character as `wrap` places them.
+/// The columns `spans` take, counted per grapheme as ratatui draws each span.
 pub(super) fn spans_width(spans: &[Span]) -> usize {
     spans.iter().map(|s| text_width(&s.content)).sum()
 }
@@ -23,17 +20,17 @@ pub fn wrap(
     content: Vec<Span<'static>>,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let chars: Vec<(char, Style)> = content
+    let chars: Vec<(&str, Style)> = content
         .iter()
-        .flat_map(|s| s.content.chars().map(move |c| (c, s.style)))
+        .flat_map(|s| s.content.graphemes(true).map(move |g| (g, s.style)))
         .collect();
 
     // Alternate runs of whitespace and non-whitespace.
-    let mut runs: Vec<(bool, &[(char, Style)])> = Vec::new();
+    let mut runs: Vec<(bool, &[(&str, Style)])> = Vec::new();
     let mut start = 0;
     for i in 1..=chars.len() {
-        if i == chars.len() || (chars[i].0 == ' ') != (chars[start].0 == ' ') {
-            runs.push((chars[start].0 == ' ', &chars[start..i]));
+        if i == chars.len() || (chars[i].0 == " ") != (chars[start].0 == " ") {
+            runs.push((chars[start].0 == " ", &chars[start..i]));
             start = i;
         }
     }
@@ -41,7 +38,7 @@ pub fn wrap(
     let rest_width = spans_width(&rest);
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut line = LineBuilder::new(first);
-    let mut pending_space: &[(char, Style)] = &[];
+    let mut pending_space: &[(&str, Style)] = &[];
 
     for (is_space, run) in runs {
         if is_space {
@@ -59,15 +56,15 @@ pub fn wrap(
         } else {
             // Too long for any line: break it where the line fills up.
             let space = if line.empty { &[][..] } else { pending_space };
-            for &(c, style) in space.iter().chain(run) {
-                if line.width + c.width().unwrap_or(0) > width && !line.empty {
+            for &(g, style) in space.iter().chain(run) {
+                if line.width + text_width(g) > width && !line.empty {
                     lines.push(line.finish());
                     line = LineBuilder::new(rest.clone());
-                    if c == ' ' {
+                    if g == " " {
                         continue;
                     }
                 }
-                line.push(c, style);
+                line.push(g, style);
             }
         }
         pending_space = &[];
@@ -76,8 +73,8 @@ pub fn wrap(
     lines
 }
 
-fn run_width(run: &[(char, Style)]) -> usize {
-    run.iter().map(|(c, _)| c.width().unwrap_or(0)).sum()
+fn run_width(run: &[(&str, Style)]) -> usize {
+    run.iter().map(|(g, _)| text_width(g)).sum()
 }
 
 struct LineBuilder {
@@ -97,20 +94,20 @@ impl LineBuilder {
         }
     }
 
-    fn push(&mut self, c: char, style: Style) {
-        self.width += c.width().unwrap_or(0);
+    fn push(&mut self, grapheme: &str, style: Style) {
+        self.width += text_width(grapheme);
         // Don't append to the prefix's last span.
         let merge = !self.empty;
         self.empty = false;
         match self.spans.last_mut() {
-            Some(last) if merge && last.style == style => last.content.to_mut().push(c),
-            _ => self.spans.push(Span::styled(c.to_string(), style)),
+            Some(last) if merge && last.style == style => last.content.to_mut().push_str(grapheme),
+            _ => self.spans.push(Span::styled(grapheme.to_string(), style)),
         }
     }
 
-    fn push_all(&mut self, run: &[(char, Style)]) {
-        for &(c, style) in run {
-            self.push(c, style);
+    fn push_all(&mut self, run: &[(&str, Style)]) {
+        for &(g, style) in run {
+            self.push(g, style);
         }
     }
 
