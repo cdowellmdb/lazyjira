@@ -257,7 +257,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
         ),
         BulkUploadState::Running { .. } => (&[("Close", KeyCode::Esc)], &[]),
         BulkUploadState::Result { .. } => (
-            &[("Close", KeyCode::Enter), ("Rerun CSV", KeyCode::Char('r'))],
+            &[("Close", KeyCode::Enter), ("Reload", KeyCode::Char('r'))],
             &[("Esc", "close")],
         ),
     };

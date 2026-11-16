@@ -302,7 +302,7 @@ fn hint_cells(app: &App, from: u16) -> Vec<(u16, u16, u16, KeyCode)> {
 
 #[tokio::test]
 async fn every_detail_hint_keeps_its_click_cell_at_80_120_and_160_columns() {
-    // 11 hints take 122 columns, so below that they wrap onto a second row. The two rows are as
+    // 11 hints take 121 columns, so below that they wrap onto a second row. The two rows are as
     // even as whole hints allow, so 80 and 120 columns wrap alike.
     let wrapped = [
         (13, 28, 1, KeyCode::Left),

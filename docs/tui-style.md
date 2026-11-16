@@ -162,10 +162,9 @@ The code draws mockups 3 and 4 with these differences, kept on purpose:
 - The detail's `[×]` close cell ends the header line, and the activity view has a `Back` button. The mockup has neither.
 - The mockup's move panel has `›  p  ● In Progress` rows. The panel shows the same lines the picker always showed (`[p] Start Progress → In Progress`), because the picker's text is unchanged, and its title reads `Move DEMO-101 from In Progress` with the status muted.
 - The panel has a `[×]` on its title line and its keys in the hint line are clickable. A form's buttons (`Submit`, `Cancel`, `Editor`) share the last row with its hints.
-- The detail's hints take two rows below 122 columns (at 120 and at 80), split as evenly as whole hints allow, and one row from 122. The mockup's one line fits only above that. A message takes a row above them, so the content is a row shorter.
+- The detail's hints take two rows below 121 columns (at 120 and at 80), split as evenly as whole hints allow, and one row from 121. The mockup's one line fits only above that. A message takes a row above them, so the content is a row shorter.
 - A move failure panel is as tall as Jira's wrapped error needs, up to the 60% cap, and `j/k` scroll it when it is still taller. The bulk result scrolls the same way.
-- The bulk upload preview drops its `Path:` line and its blank lines when the full chrome would leave under 3 ticket rows, which is a body of 11 rows or fewer, so at 80x24 it shows 5 rows instead of 1. Its result's second button reads `Rerun CSV`.
-- Click cells that changed size from the boxed overlays before PR 3, because the boxes went away. Not every target kept its cell:
+- The bulk upload preview drops its `Path:` line and its blank lines when the full chrome would leave under 3 ticket rows, which is a body of 11 rows or fewer, so at 80x24 it shows 5 rows instead of 1.- Click cells that changed size from the boxed overlays before PR 3, because the boxes went away. Not every target kept its cell:
   - A single-line text field (Summary, Labels, Name, CSV path) is 1 row, the label and the value side by side. In a box it was 3 rows. A field of more rows is its label row and its value rows, and an option list is its label and one row per option.
   - Help's close hint (`Esc/? close`) is a target 76 wide and 1 row tall on the sheet's last row. In its box it was 68 wide and 3 tall.
   `ui_tests` pin the cells of every panel and sheet at 80x24, so a change to one shows as a diff there.
