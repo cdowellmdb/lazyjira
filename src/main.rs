@@ -753,30 +753,51 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     ])
     .areas(chunks[1]);
 
+    // The detail sits beside the list or replaces it; either way it covers the top bar's controls.
+    let detail = app.is_detail_open();
+    let panes = detail.then(|| widgets::ticket_detail::panes(app, content));
+    let list = panes.as_ref().map_or(Some(content), |panes| panes.list);
+    app.compact_list_width.set(
+        panes
+            .as_ref()
+            .and_then(|panes| panes.list)
+            .map(|list| list.width),
+    );
+
     mouse::begin_layer(app);
     top_bar::render(f, app, chunks[0]);
+    if detail {
+        mouse::begin_layer(app);
+    }
 
-    // Content area
-    if app.loading
-        && app.cache.my_tickets.is_empty()
-        && app.cache.team_tickets.is_empty()
-        && app.cache.epics.is_empty()
-        && app.filter_results.is_empty()
-    {
-        let mut loading = views::common::ListLines::new(app);
-        loading.glyph_line(
-            Span::raw(" "),
-            vec![Span::styled("Loading...", style::warning())],
-        );
-        loading.render(f, content);
-    } else {
-        match app.active_tab {
-            Tab::MyWork => views::my_work::render(f, content, app),
-            Tab::Team => views::team::render(f, content, app),
-            Tab::Epics => views::epics::render(f, content, app),
-            Tab::Unassigned => views::unassigned::render(f, content, app),
-            Tab::Filters => views::filters::render(f, content, app, config),
+    if let Some(list) = list {
+        if app.loading
+            && app.cache.my_tickets.is_empty()
+            && app.cache.team_tickets.is_empty()
+            && app.cache.epics.is_empty()
+            && app.filter_results.is_empty()
+        {
+            let mut loading = views::common::ListLines::new(app);
+            loading.glyph_line(
+                Span::raw(" "),
+                vec![Span::styled("Loading...", style::warning())],
+            );
+            loading.render(f, list);
+        } else {
+            match app.active_tab {
+                Tab::MyWork => views::my_work::render(f, list, app),
+                Tab::Team => views::team::render(f, list, app),
+                Tab::Epics => views::epics::render(f, list, app),
+                Tab::Unassigned => views::unassigned::render(f, list, app),
+                Tab::Filters => views::filters::render(f, list, app, config),
+            }
         }
+    }
+    if let Some(panes) = &panes {
+        if let Some(divider) = panes.divider {
+            widgets::ticket_detail::render_divider(f, divider);
+        }
+        widgets::ticket_detail::render(f, app, panes.detail);
     }
 
     // Status bar
@@ -793,6 +814,10 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     } else if panel.is_some() {
         // The panel has its own hints.
         Line::default()
+    } else if detail {
+        let hints = footer::pairs_line(widgets::ticket_detail::hints(app), chunks[3].width);
+        footer::register_keys(app, &hints, chunks[3]);
+        hints
     } else {
         footer::line(app, &config.preferences.theme, chunks[3].width)
     };
@@ -801,11 +826,6 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         f.render_widget(ratatui::widgets::Paragraph::new(bar), chunks[2]);
     }
 
-    // Detail overlay
-    if app.is_detail_open() {
-        mouse::begin_layer(app);
-        widgets::ticket_detail::render(f, app);
-    }
     if app.show_keybindings {
         mouse::begin_layer(app);
         widgets::keybindings_help::render(f, app);

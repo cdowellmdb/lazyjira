@@ -1,10 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
-use ratatui::{
-    buffer::Buffer,
-    style::{Color, Style},
-    widgets::Paragraph,
-};
+use ratatui::{buffer::Buffer, widgets::Paragraph};
 use tokio::sync::mpsc::UnboundedSender;
 use tui_textarea::CursorMove;
 
@@ -167,7 +163,7 @@ pub fn render_selection(f: &mut ratatui::Frame, app: &App) {
     selection.screen = screen;
     for row in selection.rows() {
         f.buffer_mut()
-            .set_style(row, Style::default().fg(Color::Black).bg(Color::LightBlue));
+            .set_style(row, crate::style::text_selection());
     }
     if selection.range.is_some_and(|(start, end)| start != end) || selection.editor_selected {
         let footer = Rect::new(
@@ -182,7 +178,7 @@ pub fn render_selection(f: &mut ratatui::Frame, app: &App) {
                 "[Copy]  {}",
                 app.flash.as_deref().unwrap_or("Ctrl+C copy · Esc clear")
             ))
-            .style(Style::default().fg(Color::Cyan)),
+            .style(crate::style::accent()),
             footer,
         );
         app.mouse_targets.borrow_mut().push((
@@ -477,6 +473,11 @@ pub async fn handle(
             }
             match target {
                 Target::Tab(tab) => app.switch_tab(tab),
+                Target::Row(index) if app.is_detail_open() => {
+                    // The list beside the detail: a click shows that row's ticket.
+                    app.selected_index = index;
+                    crate::open_selected_row(app, tx);
+                }
                 Target::Row(index) => {
                     if app.selected_index == index {
                         crate::handle_key(
@@ -627,6 +628,7 @@ mod tests {
         cache::{TeamMember, Ticket},
         widgets::form,
     };
+    use ratatui::style::Color;
     use ratatui::{backend::TestBackend, Terminal};
 
     fn draw(app: &App, config: &AppConfig) -> Buffer {

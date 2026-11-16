@@ -375,6 +375,8 @@ pub struct ListLines<'a> {
     selected_lines: Option<Range<usize>>,
     /// Whether the list has the selection: a pane without focus draws none.
     focused: bool,
+    /// The list's width beside the detail pane, which shows only keys and summaries.
+    compact: Option<u16>,
 }
 
 impl<'a> ListLines<'a> {
@@ -386,7 +388,13 @@ impl<'a> ListLines<'a> {
             items: Vec::new(),
             selected_lines: None,
             focused: true,
+            compact: app.compact_list_width.get(),
         }
+    }
+
+    /// Whether the list is beside the detail pane, and draws only keys and summaries.
+    pub fn is_compact(&self) -> bool {
+        self.compact.is_some()
     }
 
     pub fn focused(mut self, focused: bool) -> Self {
@@ -511,9 +519,16 @@ impl<'a> ListLines<'a> {
         let selected = self.is_selected(index);
         let (base, primary) = self.ages.row_styles(ticket, selected, faded);
         let family = group.family.get(&index).copied();
+        // Beside the detail pane the summary takes the width the key leaves, and no other cell
+        // is drawn: what the views push after it is cut off by the pane's edge.
+        let summary_w = self.compact.map_or(summary_w, |width| {
+            (width as usize).saturating_sub(self.lead_width() + key_w + COLUMN_GAP)
+        });
         let (key, summary) = ticket_cells(self.app, family, ticket, summary_w, primary);
         let mut cells = vec![vec![Span::styled(fit(&key.text, key_w), primary)]];
-        cells.extend(extra(base));
+        if !self.is_compact() {
+            cells.extend(extra(base));
+        }
 
         let glyph = if selected {
             Span::styled("›", style::accent().patch(style::heading()))

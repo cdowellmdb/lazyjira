@@ -1,21 +1,32 @@
-use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
-use ratatui::style::{Color, Modifier, Style};
+//! The ticket detail: a pane beside the list at 120 columns or wider, in place of the list below
+//! that. It shows the ticket's fields, its description rendered from Jira wiki markup and its
+//! comments, scrolled by the keys in `main`'s `handle_detail_keys`; the move picker and the
+//! forms dock under it (`dock`).
+
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::symbols;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
 };
 
 use crate::app::{App, DetailMode};
 use crate::cache::{ActivityKind, Epic, StatusRules, Ticket};
-use crate::style::status_color;
-use crate::views::common::{epic_bar, fit, panel, truncate, EPIC_BAR_WIDTH};
+use crate::mouse::Target;
+use crate::style;
+use crate::views::common::{epic_bar, fit, truncate, EPIC_BAR_WIDTH};
 use crate::widgets::activity::format_timestamp;
-use crate::widgets::markup;
+use crate::widgets::{form, markup};
 
 /// Width of the field names ("Assignee", ...) in the header.
 const FIELD_WIDTH: usize = 10;
 
+/// The narrowest content area the detail sits beside the list in. Narrower, it replaces it.
+pub const SPLIT_MIN_WIDTH: u16 = 120;
+/// Cells of the list beside the detail, which shows only keys and summaries.
+pub const LIST_WIDTH: u16 = 50;
+
+/// The hints under the detail while it shows a ticket.
 const VIEW_HINTS: &[(&str, &str)] = &[
     ("↑↓", "scroll"),
     ("←→", "prev/next"),
@@ -37,146 +48,150 @@ const EPIC_HINTS: &[(&str, &str)] = &[
     ("Esc", "close"),
 ];
 
-fn muted() -> Style {
-    Style::default().fg(Color::DarkGray)
-}
+const HISTORY_HINTS: &[(&str, &str)] = &[("↑↓", "scroll"), ("Esc", "back")];
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
-}
-
-/// Draws the overlay's frame for `key` and returns the area inside it.
-fn render_frame(f: &mut ratatui::Frame, app: &App, key: &str) -> (Rect, Rect) {
-    let area = if app.detail_fullscreen {
-        f.area()
+/// The hints the status line shows while the detail has the keys.
+pub fn hints(app: &App) -> &'static [(&'static str, &'static str)] {
+    if app.detail_epic_key.is_some() {
+        EPIC_HINTS
+    } else if matches!(app.detail_mode, DetailMode::History { .. }) {
+        HISTORY_HINTS
     } else {
-        centered_rect(80, 85, f.area())
-    };
-    f.render_widget(Clear, area);
-
-    let mut block = panel()
-        .padding(Padding::horizontal(1))
-        .title(Line::from(vec![
-            Span::styled(
-                " [×] ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" {} ", key),
-                Style::default()
-                    .fg(Color::Reset)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-    if let Some((index, count)) = app.detail_position() {
-        block = block.title(
-            Line::from(Span::styled(format!(" {} of {} ", index, count), muted())).right_aligned(),
-        );
+        VIEW_HINTS
     }
-    let inner = block.inner(area);
-    app.text_selection.borrow_mut().areas = vec![Rect::new(
-        area.x.saturating_add(1),
-        area.y,
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(1),
-    )];
-    f.render_widget(block, area);
-    if area.width > 2 && area.height > 0 {
-        app.mouse_targets.borrow_mut().push((
-            Rect::new(area.x + 1, area.y, 5.min(area.width - 2), 1),
-            crate::mouse::Target::CloseDetail,
-        ));
-    }
-    (area, inner)
 }
 
-pub fn render(f: &mut ratatui::Frame, app: &App) {
-    if let Some(ticket_key) = app.detail_ticket_key.as_ref() {
-        if let Some(ticket) = app.find_ticket(ticket_key) {
-            let (area, inner) = render_frame(f, app, ticket_key);
-            match &app.detail_mode {
-                // The move panel docks under the detail, which keeps showing the ticket.
-                DetailMode::View
-                | DetailMode::MoveLoading { .. }
-                | DetailMode::MovePicker(_)
-                | DetailMode::ResolutionPicker { .. } => render_view(f, area, inner, app, ticket),
-                DetailMode::History { scroll } => {
-                    crate::widgets::activity::render(f, inner, &ticket.activity, *scroll);
-                    crate::widgets::form::buttons(
-                        f,
-                        app,
-                        Rect::new(
-                            inner.x,
-                            inner.bottom().saturating_sub(1),
-                            inner.width,
-                            u16::from(inner.height > 0),
-                        ),
-                        &[("Back", crossterm::event::KeyCode::Esc)],
-                    );
-                }
-            }
-            return;
-        }
-    }
-
-    let epic_key = match app.detail_epic_key.as_ref() {
-        Some(k) => k,
-        None => return,
-    };
-    let epic = match app.cache.epics.iter().find(|e| &e.key == epic_key) {
-        Some(e) => e,
-        None => return,
-    };
-    let (area, inner) = render_frame(f, app, &epic.key);
-    render_epic_view(f, area, inner, app, epic);
+/// Where the detail and the list go in the content area.
+pub struct Panes {
+    /// The list beside the detail, narrowed to `LIST_WIDTH`; none when the detail replaces it.
+    pub list: Option<Rect>,
+    /// The dim rule between them.
+    pub divider: Option<Rect>,
+    pub detail: Rect,
 }
 
-/// Draws `hints` on the bottom row of `area`, after a blank line, and returns the area above
-/// them.
-pub(crate) fn render_footer(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    hints: &[(&'static str, &'static str)],
-    app: &App,
-) -> Rect {
-    let [body, _, footer] = Layout::vertical([
+/// The panes in `area`: side by side from `SPLIT_MIN_WIDTH` columns, unless `z` zoomed the
+/// detail to the whole area.
+pub fn panes(app: &App, area: Rect) -> Panes {
+    if area.width < SPLIT_MIN_WIDTH || app.detail_fullscreen {
+        return Panes {
+            list: None,
+            divider: None,
+            detail: area,
+        };
+    }
+    let [list, divider, detail] = Layout::horizontal([
+        Constraint::Length(LIST_WIDTH),
+        Constraint::Length(1),
         Constraint::Min(0),
-        Constraint::Length(u16::from(area.height > 1)),
-        Constraint::Length(u16::from(area.height > 0)),
     ])
     .areas(area);
-    let line = crate::footer::pairs_line(hints, footer.width);
-    crate::footer::register_keys(app, &line, footer);
-    f.render_widget(Paragraph::new(line), footer);
-    body
+    Panes {
+        list: Some(list),
+        divider: Some(divider),
+        detail,
+    }
 }
 
-/// Draws `lines` in `body` at the overlay's scroll position, with a scrollbar
-/// on the overlay's right border when they don't fit, and records the scroll
-/// limits for the scroll keys.
+/// The dim `│` between the list and the detail.
+pub fn render_divider(f: &mut ratatui::Frame, area: Rect) {
+    f.render_widget(
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_style(style::secondary()),
+        area,
+    );
+}
+
+/// Draws the detail of the ticket or epic the app has open in `area`: a header line with the
+/// key, its place among the list's rows and a `[×]`, then the body.
+pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
+    let ticket = app
+        .detail_ticket_key
+        .as_ref()
+        .and_then(|key| app.find_ticket(key));
+    let epic = app
+        .detail_epic_key
+        .as_ref()
+        .and_then(|key| app.cache.epics.iter().find(|epic| &epic.key == key));
+    let key = match (ticket, epic) {
+        (Some(ticket), _) => &ticket.key,
+        (None, Some(epic)) => &epic.key,
+        (None, None) => return,
+    };
+    let [head, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    let mut title = vec![Span::raw(" "), Span::styled(key.clone(), style::heading())];
+    if let Some((index, count)) = app.detail_position() {
+        title.push(Span::styled(
+            format!("  {index} of {count}"),
+            style::secondary(),
+        ));
+    }
+    f.render_widget(Paragraph::new(Line::from(title)), head);
+    form::close_button(f, app, head, Target::CloseDetail);
+    // A drag selects the header and the text, not the scrollbar's column.
+    crate::mouse::selectable(
+        app,
+        Rect::new(
+            area.x + 1,
+            area.y,
+            area.width.saturating_sub(2),
+            area.height,
+        ),
+    );
+    match (ticket, epic) {
+        (Some(ticket), _) => match &app.detail_mode {
+            // The move picker docks under the detail, which keeps showing the ticket.
+            DetailMode::History { scroll } => render_history(f, app, body, ticket, *scroll),
+            _ => render_view(f, app, body, ticket),
+        },
+        (None, Some(epic)) => render_epic_view(f, app, body, epic),
+        (None, None) => {}
+    }
+}
+
+fn render_history(f: &mut ratatui::Frame, app: &App, body: Rect, ticket: &Ticket, scroll: u16) {
+    let [text, buttons] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(u16::from(body.height > 1)),
+    ])
+    .areas(body);
+    let text = Rect::new(
+        text.x + 1,
+        text.y,
+        text.width.saturating_sub(2),
+        text.height,
+    );
+    crate::widgets::activity::render(f, text, &ticket.activity, scroll);
+    form::buttons(
+        f,
+        app,
+        Rect::new(
+            buttons.x + 1,
+            buttons.y,
+            buttons.width.saturating_sub(1),
+            buttons.height,
+        ),
+        &[("Back", crossterm::event::KeyCode::Esc)],
+    );
+}
+
+/// Draws `lines` in `area`, a cell in from the left and leaving the right column for a
+/// scrollbar, at the detail's scroll position, and records the scroll limits for the scroll
+/// keys.
 fn render_scrollable(
     f: &mut ratatui::Frame,
     app: &App,
-    frame: Rect,
-    body: Rect,
-    lines: Vec<Line<'static>>,
+    area: Rect,
+    build: impl FnOnce(usize) -> Vec<Line<'static>>,
 ) {
+    let body = Rect::new(
+        area.x + u16::from(area.width > 0),
+        area.y,
+        area.width.saturating_sub(2),
+        area.height,
+    );
+    let lines = build(body.width as usize);
     let max = lines
         .len()
         .saturating_sub(body.height as usize)
@@ -199,19 +214,16 @@ fn render_scrollable(
                 .symbols(symbols::scrollbar::VERTICAL)
                 .begin_symbol(None)
                 .end_symbol(None)
-                .track_style(muted())
-                .thumb_style(Style::default().fg(Color::Reset)),
-            frame.inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
+                .track_style(style::secondary())
+                .thumb_style(style::primary()),
+            area,
             &mut state,
         );
     }
 }
 
 fn rule(width: usize) -> Line<'static> {
-    Line::from(Span::styled("─".repeat(width), muted()))
+    Line::from(Span::styled("─".repeat(width), style::secondary()))
 }
 
 /// A rule with `title` set into it: `── Comments (2) ─────`.
@@ -219,16 +231,11 @@ fn section(title: &str, width: usize) -> Line<'static> {
     let lead = "── ";
     let used = lead.chars().count() + title.chars().count() + 1;
     Line::from(vec![
-        Span::styled(lead, muted()),
-        Span::styled(
-            title.to_string(),
-            Style::default()
-                .fg(Color::Reset)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(lead, style::secondary()),
+        Span::styled(title.to_string(), style::heading()),
         Span::styled(
             format!(" {}", "─".repeat(width.saturating_sub(used))),
-            muted(),
+            style::secondary(),
         ),
     ])
 }
@@ -236,7 +243,10 @@ fn section(title: &str, width: usize) -> Line<'static> {
 /// A header row: the field name, then `value` wrapped under itself.
 fn push_field(lines: &mut Vec<Line<'static>>, name: &str, value: Vec<Span<'static>>, width: usize) {
     lines.extend(markup::wrap(
-        vec![Span::styled(format!("{:<FIELD_WIDTH$}", name), muted())],
+        vec![Span::styled(
+            format!("{:<FIELD_WIDTH$}", name),
+            style::secondary(),
+        )],
         vec![Span::raw(" ".repeat(FIELD_WIDTH))],
         value,
         width,
@@ -247,12 +257,7 @@ fn title_lines(summary: &str, width: usize) -> Vec<Line<'static>> {
     markup::wrap(
         vec![],
         vec![],
-        vec![Span::styled(
-            summary.to_string(),
-            Style::default()
-                .fg(Color::Reset)
-                .add_modifier(Modifier::BOLD),
-        )],
+        vec![Span::styled(summary.to_string(), style::heading())],
         width,
     )
 }
@@ -267,20 +272,19 @@ fn header_lines(ticket: &Ticket, rules: &StatusRules, width: usize) -> Vec<Line<
     let mut lines = title_lines(&ticket.summary, width);
     lines.push(Line::from(""));
 
-    let color = status_color(&ticket.status, rules);
     push_field(
         &mut lines,
         "Status",
         vec![Span::styled(
             format!("● {}", ticket.status),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
+            style::status(&ticket.status, rules).patch(style::heading()),
         )],
         width,
     );
 
     let assignee = match &ticket.assignee {
-        Some(name) => Span::styled(name.clone(), Style::default().fg(Color::Reset)),
-        None => Span::styled("Unassigned", muted().add_modifier(Modifier::ITALIC)),
+        Some(name) => Span::styled(name.clone(), style::primary()),
+        None => Span::styled("Unassigned", style::aside()),
     };
     push_field(&mut lines, "Assignee", vec![assignee], width);
 
@@ -288,40 +292,32 @@ fn header_lines(ticket: &Ticket, rules: &StatusRules, width: usize) -> Vec<Line<
         push_field(
             &mut lines,
             "Reporter",
-            vec![Span::styled(
-                reporter.clone(),
-                Style::default().fg(Color::Reset),
-            )],
+            vec![Span::styled(reporter.clone(), style::primary())],
             width,
         );
     }
 
     if let Some(epic_key) = &ticket.epic_key {
-        let mut value = vec![Span::styled(
-            epic_key.clone(),
-            Style::default().fg(Color::Magenta),
-        )];
+        let mut value = vec![Span::styled(epic_key.clone(), style::primary())];
         if let Some(name) = &ticket.epic_name {
-            value.push(Span::styled(
-                format!(" · {}", name),
-                Style::default().fg(Color::Reset),
-            ));
+            value.push(Span::styled(format!(" · {}", name), style::primary()));
         }
         push_field(&mut lines, "Epic", value, width);
     }
 
     if !ticket.labels.is_empty() {
-        let mut chips = Vec::new();
-        for (i, label) in ticket.labels.iter().enumerate() {
-            if i > 0 {
-                chips.push(Span::raw(" "));
-            }
-            chips.push(Span::styled(
-                format!("\u{a0}{}\u{a0}", label),
-                Style::default().fg(Color::Yellow).bg(Color::DarkGray),
-            ));
-        }
-        push_field(&mut lines, "Labels", chips, width);
+        let chips = ticket
+            .labels
+            .iter()
+            .map(|label| label.replace(' ', "\u{a0}"))
+            .collect::<Vec<_>>()
+            .join("  ");
+        push_field(
+            &mut lines,
+            "Labels",
+            vec![Span::styled(chips, style::primary())],
+            width,
+        );
     }
 
     lines
@@ -331,10 +327,7 @@ fn description_lines(app: &App, ticket: &Ticket, width: usize) -> Vec<Line<'stat
     if ticket.detail_loaded {
         return match ticket.description.as_deref() {
             Some(desc) if !desc.trim().is_empty() => markup::render(desc, width as u16),
-            _ => vec![Line::from(Span::styled(
-                "No description.",
-                muted().add_modifier(Modifier::ITALIC),
-            ))],
+            _ => vec![Line::from(Span::styled("No description.", style::aside()))],
         };
     }
     match app.detail_fetch_error(&ticket.key) {
@@ -344,19 +337,19 @@ fn description_lines(app: &App, ticket: &Ticket, width: usize) -> Vec<Line<'stat
                 vec![],
                 vec![Span::styled(
                     format!("Couldn't load details: {}", error.trim()),
-                    Style::default().fg(Color::Red),
+                    style::error(),
                 )],
                 width,
             );
             lines.push(Line::from(Span::styled(
                 "Close and reopen the ticket to try again.",
-                muted(),
+                style::secondary(),
             )));
             lines
         }
         None => vec![Line::from(Span::styled(
             "Loading details…",
-            Style::default().fg(Color::Yellow),
+            style::warning(),
         ))],
     }
 }
@@ -382,7 +375,7 @@ fn comment_lines(ticket: &Ticket, width: usize) -> Vec<Line<'static>> {
     if comments.is_empty() {
         lines.push(Line::from(Span::styled(
             "No comments yet. Press C to add one.",
-            muted().add_modifier(Modifier::ITALIC),
+            style::aside(),
         )));
         return lines;
     }
@@ -391,13 +384,11 @@ fn comment_lines(ticket: &Ticket, width: usize) -> Vec<Line<'static>> {
     for (entry, body) in comments {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
+            Span::styled(entry.author.clone(), style::heading()),
             Span::styled(
-                entry.author.clone(),
-                Style::default()
-                    .fg(Color::LightCyan)
-                    .add_modifier(Modifier::BOLD),
+                format!("  {}", format_timestamp(&entry.timestamp)),
+                style::secondary(),
             ),
-            Span::styled(format!("  {}", format_timestamp(&entry.timestamp)), muted()),
         ]));
         let body_width = width.saturating_sub(indent.len()) as u16;
         lines.extend(
@@ -409,98 +400,92 @@ fn comment_lines(ticket: &Ticket, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn render_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, ticket: &Ticket) {
-    let body = render_footer(f, area, VIEW_HINTS, app);
-    let width = body.width as usize;
-
-    let mut lines = header_lines(ticket, app.status_rules(), width);
-    let now = crate::local_cache::now_unix_secs() as i64;
-    if let Some(quip) = app.delight.stale_quip(app.status_rules(), ticket, now) {
-        let quip = Span::styled(quip, muted().add_modifier(Modifier::ITALIC));
-        lines.extend(markup::wrap(vec![], vec![], vec![quip], width));
-    }
-    lines.push(Line::from(""));
-    lines.push(rule(width));
-    lines.push(Line::from(""));
-    lines.extend(description_lines(app, ticket, width));
-    if ticket.detail_loaded {
-        lines.extend(comment_lines(ticket, width));
-    }
-
-    render_scrollable(f, app, frame, body, lines);
+fn render_view(f: &mut ratatui::Frame, app: &App, area: Rect, ticket: &Ticket) {
+    render_scrollable(f, app, area, |width| {
+        let mut lines = header_lines(ticket, app.status_rules(), width);
+        let now = crate::local_cache::now_unix_secs() as i64;
+        if let Some(quip) = app.delight.stale_quip(app.status_rules(), ticket, now) {
+            let quip = Span::styled(quip, style::aside());
+            lines.extend(markup::wrap(vec![], vec![], vec![quip], width));
+        }
+        lines.push(Line::from(""));
+        lines.push(rule(width));
+        lines.push(Line::from(""));
+        lines.extend(description_lines(app, ticket, width));
+        if ticket.detail_loaded {
+            lines.extend(comment_lines(ticket, width));
+        }
+        lines
+    });
 }
 
-fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, epic: &Epic) {
-    let body = render_footer(f, area, EPIC_HINTS, app);
-    let width = body.width as usize;
-    let rules = app.status_rules();
+fn render_epic_view(f: &mut ratatui::Frame, app: &App, area: Rect, epic: &Epic) {
+    render_scrollable(f, app, area, |width| {
+        let rules = app.status_rules();
 
-    let mut lines = title_lines(&epic.summary, width);
-    lines.push(Line::from(""));
+        let mut lines = title_lines(&epic.summary, width);
+        lines.push(Line::from(""));
 
-    let total = epic.total();
-    let (done, scope) = epic.progress(rules);
-    let mut progress = epic_bar(epic, rules, EPIC_BAR_WIDTH, Style::default());
-    if let Some(percent) = epic.percent_done(rules) {
-        progress.push(Span::styled(
-            format!("\u{a0}\u{a0}{done}\u{a0}/\u{a0}{scope}\u{a0}({percent}%)"),
-            Style::default().fg(Color::Green),
-        ));
-    }
-    // Dropped children aren't in the fraction, so name them to make it add up to the total.
-    if scope < total {
-        let lead = if scope > 0 { "," } else { "\u{a0}" };
-        progress.push(Span::styled(
-            format!("{lead}\u{a0}{}\u{a0}dropped", total - scope),
-            muted(),
-        ));
-    }
-    push_field(&mut lines, "Progress", progress, width);
-
-    let mut counts = Vec::new();
-    for (status, count) in epic.status_counts(rules) {
-        if !counts.is_empty() {
-            counts.push(Span::raw("  "));
+        let total = epic.total();
+        let (done, scope) = epic.progress(rules);
+        let mut progress = epic_bar(epic, rules, EPIC_BAR_WIDTH, style::primary());
+        if let Some(percent) = epic.percent_done(rules) {
+            progress.push(Span::styled(
+                format!("\u{a0}\u{a0}{done}\u{a0}/\u{a0}{scope}\u{a0}({percent}%)"),
+                style::success(),
+            ));
         }
-        counts.push(Span::styled(
-            format!("{}:\u{a0}{}", status.as_str(), count).replace(' ', "\u{a0}"),
-            crate::style::status(status.as_str(), rules),
-        ));
-    }
-    if counts.is_empty() {
-        counts.push(Span::styled("No related tickets", muted()));
-    }
-    push_field(&mut lines, "Status", counts, width);
+        // Dropped children aren't in the fraction, so name them to make it add up to the total.
+        if scope < total {
+            let lead = if scope > 0 { "," } else { "\u{a0}" };
+            progress.push(Span::styled(
+                format!("{lead}\u{a0}{}\u{a0}dropped", total - scope),
+                style::secondary(),
+            ));
+        }
+        push_field(&mut lines, "Progress", progress, width);
 
-    lines.push(Line::from(""));
-    lines.push(section(&format!("Related tickets ({})", total), width));
-    lines.push(Line::from(""));
+        let mut counts = Vec::new();
+        for (status, count) in epic.status_counts(rules) {
+            if !counts.is_empty() {
+                counts.push(Span::raw("  "));
+            }
+            counts.push(Span::styled(
+                format!("{}:\u{a0}{}", status.as_str(), count).replace(' ', "\u{a0}"),
+                style::status(status.as_str(), rules),
+            ));
+        }
+        if counts.is_empty() {
+            counts.push(Span::styled("No related tickets", style::secondary()));
+        }
+        push_field(&mut lines, "Status", counts, width);
 
-    let mut children: Vec<_> = epic.children.iter().collect();
-    rules.sort_tickets(&mut children);
-    if children.is_empty() {
-        lines.push(Line::from(Span::styled("(no related tickets)", muted())));
-    }
-    let summary_width = width.saturating_sub(12 + 15 + 2).max(10);
-    for ticket in children {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{:<12}", ticket.key),
-                Style::default().fg(Color::Reset),
-            ),
-            Span::styled(
-                fit(&ticket.status, 15),
-                crate::style::status(&ticket.status, rules),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                truncate(&ticket.summary, summary_width),
-                Style::default().fg(Color::Reset),
-            ),
-        ]));
-    }
+        lines.push(Line::from(""));
+        lines.push(section(&format!("Related tickets ({})", total), width));
+        lines.push(Line::from(""));
 
-    render_scrollable(f, app, frame, body, lines);
+        let mut children: Vec<_> = epic.children.iter().collect();
+        rules.sort_tickets(&mut children);
+        if children.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "(no related tickets)",
+                style::secondary(),
+            )));
+        }
+        let summary_width = width.saturating_sub(12 + 15 + 2).max(10);
+        for ticket in children {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{:<12}", ticket.key), style::primary()),
+                Span::styled(
+                    fit(&ticket.status, 15),
+                    style::status(&ticket.status, rules),
+                ),
+                Span::raw("  "),
+                Span::styled(truncate(&ticket.summary, summary_width), style::primary()),
+            ]));
+        }
+        lines
+    });
 }
 
 #[cfg(test)]
@@ -552,7 +537,7 @@ mod tests {
 
     fn draw(app: &App, width: u16, height: u16) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| render(f, app)).unwrap();
+        terminal.draw(|f| render(f, app, f.area())).unwrap();
         let buffer = terminal.backend().buffer();
         (0..height)
             .map(|y| {
@@ -609,41 +594,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn top_left_close_button_closes_the_popup() {
+    async fn the_close_button_ends_one_cell_before_the_right_edge_of_the_header_and_closes() {
         let mut config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        for (width, height, fullscreen) in [(55, 50, false), (40, 18, false), (80, 24, true)] {
+        for (width, height) in [(55, 50), (40, 18), (80, 24), (160, 40)] {
             for mode in [
                 DetailMode::View,
                 DetailMode::History { scroll: 0 },
                 DetailMode::MoveLoading { request: 1 },
             ] {
                 let mut app = app_showing(ticket());
-                app.detail_fullscreen = fullscreen;
                 app.detail_mode = mode;
                 let lines = draw(&app, width, height);
-                let y = row(&lines, "[×]");
-                let x = lines[y].split_once("[×]").unwrap().0.chars().count();
-                assert!(x < width as usize / 4 && y < height as usize / 4);
-                assert!(!lines.iter().any(|line| line.contains(" Close ")));
-                for kind in [
-                    crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-                    crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+                let at = lines[0]
+                    .find("[×]")
+                    .map(|byte| lines[0][..byte].chars().count());
+                assert_eq!(
+                    at,
+                    Some(width as usize - 5),
+                    "{width}x{height}: {}",
+                    lines[0]
+                );
+                let close = Rect::new(width - 6, 0, 5, 1);
+                assert!(app
+                    .mouse_targets
+                    .borrow()
+                    .contains(&(close, crate::mouse::Target::CloseDetail)));
+                for (x, closes) in [
+                    (width - 7, false),
+                    (width - 6, true),
+                    (width - 2, true),
+                    (width - 1, false),
                 ] {
-                    crate::mouse::handle(
-                        &mut app,
-                        crossterm::event::MouseEvent {
-                            kind,
-                            column: x as u16 + 1,
-                            row: y as u16,
-                            modifiers: crossterm::event::KeyModifiers::NONE,
-                        },
-                        &tx,
-                        &mut config,
-                    )
-                    .await;
+                    let mut app = app_showing(ticket());
+                    draw(&app, width, height);
+                    for kind in [
+                        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                        crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+                    ] {
+                        crate::mouse::handle(
+                            &mut app,
+                            crossterm::event::MouseEvent {
+                                kind,
+                                column: x,
+                                row: 0,
+                                modifiers: crossterm::event::KeyModifiers::NONE,
+                            },
+                            &tx,
+                            &mut config,
+                        )
+                        .await;
+                    }
+                    assert_eq!(
+                        !app.is_detail_open(),
+                        closes,
+                        "{width}x{height} click at {x}"
+                    );
                 }
-                assert!(!app.is_detail_open());
             }
         }
     }
@@ -652,7 +659,7 @@ mod tests {
     fn header_fields_and_comments_oldest_first() {
         let lines = draw(&app_showing(ticket()), 70, 34);
         assert!(lines[row(&lines, "Status")].contains("● In Progress"));
-        assert!(lines[row(&lines, "Labels")].contains(" DEMO   data-science "));
+        assert!(lines[row(&lines, "Labels")].contains("Labels    DEMO  data-science"));
         assert!(lines[row(&lines, "── Comments (2) ─")].contains('─'));
         assert!(row(&lines, "Alex Rivera  2026-09-01 09:30") < row(&lines, "Sam Lee"));
         assert!(lines[row(&lines, "Second reply")].contains("   Second reply"));
@@ -669,12 +676,8 @@ mod tests {
         app.detail_scroll = u16::MAX;
         let lines = draw(&app, 70, 30);
         let last = row(&lines, "Second reply");
-        assert_eq!(
-            row(&lines, "↑↓ scroll"),
-            last + 2,
-            "last line sits above the footer"
-        );
-        // The scrollbar replaces the right border, thumb at the bottom.
+        assert_eq!(last, 29, "the last line sits on the pane's last row");
+        // The scrollbar is the pane's last column, its thumb at the bottom.
         assert!(lines[last].trim_end().ends_with('█'));
     }
 

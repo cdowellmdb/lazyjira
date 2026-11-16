@@ -275,8 +275,11 @@ pub struct App {
     /// Largest useful `detail_scroll` and the body's height, as last rendered.
     pub detail_scroll_max: Cell<u16>,
     pub detail_page_height: Cell<u16>,
-    /// Whether the detail overlay fills the screen (`z`).
+    /// Whether the detail fills the content area, over the list (`z`).
     pub detail_fullscreen: bool,
+    /// The width of the list beside the detail pane, which shows only keys and summaries. Set
+    /// by `ui` before it draws the list, so the views read it while they draw.
+    pub compact_list_width: Cell<Option<u16>>,
     /// True while data is being fetched.
     pub loading: bool,
     /// Flash message (error or success), cleared on next keypress.
@@ -381,6 +384,7 @@ impl App {
             detail_scroll_max: Cell::new(0),
             detail_page_height: Cell::new(1),
             detail_fullscreen: false,
+            compact_list_width: Cell::new(None),
             loading: true,
             flash: None,
             search: None,

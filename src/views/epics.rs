@@ -80,11 +80,13 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 Span::styled(fit(&epic.summary, summary_w_of_header), style::heading()),
             ],
         );
-        let meta_style = style::secondary();
-        let bar = epic_bar(epic, app.status_rules(), EPIC_BAR_WIDTH, meta_style);
-        let mut meta = app.delight.rainbow_bar(&epic.key, bar, Instant::now());
-        meta.extend(status_counts(app, epic, meta_style));
-        lines.glyph_line(Span::raw(" "), meta);
+        if !lines.is_compact() {
+            let meta_style = style::secondary();
+            let bar = epic_bar(epic, app.status_rules(), EPIC_BAR_WIDTH, meta_style);
+            let mut meta = app.delight.rainbow_bar(&epic.key, bar, Instant::now());
+            meta.extend(status_counts(app, epic, meta_style));
+            lines.glyph_line(Span::raw(" "), meta);
+        }
 
         let Some(children) = &group.tickets else {
             lines.push("");

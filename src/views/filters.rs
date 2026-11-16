@@ -13,13 +13,18 @@ use crate::views::common::{
 const TITLE_HEIGHT: u16 = 2;
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
+    // Beside the detail pane there is room for the results alone.
+    if app.compact_list_width.get().is_some() {
+        render_results(f, area, app, false);
+        return;
+    }
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
         .split(area);
 
     render_sidebar(f, chunks[0], app, config);
-    render_results(f, chunks[1], app);
+    render_results(f, chunks[1], app, true);
 }
 
 /// A pane's title, over its list: the accent while the pane has focus.
@@ -131,15 +136,20 @@ fn results_column_widths(
     (status_w, summary_w)
 }
 
-fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
+fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App, divided: bool) {
     let results_focused = app.filter_focus == FilterFocus::Results;
 
     // The divider between the panes is the results' left border.
-    let divider = Block::default()
-        .borders(Borders::LEFT)
-        .border_style(style::secondary());
-    let inner = divider.inner(area);
-    f.render_widget(divider, area);
+    let inner = if divided {
+        let divider = Block::default()
+            .borders(Borders::LEFT)
+            .border_style(style::secondary());
+        let inner = divider.inner(area);
+        f.render_widget(divider, area);
+        inner
+    } else {
+        area
+    };
 
     let groups = app.filters_visible_by_status();
     // How many results the search keeps, counting those in folded groups.

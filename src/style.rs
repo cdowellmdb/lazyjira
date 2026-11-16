@@ -50,6 +50,11 @@ pub fn heading() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
 }
 
+/// An aside: what is missing or unset ("No description.", "Unassigned"), muted and italic.
+pub fn aside() -> Style {
+    secondary().add_modifier(Modifier::ITALIC)
+}
+
 /// Behind the selected row.
 pub fn selected_row() -> Style {
     Style::default().bg(Color::DarkGray)
@@ -163,6 +168,7 @@ mod tests {
             error(),
             warning(),
             success(),
+            aside(),
             accent(),
             key_hint(),
             option(primary(), true),
