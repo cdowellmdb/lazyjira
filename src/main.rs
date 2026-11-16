@@ -1708,7 +1708,7 @@ mod tests {
 
         handle_comment_keys(&mut app, KeyCode::Enter, KeyModifiers::SHIFT, &tx);
 
-        let state = app.comment_state.expect("comment modal should remain open");
+        let state = app.comment_state.expect("comment panel should remain open");
         assert_eq!(state.body.lines().join("\n"), "hello\n");
     }
 
@@ -1738,7 +1738,7 @@ mod tests {
 
         handle_comment_keys(&mut app, KeyCode::Char('j'), KeyModifiers::CONTROL, &tx);
 
-        let state = app.comment_state.expect("comment modal should remain open");
+        let state = app.comment_state.expect("comment panel should remain open");
         assert_eq!(state.body.lines().join("\n"), "hello\n");
     }
 
@@ -2227,7 +2227,7 @@ mod tests {
             handle_key(&mut app, KeyEvent::from(code), &tx, &mut config).await;
             assert_eq!(app.moves.failures().len(), 1);
         }
-        // The popup swallowed those keys instead of the detail view underneath.
+        // The panel swallowed those keys instead of the detail view underneath.
         assert!(matches!(app.detail_mode, DetailMode::View));
         assert_eq!(app.detail_scroll, 0);
 

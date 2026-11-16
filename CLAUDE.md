@@ -38,6 +38,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/top_bar.rs** — The one-line top bar (`lazyjira`, the tabs, a Settings button) and its rule; registers the tab and Settings mouse targets
 - **src/style.rs** — The shared styles, one function per role in `docs/tui-style.md` (primary, secondary, subtle, error, warning, accent, key hint, heading, selected row, status) and `status_color`, in the ANSI colors `theme.rs` recolors
 - **src/footer.rs** — The idle footer: `Hint`s (key, label, priority) that drop as the terminal narrows, the muted segment of non-default state at the right, and the bulk bar shown above it while tickets are marked
+- **src/status.rs** — The status area under the content: a flash error, the search, a pending move or the footer, and while a detail is open its hints wrapped onto as many rows as the width needs, with a message on a row above
 - **src/mouse.rs** — Hit targets registered by renderers and mouse event handling
 - **src/setup.rs** — First-run setup screen (project key, team name); imports the legacy `team.yml` roster
 - **src/jira_client.rs** — The `jira` CLI: `jira me`, creating tickets, comments, assignment and field edits
@@ -53,11 +54,11 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/transitions.rs** — Transition model and parsing, and the rules for matching shortcuts and resolutions
 - **src/move_picker.rs** — Single-ticket move picker state and keys; returns the Jira call to make instead of making it
 - **src/bulk_plan.rs** — What a bulk move/assign sends for each ticket, and why others are skipped
-- **src/bulk_actions.rs** — Bulk move/assign state, progression, and completion; returns work for `main.rs` to execute. Dismissed operations still update tickets, but their results cannot replace a newer modal.
+- **src/bulk_actions.rs** — Bulk move/assign state, progression, and completion; returns work for `main.rs` to execute. Dismissed operations still update tickets, but their results cannot replace a newer panel.
 - **src/moves.rs** — Single-ticket move tracking: pending moves, Jira-confirmed moves (to ignore stale reads), and rejected moves awaiting dismissal
 - **src/bulk_upload.rs** — CSV parsing and validation for bulk ticket creation
 - **src/views/** — Tab renderers (`my_work.rs`, `team.rs`, `epics.rs`, `unassigned.rs`, `filters.rs`, shared helpers in `common.rs`)
-- **src/widgets/** — Overlays: `ticket_detail.rs` (the detail pane beside or over the list), `keybindings_help.rs` (a sheet), and the forms, pickers and notices that dock as one panel (`dock.rs` says which is open and how tall, then `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `filter_edit.rs`, `move_failure.rs`, `move_status.rs`), with `activity.rs` (the pane's history view) and `form.rs` (their fields, buttons, panel and sheet frames). `markup.rs`, which renders Jira wiki markup in descriptions (emphasis, links, mentions, lists, tables, quotes, code) as styled lines wrapped to the popup width
+- **src/widgets/** — Overlays: `ticket_detail.rs` (the detail pane beside or over the list), `keybindings_help.rs` (a sheet), and the forms, pickers and notices that dock as one panel (`dock.rs` says which is open and how tall, then `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `filter_edit.rs`, `move_failure.rs`, `move_status.rs`), with `activity.rs` (the pane's history view) and `form.rs` (their fields, buttons, panel and sheet frames). `markup.rs`, which renders Jira wiki markup in descriptions (emphasis, links, mentions, lists, tables, quotes, code) as styled lines wrapped to the pane's width
 
 ## Before changing behaviour
 
@@ -74,7 +75,7 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 - **The event loop, or anything that should change the screen without a key press**: "The event loop sleeps until woken"
 - **Colors, themes, borders, spacing, footers, overlays or glyphs**: [docs/tui-style.md](docs/tui-style.md), then "Themes recolor the finished frame"
 - **Confetti, the quit receipt, stale fading or spooky season**: the `delight.rs` bullet of "Current UX behavior"
-- **Columns, marks, Team including the current user, done-group folding, done ordering (`order_done`) or the detail overlay's scrolling**: "Current UX behavior"
+- **Columns, marks, Team including the current user, done-group folding, done ordering (`order_done`) or the detail pane's scrolling**: "Current UX behavior"
 
 ## Configuration
 

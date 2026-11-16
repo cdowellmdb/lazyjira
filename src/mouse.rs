@@ -906,7 +906,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dragging_selects_visible_text_without_opening_rows_or_clicking_through_modals() {
+    async fn dragging_selects_visible_text_without_opening_rows_or_clicking_through_panels() {
         let mut config: AppConfig =
             toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -952,7 +952,7 @@ mod tests {
         let end = Position::new(alpha.x + 6, alpha.y);
         drag_between(&mut app, &mut config, &tx, start, end).await;
         assert_eq!(selected_text(&mut app).as_deref(), Some("🙂"));
-        // Covered list checkboxes never become active while selecting popup text.
+        // Covered list checkboxes never become active while selecting panel text.
         assert_eq!(app.selected_ticket_count(), 0);
         let second = locate(&app, "second");
         let end = Position::new(second.x + 6, second.y);
@@ -1381,7 +1381,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mouse_uses_rendered_rows_and_keeps_modal_actions_separate() {
+    async fn mouse_uses_rendered_rows_and_keeps_panel_actions_separate() {
         let mut config: AppConfig =
             toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();

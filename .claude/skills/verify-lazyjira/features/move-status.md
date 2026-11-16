@@ -23,7 +23,7 @@ Preconditions:
 - Fresh run. `$V <run> issue DEMO-201` reports `status=Ready for Work`.
 
 - **Open the ticket.** `$V <run> keys /`, `$V <run> type DEMO-201`, `$V <run> wait '● Ready for Work 1'`, `$V <run> keys Down`, `$V <run> keys Enter`, `$V <run> wait 'Status +● Ready for Work'`.
-- **Open the picker.** `$V <run> keys m`, `$V <run> wait 'Move DEMO-201 from Ready for Work'`. The panel docks under the list and detail, under one `─` rule, and shows the lines `[p] Start Progress → In Progress`, `[v] Send to Review → In Review`, `[b] Block → Blocked` and `[c] Done` appear.
+- **Open the picker.** `$V <run> keys m`, `$V <run> wait 'Move DEMO-201 from Ready for Work'`. The panel docks under the list and detail, under one `─` rule, and shows the lines `[p] Start Progress → In Progress`, `[v] Send to Review → In Review`, `[b] Block → Blocked` and `[c] Done`.
 - **Pick by status.** `$V <run> keys p`, `$V <run> wait 'Move with Start Progress → In Progress\? Press Enter or y'`, `$V <run> snap move-pick`.
 - **Confirm.** `$V <run> keys y`, `$V <run> wait 'Status +● In Progress'`. The status bar reads `Moved DEMO-201 to In Progress`. `$V <run> snap move-confirm`.
 - **Jira agrees.** `$V <run> issue DEMO-201` reports `status=In Progress` and an `updated` of today.
