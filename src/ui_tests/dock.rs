@@ -435,3 +435,303 @@ async fn in_a_short_terminal_every_field_of_create_and_edit_keeps_at_least_one_r
     screen(&app, 80, 14);
     assert_eq!(field_rows(&app), [(0, 9, 1), (1, 10, 1), (2, 11, 1)]);
 }
+
+/// The click targets from `from` down as (x, y, width, height, target).
+fn cells(app: &App, from: usize) -> Vec<Cell> {
+    app.mouse_targets
+        .borrow()
+        .iter()
+        .filter(|(area, _)| area.y as usize >= from)
+        .map(|(area, target)| (area.x, area.y, area.width, area.height, *target))
+        .collect()
+}
+
+#[tokio::test]
+async fn each_panel_registers_these_exact_click_cells_at_80x24() {
+    use crate::mouse::Target;
+    let mut config = two_saved_filters();
+    let expected = vec![
+        (
+            "assign",
+            vec![
+                (74, 18, 5, 1, Target::Key(KeyCode::Esc)),
+                (1, 19, 78, 3, Target::Field(0)),
+                (1, 20, 78, 1, Target::Choose { field: 0, index: 0 }),
+                (1, 21, 78, 1, Target::Choose { field: 0, index: 1 }),
+                (1, 22, 8, 1, Target::Key(KeyCode::Enter)),
+                (11, 22, 8, 1, Target::Key(KeyCode::Esc)),
+            ],
+        ),
+        (
+            "edit",
+            vec![
+                (74, 15, 5, 1, Target::Key(KeyCode::Esc)),
+                (1, 16, 78, 1, Target::Field(0)),
+                (
+                    14,
+                    16,
+                    65,
+                    1,
+                    Target::Text {
+                        field: 0,
+                        top: 0,
+                        left: 0,
+                    },
+                ),
+                (1, 17, 78, 1, Target::Field(1)),
+                (
+                    14,
+                    17,
+                    65,
+                    1,
+                    Target::Text {
+                        field: 1,
+                        top: 0,
+                        left: 0,
+                    },
+                ),
+                (1, 18, 78, 4, Target::Field(2)),
+                (
+                    1,
+                    19,
+                    78,
+                    3,
+                    Target::Text {
+                        field: 2,
+                        top: 0,
+                        left: 0,
+                    },
+                ),
+                (1, 22, 6, 1, Target::Key(KeyCode::Enter)),
+                (9, 22, 8, 1, Target::Key(KeyCode::Esc)),
+                (19, 22, 8, 1, Target::Key(KeyCode::F(4))),
+            ],
+        ),
+        (
+            "create",
+            vec![
+                (74, 12, 5, 1, Target::Key(KeyCode::Esc)),
+                (1, 13, 19, 4, Target::Field(0)),
+                (1, 14, 19, 1, Target::Choose { field: 0, index: 0 }),
+                (1, 15, 19, 1, Target::Choose { field: 0, index: 1 }),
+                (1, 16, 19, 1, Target::Choose { field: 0, index: 2 }),
+                (22, 13, 27, 4, Target::Field(2)),
+                (22, 14, 27, 1, Target::Choose { field: 2, index: 0 }),
+                (22, 15, 27, 1, Target::Choose { field: 2, index: 1 }),
+                (22, 16, 27, 1, Target::Choose { field: 2, index: 2 }),
+                (51, 13, 28, 4, Target::Field(3)),
+                (51, 14, 28, 1, Target::Choose { field: 3, index: 0 }),
+                (1, 17, 78, 1, Target::Field(1)),
+                (
+                    14,
+                    17,
+                    65,
+                    1,
+                    Target::Text {
+                        field: 1,
+                        top: 0,
+                        left: 0,
+                    },
+                ),
+                (1, 18, 78, 1, Target::Field(4)),
+                (
+                    14,
+                    18,
+                    65,
+                    1,
+                    Target::Text {
+                        field: 4,
+                        top: 0,
+                        left: 0,
+                    },
+                ),
+                (1, 19, 78, 3, Target::Field(5)),
+                (
+                    1,
+                    20,
+                    78,
+                    2,
+                    Target::Text {
+                        field: 5,
+                        top: 0,
+                        left: 0,
+                    },
+                ),
+                (1, 22, 8, 1, Target::Key(KeyCode::Enter)),
+                (11, 22, 8, 1, Target::Key(KeyCode::Esc)),
+                (21, 22, 8, 1, Target::Key(KeyCode::F(4))),
+            ],
+        ),
+        (
+            "filter",
+            vec![
+                (74, 17, 5, 1, Target::Key(KeyCode::Esc)),
+                (1, 18, 78, 1, Target::Field(0)),
+                (
+                    14,
+                    18,
+                    65,
+                    1,
+                    Target::Text {
+                        field: 0,
+                        top: 0,
+                        left: 0,
+                    },
+                ),
+                (1, 19, 78, 3, Target::Field(1)),
+                (
+                    1,
+                    20,
+                    78,
+                    2,
+                    Target::Text {
+                        field: 1,
+                        top: 0,
+                        left: 0,
+                    },
+                ),
+                (1, 22, 6, 1, Target::Key(KeyCode::Enter)),
+                (9, 22, 8, 1, Target::Key(KeyCode::Esc)),
+                (19, 22, 8, 1, Target::Key(KeyCode::F(4))),
+            ],
+        ),
+        (
+            "bulk",
+            vec![
+                (74, 15, 5, 1, Target::Key(KeyCode::Esc)),
+                (15, 21, 5, 1, Target::Key(KeyCode::Enter)),
+                (28, 21, 3, 1, Target::Key(KeyCode::Esc)),
+                (1, 19, 78, 1, Target::Choose { field: 0, index: 0 }),
+                (1, 20, 78, 1, Target::Choose { field: 0, index: 1 }),
+            ],
+        ),
+        (
+            "upload",
+            vec![
+                (74, 19, 5, 1, Target::Key(KeyCode::Esc)),
+                (1, 22, 9, 1, Target::Key(KeyCode::Enter)),
+                (12, 22, 8, 1, Target::Key(KeyCode::Esc)),
+                (22, 22, 8, 1, Target::Key(KeyCode::F(4))),
+                (1, 20, 78, 1, Target::Field(0)),
+                (
+                    14,
+                    20,
+                    65,
+                    1,
+                    Target::Text {
+                        field: 0,
+                        top: 0,
+                        left: 0,
+                    },
+                ),
+            ],
+        ),
+        (
+            "failure",
+            vec![
+                (74, 18, 5, 1, Target::Key(KeyCode::Esc)),
+                (1, 22, 9, 1, Target::Key(KeyCode::Enter)),
+                (12, 22, 9, 1, Target::Key(KeyCode::Char('o'))),
+                (24, 22, 3, 1, Target::Key(KeyCode::Esc)),
+            ],
+        ),
+    ];
+    for (name, expected) in expected {
+        let mut app = app_with_a_long_list();
+        open_panel(&mut app, &mut config, name).await;
+        let rows = screen(&app, 80, 24);
+        let rule = rows
+            .iter()
+            .skip(2)
+            .position(|row| *row == "─".repeat(80))
+            .unwrap()
+            + 2;
+        assert_eq!(cells(&app, rule), expected, "{name}\n{}", rows.join("\n"));
+    }
+}
+
+/// `n` short lines of text.
+fn lines_of(n: usize) -> String {
+    (1..=n)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The height of the panel `app` has open when the content is tall enough that the 60% cap never
+/// bites: 100 rows, which cap at 60.
+fn uncapped_height(app: &App) -> u16 {
+    widgets::dock::plan(app, Rect::new(0, 2, 80, 100))
+        .unwrap()
+        .height
+}
+
+#[tokio::test]
+async fn the_editors_grow_with_their_lines_between_the_promised_minimum_and_maximum() {
+    use widgets::form::editor;
+    // A panel is its rule and title, its last row, and the rows of its body.
+    // Comment: the label and 3 to 12 lines.
+    for (lines, height) in [(1, 7), (2, 7), (3, 7), (4, 8), (12, 16), (13, 16), (40, 16)] {
+        let mut app = app_with_a_long_list();
+        app.comment_state = Some(app::CommentState {
+            ticket_key: "DEMO-9".into(),
+            body: editor(&lines_of(lines)),
+        });
+        assert_eq!(uncapped_height(&app), height, "comment of {lines} lines");
+    }
+    // Create: the pickers (4), summary, labels, then the description's label and 3 to 12 lines.
+    let mut config = two_saved_filters();
+    for (lines, height) in [(2, 13), (3, 13), (4, 14), (12, 22), (13, 22)] {
+        let mut app = app_with_a_long_list();
+        open_panel(&mut app, &mut config, "create").await;
+        app.create_ticket.as_mut().unwrap().description = editor(&lines_of(lines));
+        assert_eq!(uncapped_height(&app), height, "create of {lines} lines");
+    }
+    // Edit: summary, labels, then the description's label and 3 to 12 lines.
+    for (lines, height) in [(2, 9), (3, 9), (4, 10), (12, 18), (13, 18)] {
+        let mut app = app_with_a_long_list();
+        open_panel(&mut app, &mut config, "edit").await;
+        app.edit_state.as_mut().unwrap().description = editor(&lines_of(lines));
+        assert_eq!(uncapped_height(&app), height, "edit of {lines} lines");
+    }
+    // Filter: the name, then the JQL's label and 2 to 8 lines.
+    for (lines, height) in [(1, 7), (2, 7), (3, 8), (8, 13), (9, 13)] {
+        let mut app = app_with_a_long_list();
+        open_panel(&mut app, &mut config, "filter").await;
+        app.filter_edit.as_mut().unwrap().jql = editor(&lines_of(lines));
+        assert_eq!(uncapped_height(&app), height, "filter of {lines} lines");
+    }
+}
+
+#[tokio::test]
+async fn the_assign_picker_shows_8_options_at_most() {
+    let mut config = two_saved_filters();
+    // A panel is its chrome and last row, then the label and 1 to 8 options.
+    for (members, height) in [(0, 5), (1, 5), (2, 6), (7, 11), (8, 12), (9, 12), (20, 12)] {
+        let mut app = app_with_a_long_list();
+        open_panel(&mut app, &mut config, "assign").await;
+        app.cache.team_members = (1..=members)
+            .map(|n| cache::TeamMember {
+                name: format!("Member {n}"),
+                email: format!("m{n}@example.com"),
+            })
+            .collect();
+        assert_eq!(uncapped_height(&app), height, "{members} members");
+    }
+}
+
+#[tokio::test]
+async fn a_panel_takes_at_most_60_percent_of_the_content_rounded_down() {
+    // The content is the screen less the top bar's 2 rows and the status line. A move failure
+    // is 5 rows and one for each line of its error.
+    for (width, content, cap) in [(80, 21, 12), (120, 37, 22), (160, 42, 25)] {
+        for (lines, height) in [(cap - 6, cap - 1), (cap - 5, cap), (cap - 4, cap)] {
+            let app = app_with_a_failed_move(&lines_of(lines as usize));
+            let docked = widgets::dock::plan(&app, Rect::new(0, 2, width, content)).unwrap();
+            assert_eq!(
+                docked.height, height,
+                "{lines} lines in {content} rows (a cap of {cap})"
+            );
+        }
+    }
+}

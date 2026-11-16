@@ -140,3 +140,79 @@ async fn clicking_the_sheets_close_cell_closes_it_and_the_cell_before_it_does_no
         }
     }
 }
+
+#[tokio::test]
+async fn help_and_settings_register_these_exact_click_cells_at_80x24() {
+    use crate::mouse::Target;
+    let mut config = two_saved_filters();
+    let expected: Vec<(char, Vec<Cell>)> = vec![
+        (
+            '?',
+            vec![
+                (74, 0, 5, 1, Target::Key(KeyCode::Esc)),
+                (2, 23, 76, 1, Target::Key(KeyCode::Esc)),
+            ],
+        ),
+        (
+            'S',
+            vec![
+                (74, 0, 5, 1, Target::Key(KeyCode::Esc)),
+                (2, 2, 76, 9, Target::Field(0)),
+                (
+                    2,
+                    3,
+                    76,
+                    8,
+                    Target::Text {
+                        field: 0,
+                        top: 0,
+                        left: 0,
+                    },
+                ),
+                (2, 11, 76, 3, Target::Field(1)),
+                (
+                    2,
+                    12,
+                    76,
+                    2,
+                    Target::Text {
+                        field: 1,
+                        top: 0,
+                        left: 0,
+                    },
+                ),
+                (2, 14, 38, 5, Target::Field(2)),
+                (2, 15, 38, 1, Target::Choose { field: 2, index: 0 }),
+                (2, 16, 38, 1, Target::Choose { field: 2, index: 1 }),
+                (2, 17, 38, 1, Target::Choose { field: 2, index: 2 }),
+                (2, 18, 38, 1, Target::Choose { field: 2, index: 3 }),
+                (2, 19, 38, 4, Target::Field(3)),
+                (2, 20, 38, 1, Target::Choose { field: 3, index: 0 }),
+                (2, 21, 38, 1, Target::Choose { field: 3, index: 1 }),
+                (41, 19, 37, 4, Target::Field(5)),
+                (41, 20, 37, 1, Target::Choose { field: 5, index: 0 }),
+                (41, 21, 37, 1, Target::Choose { field: 5, index: 1 }),
+                (41, 14, 37, 5, Target::Field(4)),
+                (41, 15, 37, 1, Target::Choose { field: 4, index: 0 }),
+                (41, 16, 37, 1, Target::Choose { field: 4, index: 1 }),
+                (41, 17, 37, 1, Target::Choose { field: 4, index: 2 }),
+                (41, 18, 37, 1, Target::Choose { field: 4, index: 3 }),
+                (2, 23, 6, 1, Target::Key(KeyCode::Enter)),
+                (10, 23, 8, 1, Target::Key(KeyCode::Esc)),
+                (20, 23, 8, 1, Target::Key(KeyCode::F(4))),
+            ],
+        ),
+    ];
+    for (key, expected) in expected {
+        let mut app = app_with_a_long_list();
+        press(&mut app, &mut config, KeyCode::Char(key)).await;
+        let rows = screen(&app, 80, 24);
+        let cells: Vec<_> = app
+            .mouse_targets
+            .borrow()
+            .iter()
+            .map(|(area, target)| (area.x, area.y, area.width, area.height, *target))
+            .collect();
+        assert_eq!(cells, expected, "{key}\n{}", rows.join("\n"));
+    }
+}

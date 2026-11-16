@@ -12,6 +12,9 @@ mod dock;
 mod footer;
 mod sheets;
 
+/// A click target as (x, y, width, height, target).
+type Cell = (u16, u16, u16, u16, mouse::Target);
+
 /// An app with a fossil, spooky season and a description full of Jira's icon markers, so the
 /// glyphs the app draws on its own are all on screen.
 fn app_that_draws_every_glyph(tab: Tab, selected_index: usize) -> App {
