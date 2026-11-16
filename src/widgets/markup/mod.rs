@@ -28,10 +28,6 @@ fn link_style() -> Style {
         .add_modifier(Modifier::UNDERLINED)
 }
 
-fn mono_style(base: Style) -> Style {
-    base.fg(Color::LightRed)
-}
-
 /// Renders `text` as lines no wider than `width` columns.
 pub fn render(text: &str, width: u16) -> Vec<Line<'static>> {
     let mut r = Renderer {

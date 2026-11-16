@@ -3,7 +3,8 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
-use super::{link_style, mono_style, muted};
+use super::{link_style, muted};
+use crate::style;
 
 /// Parses inline markup: `*bold*`, `_italic_`, `-strike-`, `+underline+`,
 /// `{{monospace}}`, `{color:red}text{color}`, `[text|url]`, `[~mention]`,
@@ -88,7 +89,7 @@ impl Inline<'_> {
         if self.starts_with(i, "{{") {
             let end = self.find(i + 2, "}}")?;
             let code: String = self.chars[i + 2..end].iter().collect();
-            self.emit(code, mono_style(self.style));
+            self.emit(code, self.style.patch(style::code()));
             return Some(end + 2);
         }
 
@@ -184,7 +185,7 @@ impl Inline<'_> {
         let end = self.closing(i, c)?;
         if c == '`' {
             let code: String = self.chars[i + 1..end].iter().collect();
-            self.emit(code, mono_style(self.style));
+            self.emit(code, self.style.patch(style::code()));
         } else {
             self.nested(i + 1, end, self.style.add_modifier(modifier));
         }

@@ -60,6 +60,12 @@ pub fn selected_row() -> Style {
     Style::default().bg(Color::DarkGray)
 }
 
+/// Inline code in a description or comment: the normal text color on the selection background,
+/// a chip, never the error color.
+pub fn code() -> Style {
+    primary().bg(Color::DarkGray)
+}
+
 /// An option in a menu, in `base`: the chosen one is bold on the selected row's background.
 pub fn option(base: Style, chosen: bool) -> Style {
     if chosen {
@@ -178,6 +184,7 @@ mod tests {
             text_selection(),
             heading(),
             selected_row(),
+            code(),
             status("In Progress", &rules),
             status("Done", &rules),
             status("Blocked", &rules),

@@ -33,7 +33,40 @@ fn inline_emphasis() {
         .style
         .add_modifier
         .contains(Modifier::UNDERLINED));
-    assert_eq!(span(&spans, "e").style.fg, Some(Color::LightRed));
+    assert_eq!(
+        span(&spans, "e").style,
+        Style::default().fg(Color::Reset).bg(Color::DarkGray)
+    );
+}
+
+#[test]
+fn inline_code_is_a_chip_in_the_text_color_on_the_selection_background() {
+    let chip = Style::default().fg(Color::Reset).bg(Color::DarkGray);
+    for source in ["{{x}}", "`x`"] {
+        assert_eq!(inline(source, text_style()), vec![Span::styled("x", chip)]);
+    }
+    let spans = inline("*bold {{x}}*", text_style());
+    assert_eq!(span(&spans, "x").style, chip.add_modifier(Modifier::BOLD));
+    let spans = inline("{color:red}{{x}}{color}", text_style());
+    assert_eq!(span(&spans, "x").style, chip);
+    let spans = inline("{{two words}}", text_style());
+    assert_eq!(spans, vec![Span::styled("two words", chip)]);
+}
+
+#[test]
+fn a_theme_recolors_the_chip_to_its_text_on_its_selection_color() {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    let line = Line::from(inline("ab {{cd}}", text_style()));
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 9, 1));
+    buffer.set_line(0, 0, &line, 9);
+    crate::theme::resolve("nord", &Default::default()).apply(&mut buffer);
+    let colors = |x| (buffer[(x, 0)].fg, buffer[(x, 0)].bg);
+    let (text, selection) = (Color::Rgb(0xd8, 0xde, 0xe9), Color::Rgb(0x3b, 0x42, 0x52));
+    assert_eq!(colors(0), (text, Color::Rgb(0x2e, 0x34, 0x40)));
+    assert_eq!(colors(3), (text, selection));
+    assert_eq!(colors(4), (text, selection));
+    assert_eq!(buffer[(5, 0)].symbol(), " ");
 }
 
 #[test]
