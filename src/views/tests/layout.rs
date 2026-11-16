@@ -374,6 +374,17 @@ fn my_work_at_120_columns_is_the_mockup_with_groups_rows_and_sub_tasks_in_their_
 }
 
 #[test]
+fn a_marked_sub_task_row_is_the_gutter_the_checkbox_and_a_space_then_its_indent_and_arrow() {
+    let mut app = mockup_app();
+    app.selected_ticket_keys.insert("DEMO-111".into());
+    let rows = trimmed(&draw(&app, Tab::MyWork, 120));
+    let row = rows.iter().find(|row| row.contains("DEMO-111")).unwrap();
+    // Three cells of gutter, `☒`, a space, then the two cells of indent and `└ `: three spaces
+    // between the checkbox and the arrow.
+    assert!(row.starts_with("   ☒   └ DEMO-111  Migrate"), "{row:?}");
+}
+
+#[test]
 fn my_work_at_80_columns_shortens_summary_epic_and_labels_but_keeps_every_column() {
     let mut app = mockup_app();
     app.selected_index = 1;

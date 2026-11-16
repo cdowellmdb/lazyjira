@@ -79,7 +79,7 @@ These screens are the agreed mockup, built from the demo's fake data. Bold, dim,
 
  ● In Progress 2
  › ☒ DEMO-101 ▼    Add saved payment methods to checkout                                                    
-   ☒     └ DEMO-111  Migrate stored cards to the new vault
+   ☒   └ DEMO-111  Migrate stored cards to the new vault
    ☐ DEMO-201      Profile slow facet queries
 
  2 selected   B move or assign · u clear · A all
