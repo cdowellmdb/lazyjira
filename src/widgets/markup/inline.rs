@@ -1,0 +1,275 @@
+//! Jira's inline markup: emphasis, code, links, mentions, colors, images and icons.
+
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
+
+use super::{link_style, mono_style, muted};
+
+/// Parses inline markup: `*bold*`, `_italic_`, `-strike-`, `+underline+`,
+/// `{{monospace}}`, `{color:red}text{color}`, `[text|url]`, `[~mention]`,
+/// `!image.png!`, bare URLs, `--`/`---` dashes and `(/)`-style icons.
+pub fn inline(text: &str, base: Style) -> Vec<Span<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    Inline {
+        chars: &chars,
+        out: &mut out,
+        buf: String::new(),
+        style: base,
+    }
+    .run();
+    out
+}
+
+struct Inline<'a> {
+    chars: &'a [char],
+    out: &'a mut Vec<Span<'static>>,
+    buf: String,
+    style: Style,
+}
+
+impl Inline<'_> {
+    fn flush(&mut self) {
+        if !self.buf.is_empty() {
+            self.out
+                .push(Span::styled(std::mem::take(&mut self.buf), self.style));
+        }
+    }
+
+    fn emit(&mut self, text: impl Into<String>, style: Style) {
+        self.flush();
+        self.out.push(Span::styled(text.into(), style));
+    }
+
+    fn nested(&mut self, from: usize, to: usize, style: Style) {
+        self.flush();
+        let inner: String = self.chars[from..to].iter().collect();
+        self.out.extend(inline(&inner, style));
+    }
+
+    fn starts_with(&self, i: usize, pat: &str) -> bool {
+        let mut j = i;
+        for p in pat.chars() {
+            if self.chars.get(j) != Some(&p) {
+                return false;
+            }
+            j += 1;
+        }
+        true
+    }
+
+    fn find(&self, from: usize, pat: &str) -> Option<usize> {
+        (from..self.chars.len()).find(|&j| self.starts_with(j, pat))
+    }
+
+    fn at_word_start(&self, i: usize) -> bool {
+        i == 0 || !self.chars[i - 1].is_alphanumeric()
+    }
+
+    fn run(mut self) {
+        let mut i = 0;
+        while i < self.chars.len() {
+            match self.step(i) {
+                Some(next) => i = next,
+                None => {
+                    self.buf.push(self.chars[i]);
+                    i += 1;
+                }
+            }
+        }
+        self.flush();
+    }
+
+    /// Handles markup starting at `i`, returning where to continue, or `None`
+    /// if `chars[i]` is plain text.
+    fn step(&mut self, i: usize) -> Option<usize> {
+        let c = self.chars[i];
+
+        if self.starts_with(i, "{{") {
+            let end = self.find(i + 2, "}}")?;
+            let code: String = self.chars[i + 2..end].iter().collect();
+            self.emit(code, mono_style(self.style));
+            return Some(end + 2);
+        }
+
+        if self.starts_with(i, "{color:") {
+            let tag_end = self.find(i, "}")?;
+            let name: String = self.chars[i + 7..tag_end].iter().collect();
+            let close = self.find(tag_end + 1, "{color}");
+            let end = close.unwrap_or(self.chars.len());
+            let style = match parse_color(&name) {
+                Some(color) => self.style.fg(color),
+                None => self.style,
+            };
+            self.nested(tag_end + 1, end, style);
+            return Some(close.map_or(end, |e| e + 7));
+        }
+
+        if c == '[' {
+            let end = self.find(i + 1, "]")?;
+            let inner: String = self.chars[i + 1..end].iter().collect();
+            return self.link(&inner).then_some(end + 1);
+        }
+
+        if c == '!' && self.at_word_start(i) {
+            let end = self.find(i + 1, "!")?;
+            let inner: String = self.chars[i + 1..end].iter().collect();
+            let name = inner.split('|').next().unwrap_or("");
+            if name.is_empty() || name.contains(char::is_whitespace) || !name.contains('.') {
+                return None;
+            }
+            let name = name.rsplit('/').next().unwrap_or(name);
+            self.emit(
+                format!("[image: {}]", name),
+                muted().add_modifier(Modifier::ITALIC),
+            );
+            return Some(end + 1);
+        }
+
+        if c == '(' && self.at_word_start(i) {
+            for (pat, symbol, color) in [
+                ("(/)", "✓", Color::Green),
+                ("(x)", "✗", Color::Red),
+                ("(!)", "!", Color::Yellow),
+                ("(i)", "i", Color::LightBlue),
+                ("(*)", "★", Color::Yellow),
+            ] {
+                if self.starts_with(i, pat) {
+                    self.emit(symbol, Style::default().fg(color));
+                    return Some(i + pat.len());
+                }
+            }
+            return None;
+        }
+
+        if (c == 'h' || c == 'H')
+            && self.at_word_start(i)
+            && (self.starts_with(i, "https://") || self.starts_with(i, "http://"))
+        {
+            let mut end = i;
+            while end < self.chars.len()
+                && !self.chars[end].is_whitespace()
+                && !"<>\"|[]".contains(self.chars[end])
+            {
+                end += 1;
+            }
+            while end > i && ".,;:!?)'".contains(self.chars[end - 1]) {
+                end -= 1;
+            }
+            let url: String = self.chars[i..end].iter().collect();
+            self.emit(url, link_style());
+            return Some(end);
+        }
+
+        if c == '-' && self.at_word_start(i) {
+            let before_space = i == 0 || self.chars[i - 1].is_whitespace();
+            for (pat, dash) in [("---", "—"), ("--", "–")] {
+                let after = i + pat.len();
+                let after_space = after >= self.chars.len() || self.chars[after].is_whitespace();
+                if before_space && after_space && self.starts_with(i, pat) {
+                    self.buf.push_str(dash);
+                    return Some(after);
+                }
+            }
+        }
+
+        let modifier = match c {
+            '*' => Modifier::BOLD,
+            '_' => Modifier::ITALIC,
+            '-' => Modifier::CROSSED_OUT,
+            '+' => Modifier::UNDERLINED,
+            '`' => Modifier::empty(),
+            _ => return None,
+        };
+        let end = self.closing(i, c)?;
+        if c == '`' {
+            let code: String = self.chars[i + 1..end].iter().collect();
+            self.emit(code, mono_style(self.style));
+        } else {
+            self.nested(i + 1, end, self.style.add_modifier(modifier));
+        }
+        Some(end + 1)
+    }
+
+    /// Finds the marker closing one opened at `i`. Like Jira, a marker opens
+    /// only at a word start before non-space, and closes after non-space at a
+    /// word end, so `snake_case` and `open-source` stay plain.
+    fn closing(&self, i: usize, marker: char) -> Option<usize> {
+        if !self.at_word_start(i) {
+            return None;
+        }
+        let next = self.chars.get(i + 1)?;
+        if next.is_whitespace() || *next == marker {
+            return None;
+        }
+        (i + 2..self.chars.len()).find(|&j| {
+            self.chars[j] == marker
+                && !self.chars[j - 1].is_whitespace()
+                && self.chars.get(j + 1).is_none_or(|n| !n.is_alphanumeric())
+        })
+    }
+
+    /// Renders the inside of `[...]`, returning false if it isn't a link.
+    fn link(&mut self, inner: &str) -> bool {
+        if let Some(user) = inner.strip_prefix('~') {
+            let user = user.strip_prefix("accountid:").unwrap_or(user);
+            self.emit(format!("@{}", user), Style::default().fg(Color::Cyan));
+            return true;
+        }
+        if let Some((text, rest)) = inner.split_once('|') {
+            let url = rest.split('|').next().unwrap_or("").trim();
+            self.flush();
+            let text = text.trim();
+            if text.is_empty() {
+                self.emit(url.to_string(), link_style());
+            } else {
+                self.out.extend(inline(text, link_style()));
+                if !url.is_empty() && url != text {
+                    self.emit(format!(" ({})", url), muted());
+                }
+            }
+            return true;
+        }
+        let target = inner.trim();
+        if target.contains("://") || target.starts_with("mailto:") {
+            self.emit(target.to_string(), link_style());
+            return true;
+        }
+        if let Some(attachment) = target.strip_prefix('^') {
+            self.emit(attachment.to_string(), link_style());
+            return true;
+        }
+        false
+    }
+}
+
+fn parse_color(name: &str) -> Option<Color> {
+    let name = name.trim().to_ascii_lowercase();
+    if let Some(hex) = name.strip_prefix('#') {
+        let hex = if hex.len() == 3 {
+            hex.chars().flat_map(|c| [c, c]).collect::<String>()
+        } else {
+            hex.to_string()
+        };
+        if hex.len() != 6 {
+            return None;
+        }
+        let value = u32::from_str_radix(&hex, 16).ok()?;
+        return Some(Color::Rgb(
+            (value >> 16) as u8,
+            (value >> 8) as u8,
+            value as u8,
+        ));
+    }
+    Some(match name.as_str() {
+        "red" => Color::Red,
+        "green" => Color::Green,
+        "blue" => Color::LightBlue,
+        "yellow" | "orange" => Color::Yellow,
+        "purple" | "magenta" => Color::Magenta,
+        "cyan" | "teal" => Color::Cyan,
+        "white" => Color::Reset,
+        "gray" | "grey" => Color::DarkGray,
+        _ => return None,
+    })
+}
