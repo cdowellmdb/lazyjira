@@ -157,22 +157,22 @@ async fn help_and_settings_register_these_exact_click_cells_at_80x24() {
             'S',
             vec![
                 (74, 0, 5, 1, Target::Key(KeyCode::Esc)),
-                (2, 2, 76, 9, Target::Field(0)),
+                (2, 2, 76, 8, Target::Field(0)),
                 (
                     2,
                     3,
                     76,
-                    8,
+                    7,
                     Target::Text {
                         field: 0,
                         top: 0,
                         left: 0,
                     },
                 ),
-                (2, 11, 76, 3, Target::Field(1)),
+                (2, 10, 76, 3, Target::Field(1)),
                 (
                     2,
-                    12,
+                    11,
                     76,
                     2,
                     Target::Text {
@@ -181,22 +181,24 @@ async fn help_and_settings_register_these_exact_click_cells_at_80x24() {
                         left: 0,
                     },
                 ),
-                (2, 14, 38, 5, Target::Field(2)),
-                (2, 15, 38, 1, Target::Choose { field: 2, index: 0 }),
-                (2, 16, 38, 1, Target::Choose { field: 2, index: 1 }),
-                (2, 17, 38, 1, Target::Choose { field: 2, index: 2 }),
-                (2, 18, 38, 1, Target::Choose { field: 2, index: 3 }),
+                (2, 13, 38, 6, Target::Field(2)),
+                (2, 14, 38, 1, Target::Choose { field: 2, index: 0 }),
+                (2, 15, 38, 1, Target::Choose { field: 2, index: 1 }),
+                (2, 16, 38, 1, Target::Choose { field: 2, index: 2 }),
+                (2, 17, 38, 1, Target::Choose { field: 2, index: 3 }),
+                (2, 18, 38, 1, Target::Choose { field: 2, index: 4 }),
                 (2, 19, 38, 4, Target::Field(3)),
                 (2, 20, 38, 1, Target::Choose { field: 3, index: 0 }),
                 (2, 21, 38, 1, Target::Choose { field: 3, index: 1 }),
                 (41, 19, 37, 4, Target::Field(5)),
                 (41, 20, 37, 1, Target::Choose { field: 5, index: 0 }),
                 (41, 21, 37, 1, Target::Choose { field: 5, index: 1 }),
-                (41, 14, 37, 5, Target::Field(4)),
-                (41, 15, 37, 1, Target::Choose { field: 4, index: 0 }),
-                (41, 16, 37, 1, Target::Choose { field: 4, index: 1 }),
-                (41, 17, 37, 1, Target::Choose { field: 4, index: 2 }),
-                (41, 18, 37, 1, Target::Choose { field: 4, index: 3 }),
+                (41, 13, 37, 6, Target::Field(4)),
+                (41, 14, 37, 1, Target::Choose { field: 4, index: 0 }),
+                (41, 15, 37, 1, Target::Choose { field: 4, index: 1 }),
+                (41, 16, 37, 1, Target::Choose { field: 4, index: 2 }),
+                (41, 17, 37, 1, Target::Choose { field: 4, index: 3 }),
+                (41, 18, 37, 1, Target::Choose { field: 4, index: 4 }),
                 (2, 23, 6, 1, Target::Key(KeyCode::Enter)),
                 (10, 23, 8, 1, Target::Key(KeyCode::Esc)),
                 (20, 23, 8, 1, Target::Key(KeyCode::F(4))),
@@ -215,4 +217,30 @@ async fn help_and_settings_register_these_exact_click_cells_at_80x24() {
             .collect();
         assert_eq!(cells, expected, "{key}\n{}", rows.join("\n"));
     }
+}
+
+#[test]
+fn settings_at_80x24_shows_all_five_starting_tabs_and_all_five_themes() {
+    let mut app = app_with_a_long_list();
+    app.settings = Some(settings::Settings::new(&sample_config()));
+    let rows = screen(&app, 80, 24);
+    assert_eq!(
+        rows[13..23]
+            .iter()
+            .map(|row| row.trim_end())
+            .collect::<Vec<_>>(),
+        [
+            "  Starting tab                           Theme",
+            "  › My Work                              › default",
+            "    Team                                   dracula",
+            "    Epics                                  gruvbox",
+            "    Unassigned                             nord",
+            "    Filters                                catppuccin",
+            "  Done tickets                           Wrap summaries",
+            "    Hide                                 › Off",
+            "  › Show                                   On",
+            "",
+        ]
+    );
+    assert!(rows[23].trim_start().starts_with("Save"), "{}", rows[23]);
 }

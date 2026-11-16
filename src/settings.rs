@@ -185,7 +185,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     let areas = Layout::vertical([
         Constraint::Min(5),
         Constraint::Length(3),
-        Constraint::Length(5),
+        Constraint::Length(6),
         Constraint::Length(4),
         Constraint::Length(1),
     ])
