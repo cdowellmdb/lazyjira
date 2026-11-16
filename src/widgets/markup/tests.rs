@@ -602,6 +602,21 @@ fn a_record_label_with_an_emoji_selector_is_not_cut_to_dots() {
 }
 
 #[test]
+fn an_empty_one_cell_header_draws_no_line_above_the_records() {
+    let table = "||{color:red}{color}\n|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|\n|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|";
+    assert_eq!(
+        text(&render(table, 20)),
+        vec![
+            "aaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaa",
+            "",
+            "bbbbbbbbbbbbbbbbbbbb",
+            "bbbbbbbbbbb"
+        ]
+    );
+}
+
+#[test]
 fn a_heading_is_drawn_in_the_text_color_every_theme_gives_plain_text() {
     // `heading()` sets no color where plain text sets `Reset`. A cell nothing colored is `Reset`
     // too, so a theme must paint both the same, in every preset.

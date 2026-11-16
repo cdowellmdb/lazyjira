@@ -122,7 +122,9 @@ fn records(rows: &[Row], width: usize) -> Vec<Line<'static>> {
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     if let Some([title]) = header.map(|row| row.cells.as_slice()) {
-        lines.extend(wrap(vec![], vec![], title.clone(), width));
+        if spans_width(title) > 0 {
+            lines.extend(wrap(vec![], vec![], title.clone(), width));
+        }
     }
     for row in body {
         // A blank line sets each record off from what comes before it.
