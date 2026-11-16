@@ -191,6 +191,8 @@ PR 1 moved the selected row and secondary text onto `src/style.rs`. PR 2 moved t
 
 ### Known limits
 
+- Jira treats `\}` as an escape, so `{{C:\temp\}}` does not close its code: the backslash drops out, the brace is plain text and the code stays open until a later `}}`. A path that ends in a backslash needs a `{noformat}` or `{code}` block.
+- A header cell that holds a link, an icon, a bare URL, an image placeholder or a mention is bold like the rest of the header, on top of that role's own style.
 - Widths are counted per grapheme cluster, as ratatui draws a cell, so a table with an emoji and its variation selector or joiner (a person pair joined by U+200D) lines up in ratatui's buffer. A terminal that does not join such a sequence draws it wider than the two columns ratatui reserves, and the row's bar shifts there.
 - While a detail is open, the mouse wheel over the list scrolls the detail, not the list. A click on a list row shows that ticket.
 - The move failure panel's wrap count is a port of ratatui 0.29's word wrap, counting `char`s where ratatui counts graphemes. A multi-character grapheme (an emoji with a joiner) in Jira's error can make the panel a row too tall or short. The wrap test would need a new ratatui version's behavior to change.

@@ -723,3 +723,49 @@ fn the_demo_slow_cases_table_aligns_from_104_text_columns_and_is_records_below()
     assert_eq!(aligned[2].chars().count(), 104);
     assert_eq!(text(&render(table, 103))[0], "title:* red");
 }
+
+#[test]
+fn a_backslash_before_the_closing_double_braces_escapes_the_first_brace_and_leaves_the_code_open() {
+    let primary = style::primary();
+    assert_eq!(
+        inline("{{C:\\temp\\}}", primary),
+        vec![Span::styled("{{C:\\temp}}", primary)]
+    );
+    assert_eq!(
+        inline("x {{C:\\temp\\}} y }}", primary),
+        vec![
+            Span::styled("x ", primary),
+            Span::styled("C:\\temp}} y ", style::code())
+        ]
+    );
+}
+
+#[test]
+fn header_cells_holding_a_link_a_url_an_image_a_mention_or_an_icon_are_bold_in_their_own_role() {
+    use ratatui::style::Modifier;
+    let bold = Modifier::BOLD;
+    let rows = |header: &str| render(&format!("||{header}||H||\n|b|c|"), 40);
+    assert_eq!(
+        rows("[a|http://x]")[0].spans[..2],
+        [
+            Span::styled("a", style::link().add_modifier(bold)),
+            Span::styled(" (http://x)", style::secondary().add_modifier(bold)),
+        ]
+    );
+    assert_eq!(
+        rows("http://x.io")[0].spans[0],
+        Span::styled("http://x.io", style::link().add_modifier(bold))
+    );
+    assert_eq!(
+        rows("!pic.png!")[0].spans[0],
+        Span::styled("[image: pic.png]", style::aside().add_modifier(bold))
+    );
+    assert_eq!(
+        rows("[~sam]")[0].spans[0],
+        Span::styled("@sam", Style::default().fg(Color::Cyan).add_modifier(bold))
+    );
+    assert_eq!(
+        rows("(/)")[0].spans[0],
+        Span::styled("✓", Style::default().fg(Color::Green).add_modifier(bold))
+    );
+}
