@@ -15,6 +15,8 @@ use crate::{
 pub enum Target {
     Tab(Tab),
     Row(usize),
+    /// A row of the list beside the detail pane: a click shows its ticket.
+    ShowRow(usize),
     Mark(usize),
     Fold(usize),
     Filter(usize),
@@ -356,13 +358,23 @@ pub struct Item {
     /// The column of its fold arrow or dot in its first line: a group header's dot or arrow, a
     /// parent's arrow.
     pub fold: Option<u16>,
+    /// Whether a click beside the detail pane shows it: a ticket, or an epic's header.
+    pub shows: bool,
 }
 
 /// Registers each item's targets. Every drawn line of an item selects it; its first line also
 /// holds its mark, over the `lead` cells before its content (the gutter, and the checkbox while
-/// tickets are marked), and its fold cell.
-pub fn register_rows(app: &App, inner: Rect, items: &[Item], scroll: u16, lead: usize) {
-    for item in items {
+/// tickets are marked), and its fold cell. Beside the detail pane (`compact`) a line only shows
+/// its item, and only the items that `shows` have a target at all: the selection stays on the
+/// ticket the pane shows.
+pub fn register_rows(
+    app: &App,
+    inner: Rect,
+    items: &[Item],
+    scroll: u16,
+    (lead, compact): (usize, bool),
+) {
+    for item in items.iter().filter(|item| item.shows || !compact) {
         let index = item.index;
         for line in item.lines.clone() {
             let Some(y) = line
@@ -373,6 +385,10 @@ pub fn register_rows(app: &App, inner: Rect, items: &[Item], scroll: u16, lead: 
             };
             let rect = Rect::new(inner.x, inner.y + y as u16, inner.width, 1);
             let mut targets = app.mouse_targets.borrow_mut();
+            if compact {
+                targets.push((rect, Target::ShowRow(index)));
+                continue;
+            }
             targets.push((rect, Target::Row(index)));
             if line != item.lines.start {
                 continue;
@@ -466,15 +482,16 @@ pub async fn handle(
             let Some((_, target)) = target else {
                 return;
             };
-            if matches!(target, Target::Row(_) | Target::Mark(_) | Target::Fold(_))
-                && app.active_tab == Tab::Filters
+            if matches!(
+                target,
+                Target::Row(_) | Target::ShowRow(_) | Target::Mark(_) | Target::Fold(_)
+            ) && app.active_tab == Tab::Filters
             {
                 app.filter_focus = FilterFocus::Results;
             }
             match target {
                 Target::Tab(tab) => app.switch_tab(tab),
-                Target::Row(index) if app.is_detail_open() => {
-                    // The list beside the detail: a click shows that row's ticket.
+                Target::ShowRow(index) => {
                     app.selected_index = index;
                     crate::open_selected_row(app, tx);
                 }
@@ -570,10 +587,8 @@ fn menu_choice(app: &App) -> Option<usize> {
             _,
         ) => Some(*selected),
         (Some(_), _) => None,
-        (None, DetailMode::MovePicker(picker)) if app.is_detail_open() => Some(picker.selected),
-        (None, DetailMode::ResolutionPicker { selected, .. }) if app.is_detail_open() => {
-            Some(*selected)
-        }
+        (None, DetailMode::MovePicker(picker)) => Some(picker.selected),
+        (None, DetailMode::ResolutionPicker { selected, .. }) => Some(*selected),
         _ => None,
     }
 }

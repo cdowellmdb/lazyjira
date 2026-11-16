@@ -5,7 +5,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, GroupSelectionState, VisibleGroup};
+use crate::app::{App, GroupSelectionState, Tab, VisibleGroup};
 use crate::cache::{Epic, Status, StatusKind, StatusRules, Ticket};
 use crate::delight::Delight;
 use crate::style;
@@ -474,7 +474,9 @@ impl<'a> ListLines<'a> {
         let mut spans = self.lead(glyph, Some(mark));
         spans.extend(rest);
         self.lines.push(Line::from(spans));
-        self.item(start, group.index, Some(GLYPH_COLUMN));
+        // An epic's header shows the epic; any other group's has nothing to show.
+        let shows = self.app.active_tab == Tab::Epics;
+        self.item(start, group.index, Some(GLYPH_COLUMN), shows);
     }
 
     /// The header of a group of one member, epic or epic key: its fold arrow in the gutter, then
@@ -555,16 +557,21 @@ impl<'a> ListLines<'a> {
             line.spans.extend(more);
             self.lines.push(line);
         }
-        self.item(start, index, fold);
+        self.item(start, index, fold, true);
         (&mut self.lines[start], base)
     }
 
-    fn item(&mut self, start: usize, index: usize, fold: Option<u16>) {
+    fn item(&mut self, start: usize, index: usize, fold: Option<u16>, shows: bool) {
         let lines = start..self.lines.len();
         if self.is_selected(index) {
             self.selected_lines = Some(lines.clone());
         }
-        self.items.push(crate::mouse::Item { lines, index, fold });
+        self.items.push(crate::mouse::Item {
+            lines,
+            index,
+            fold,
+            shows,
+        });
     }
 
     /// Highlights the selected item, scrolls so the selected item's last line is on screen (its
@@ -578,7 +585,13 @@ impl<'a> ListLines<'a> {
                 .min(item.start)
         }) as u16;
         let lead = self.lead_width();
-        crate::mouse::register_rows(self.app, area, &self.items, scroll, lead);
+        crate::mouse::register_rows(
+            self.app,
+            area,
+            &self.items,
+            scroll,
+            (lead, self.compact.is_some()),
+        );
         // A drag copies a row's text, not its marker or checkbox.
         let lead = (lead as u16).min(area.width);
         crate::mouse::selectable(

@@ -204,3 +204,76 @@ async fn a_drag_in_the_detail_pane_copies_detail_text_only_and_a_drag_in_the_lis
     // The divider is selectable by neither.
     assert_eq!(drag_text((50, status), (50, status + 1)).await, None);
 }
+
+#[tokio::test]
+async fn beside_the_detail_the_list_registers_only_show_row_targets_for_ticket_rows() {
+    use crate::mouse::Target;
+    let (app, rows) = detail_screen(160).await;
+    let leak = rows.iter().position(|row| row.contains("LEAK-27")).unwrap() as u16;
+    // The list pane's rows, 2 to 28; the hint line below them has its own keys.
+    let list: Vec<(Rect, Target)> = app
+        .mouse_targets
+        .borrow()
+        .iter()
+        .filter(|(area, _)| area.x < 50 && (2..29).contains(&area.y))
+        .copied()
+        .collect();
+    assert!(
+        list.iter()
+            .all(|(_, target)| matches!(target, Target::ShowRow(_))),
+        "no gutter mark, fold arrow or plain row: {list:?}"
+    );
+    // The long list is scrolled to its last ticket: 27 rows of tickets 4 to 30 fill the pane,
+    // each one target across the pane's 50 cells.
+    assert_eq!(list.len(), 27, "{list:?}");
+    assert_eq!(list[0], (Rect::new(0, 2, 50, 1), Target::ShowRow(4)));
+    assert!(list.contains(&(Rect::new(0, leak, 50, 1), Target::ShowRow(27))));
+}
+
+#[tokio::test]
+async fn beside_the_detail_the_gutter_shows_its_row_and_a_group_header_moves_nothing() {
+    let mut config = sample_config();
+    let (mut app, rows) = detail_screen(160).await;
+    let leak = rows.iter().position(|row| row.contains("LEAK-27")).unwrap() as u16;
+    // The gutter and the cell where a fold arrow would be are part of the row.
+    for x in [0, 1, 2] {
+        click(&mut app, &mut config, x, leak).await;
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("LEAK-27"), "x {x}");
+        assert_eq!(app.selected_index, 27);
+        screen(&app, 160, 30);
+        let (reopened, _) = detail_screen(160).await;
+        app = reopened;
+    }
+
+    // A short list, whose group header is on screen: the selection and the detail stay put.
+    let mut app = app_with_a_ticket_on_every_tab(Tab::MyWork);
+    press(&mut app, &mut config, KeyCode::Enter).await;
+    assert_eq!(app.detail_ticket_key.as_deref(), Some("DEMO-1"));
+    let rows = screen(&app, 160, 30);
+    let header = rows
+        .iter()
+        .position(|row| row.contains("In Progress"))
+        .unwrap() as u16;
+    for x in [0, 1, 2, 5, 30, 49] {
+        click(&mut app, &mut config, x, header).await;
+        assert_eq!(app.selected_index, 1, "x {x}");
+        assert_eq!(app.detail_ticket_key.as_deref(), Some("DEMO-1"), "x {x}");
+        screen(&app, 160, 30);
+    }
+}
+
+#[tokio::test]
+async fn beside_the_detail_an_epics_header_shows_the_epic() {
+    let mut config = sample_config();
+    let mut app = app_with_a_ticket_on_every_tab(Tab::Epics);
+    press(&mut app, &mut config, KeyCode::Enter).await;
+    assert_eq!(app.detail_ticket_key.as_deref(), Some("DEMO-1"));
+    let rows = screen(&app, 160, 30);
+    let header = rows
+        .iter()
+        .position(|row| row.contains("DEMO-100"))
+        .unwrap() as u16;
+    click(&mut app, &mut config, 20, header).await;
+    assert_eq!(app.detail_epic_key.as_deref(), Some("DEMO-100"));
+    assert_eq!(app.selected_index, 0);
+}
