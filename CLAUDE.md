@@ -36,7 +36,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/delight.rs** — Confetti, the quit receipt, stale-ticket fading, the empty My Work scene and spooky season; all off with `preferences.delight = false`
 - **src/theme.rs** — Color themes: presets, custom themes from `[themes]`, and the pass that recolors a drawn frame; a test keeps every preset's text and roles readable
 - **src/top_bar.rs** — The one-line top bar (`lazyjira`, the tabs, a Settings button) and its rule; registers the tab and Settings mouse targets
-- **src/style.rs** — The shared styles, one function per role in `docs/tui-style.md` (primary, secondary, accent, key hint, heading, selected row, status) and `status_color`, in the ANSI colors `theme.rs` recolors
+- **src/style.rs** — The shared styles, one function per role in `docs/tui-style.md` (primary, secondary, subtle, error, warning, accent, key hint, heading, selected row, status) and `status_color`, in the ANSI colors `theme.rs` recolors
 - **src/footer.rs** — The idle footer: `Hint`s (key, label, priority) that drop as the terminal narrows, the muted segment of non-default state at the right, and the bulk bar shown above it while tickets are marked
 - **src/mouse.rs** — Hit targets registered by renderers and mouse event handling
 - **src/setup.rs** — First-run setup screen (project key, team name); imports the legacy `team.yml` roster

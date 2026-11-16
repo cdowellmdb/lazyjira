@@ -11,11 +11,16 @@ Each principle and each mockup names the PR in the build order below that lands 
 3. **Color means state.** (PR 2) Green is done or success. Red is blocked or error. Each status keeps a colored `●` so a board scans quickly: In Progress yellow, Ready for Work blue, Needs Triage magenta, In Review cyan, Blocked red, Done green. Unknown statuses keep the `special` role.
 4. **Few frames.** (PR 2) No title box, no tab-bar box, no outer content border, no `│` between columns. Columns align with padding. One dim rule sits under the top line. A dim `│` is allowed only as the divider between the list and the detail pane.
 5. **Airy.** (PR 2) One blank line between groups. Two spaces of indent per nesting level, with `└` before a sub-task. The selected row gets a `›` marker and a subtle background across its full width.
-6. **Marking is a mode.** (PR 2) The `☐` column appears only after `Space` or `A`, with a bulk bar (`2 selected  B move or assign · u clear · A all`) in place of the old `sel:0` footer item.
+6. **Marking is a mode.** (PR 2) The `☐` column appears only after `Space` or `A`, with a bulk bar (`2 selected   B move or assign · u clear · A all`) in place of the old `sel:0` footer item.
 7. **No emoji.** (PR 1) Every glyph is single width, so columns and overlays never misalign. Stale tickets show their age in dim text with no icon.
 8. **Footers degrade, they never cut.** (PR 1) Hints read `key action · key action`, with bold keys and dim words. Each hint has a priority. As the terminal narrows, hints are dropped by priority, lowest importance first, then from the right within a priority, and never half a hint. `? more` always stays.
 9. **Overlays do not leak.** (PR 3) An overlay clears everything behind it. Forms, pickers and bulk actions dock as one panel under the list with a single rule above it. Detail sits beside the list at 120 columns or wider and replaces it below that. Help and Settings are full-width sheets.
 10. **Narrow terminals drop columns, not hints.** (PR 4) At 80 columns the epic and labels columns go first. Key, summary and age stay.
+
+Two decisions of PR 2:
+
+- A selected group header shows only the tint, not `›`, because its glyph slot holds the dot or fold arrow.
+- Team, Epics and Unassigned headers keep `▼ name` plus counts, and status-grouped lists use `● Name count`.
 
 ## Colors
 
@@ -47,7 +52,7 @@ These screens are the agreed mockup, built from the demo's fake data. Bold, dim,
 
 
  ● In Progress 2
- › DEMO-101  ▾   Add saved payment methods to checkout        Checkout redesign       7w  checkout, frontend  
+ › DEMO-101 ▼    Add saved payment methods to checkout        Checkout redesign       7w  checkout, frontend  
      └ DEMO-111  Migrate stored cards to the new vault        Checkout redesign      10w  checkout
 
  ● Ready for Work 1
@@ -73,9 +78,9 @@ These screens are the agreed mockup, built from the demo's fake data. Bold, dim,
 
 
  ● In Progress 2
- › ☒ DEMO-101  Add saved payment methods to checkout                                                          
-   ☒ └ DEMO-111  Migrate stored cards to the new vault
-   ☐   DEMO-201  Profile slow facet queries
+ › ☒ DEMO-101 ▼    Add saved payment methods to checkout                                                    
+   ☒     └ DEMO-111  Migrate stored cards to the new vault
+   ☐ DEMO-201      Profile slow facet queries
 
  2 selected   B move or assign · u clear · A all
 
@@ -106,7 +111,7 @@ These screens are the agreed mockup, built from the demo's fake data. Bold, dim,
 
 
  ● In Progress 2
- › DEMO-101  ▾   Add saved payment methods to checkout        Checkout redesign       7w  checkout, frontend  
+ › DEMO-101 ▼    Add saved payment methods to checkout        Checkout redesign       7w  checkout, frontend  
      └ DEMO-111  Migrate stored cards to the new vault        Checkout redesign      10w  checkout
 
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -165,11 +165,11 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 |------|----------|
 | `background` | Behind everything, and the text on buttons |
 | `text` | Regular text |
-| `muted` | Borders, separators, hints |
+| `muted` | Secondary text, rules, hints |
 | `subtle` | Secondary text on the selected row, and behind buttons |
 | `selection` | Behind the selected row |
 | `accent` | Keys, focused fields, links, In Review |
-| `highlight` | Headers, the chosen option, In Progress |
+| `highlight` | The In Progress dot, loading and pending text, the chosen option |
 | `error` | Errors, Blocked |
 | `success` | Done |
 | `info` | Ready for Work, info markers, selected text |
@@ -194,7 +194,7 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 | `c` | Create ticket (not on Filters) |
 | `S` | Settings: teammates, pinned epics, Done visibility, starting tab, theme, wrapped summaries |
 | `z/Z` | Fold the current group, or a parent's sub-tasks when a parent or one of its sub-tasks is selected / fold every group shown but the current one, or unfold them all when the tab has a folded group |
-| `d` | Toggle visibility of done statuses (`statuses.done` and `statuses.dropped`); not on Filters |
+| `d` | Toggle visibility of done statuses (`statuses.done` and `statuses.dropped`); not on Filters. While My Work hides them, a `● Done 3  (d to show)` line under its groups says how many |
 | `f/F` | Focus the next / previous status in My Work, Team or Epics, then back to all. Cycles through the statuses shown, in display order, except Done (`d` toggles that). In Epics it filters the children, and hides epics with no child in that status |
 | `r` | Refresh |
 | `?` | Keybindings help |
