@@ -420,12 +420,10 @@ impl<'a> ListLines<'a> {
 
     /// A muted line among the rows, indented as they are.
     pub fn note(&mut self, text: impl Into<String>) {
-        self.note_spans(vec![Span::styled(text.into(), style::secondary())]);
-    }
-
-    /// A line among the rows, indented as they are, then `rest`.
-    pub fn note_spans(&mut self, rest: Vec<Span<'static>>) {
-        self.glyph_line(Span::raw(" "), rest);
+        self.glyph_line(
+            Span::raw(" "),
+            vec![Span::styled(text.into(), style::secondary())],
+        );
     }
 
     /// A line among the rows with `glyph` in the gutter, then `rest` after the checkbox's cells.
@@ -566,6 +564,12 @@ impl<'a> ListLines<'a> {
         }) as u16;
         let lead = self.lead_width();
         crate::mouse::register_rows(self.app, area, &self.items, scroll, lead);
+        // A drag copies a row's text, not its marker or checkbox.
+        let lead = (lead as u16).min(area.width);
+        crate::mouse::selectable(
+            self.app,
+            Rect::new(area.x + lead, area.y, area.width - lead, area.height),
+        );
         f.render_widget(Paragraph::new(self.lines).scroll((scroll, 0)), area);
     }
 }

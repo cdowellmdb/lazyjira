@@ -135,7 +135,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         ),
     ]));
     let inner = block.inner(area);
-    app.text_selection.borrow_mut().area = inner;
+    app.text_selection.borrow_mut().areas = vec![inner];
     f.render_widget(block, area);
     if area.width > 2 {
         app.mouse_targets.borrow_mut().push((

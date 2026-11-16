@@ -49,8 +49,8 @@ fn my_work_column_widths(area: Rect, lead: usize, key_w: usize) -> (usize, usize
 }
 
 /// What My Work shows with no rows: a scene when nothing is left to do (no active ticket, and no
-/// search or status focus hiding any), otherwise "No tickets found".
-fn empty_lines(app: &App) -> Vec<Line<'static>> {
+/// search or status focus hiding any), otherwise none, and the list says "No tickets found".
+fn empty_scene(app: &App) -> Option<Vec<Line<'static>>> {
     let rules = app.status_rules();
     let all_done = app
         .cache
@@ -60,12 +60,7 @@ fn empty_lines(app: &App) -> Vec<Line<'static>> {
     let scene = (all_done && app.search.is_none() && app.status_focus.is_none())
         .then(|| app.delight.inbox_zero())
         .flatten();
-    let Some((art, caption)) = scene else {
-        return vec![Line::from(Span::styled(
-            "  No tickets found",
-            style::secondary(),
-        ))];
-    };
+    let (art, caption) = scene?;
     let mut lines = vec![Line::from("")];
     lines.extend(
         art.iter()
@@ -76,7 +71,7 @@ fn empty_lines(app: &App) -> Vec<Line<'static>> {
         format!("    {caption}"),
         style::warning().add_modifier(Modifier::BOLD),
     )));
-    lines
+    Some(lines)
 }
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
@@ -110,7 +105,10 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     if lines.is_empty() {
-        lines.extend(empty_lines(app));
+        match empty_scene(app) {
+            Some(scene) => lines.extend(scene),
+            None => lines.note("No tickets found"),
+        }
     }
 
     let hidden_done = app.hidden_done_count();

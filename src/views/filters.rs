@@ -6,7 +6,7 @@ use crate::app::{App, FilterFocus};
 use crate::style;
 use crate::views::common::{
     gutter, highlight_row, key_width, narrow_for_summary, status_cell, status_width, Columns,
-    ListLines, Shared, COLUMN_GAP, STATUS_DOT_WIDTH, UPDATED_WIDTH,
+    ListLines, Shared, COLUMN_GAP, GUTTER, STATUS_DOT_WIDTH, UPDATED_WIDTH,
 };
 
 /// Rows a pane's title and the blank line under it take.
@@ -23,15 +23,21 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::con
 }
 
 /// A pane's title, over its list: the accent while the pane has focus.
-fn render_title(f: &mut ratatui::Frame, area: Rect, title: String, focused: bool) {
+fn render_title(f: &mut ratatui::Frame, app: &App, area: Rect, title: String, focused: bool) {
     let style = if focused {
         style::accent().patch(style::heading())
     } else {
         style::secondary()
     };
+    let row = Rect::new(area.x, area.y, area.width, 1.min(area.height));
     f.render_widget(
         Paragraph::new(Span::styled(format!(" {title}"), style)),
-        Rect::new(area.x, area.y, area.width, 1.min(area.height)),
+        row,
+    );
+    // The title sits over the gutter's marker, so a drag takes it from its first letter.
+    crate::mouse::selectable(
+        app,
+        Rect::new(row.x + 1, row.y, row.width.saturating_sub(1), row.height),
     );
 }
 
@@ -52,21 +58,20 @@ fn render_sidebar(
     config: &crate::config::AppConfig,
 ) {
     let sidebar_focused = app.filter_focus == FilterFocus::Sidebar;
-    render_title(f, area, "Saved Filters".to_string(), sidebar_focused);
+    render_title(f, app, area, "Saved Filters".to_string(), sidebar_focused);
     let list = below_title(area);
 
     let mut lines = Vec::new();
 
     if config.filters.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  No saved filters",
-            style::secondary(),
-        )));
+        let note = |text: &'static str| {
+            let mut row = gutter(Span::raw(" "));
+            row.push(Span::styled(text, style::secondary()));
+            Line::from(row)
+        };
+        lines.push(note("No saved filters"));
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Press n to create one",
-            style::secondary(),
-        )));
+        lines.push(note("Press n to create one"));
     } else {
         for (i, filter) in config.filters.iter().enumerate() {
             let is_selected = i == app.filter_sidebar_idx;
@@ -103,6 +108,12 @@ fn render_sidebar(
             crate::mouse::Target::Filter(index),
         ));
     }
+    // A drag copies a filter's name, not its marker.
+    let lead = (GUTTER as u16).min(list.width);
+    crate::mouse::selectable(
+        app,
+        Rect::new(list.x + lead, list.y, list.width - lead, list.height),
+    );
     f.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), list);
 }
 
@@ -138,26 +149,23 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     } else {
         format!("Results ({kept})")
     };
-    render_title(f, inner, title, results_focused);
+    render_title(f, app, inner, title, results_focused);
     let list = below_title(inner);
 
     let mut lines = ListLines::new(app).focused(results_focused);
 
     if app.filter_loading {
-        lines.push(Span::styled("  Loading...", style::warning()));
+        lines.glyph_line(
+            Span::raw(" "),
+            vec![Span::styled("Loading...", style::warning())],
+        );
     } else if app.filter_results.is_empty() {
-        lines.push(Span::styled(
-            "  Select a filter and press Enter to run it",
-            style::secondary(),
-        ));
+        lines.note("Select a filter and press Enter to run it");
     } else if groups.is_empty() {
         // Every result is in a status group, so only a search leaves none.
-        lines.push(Span::styled(
-            format!(
-                "  No results match \"{}\"",
-                app.search.as_deref().unwrap_or_default()
-            ),
-            style::secondary(),
+        lines.note(format!(
+            "No results match \"{}\"",
+            app.search.as_deref().unwrap_or_default()
         ));
     } else {
         let ages = lines.ages();

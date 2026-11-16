@@ -82,7 +82,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     if lines.is_empty() {
-        lines.push(Span::styled("  No team members", style::secondary()));
+        lines.note("No team members");
     }
 
     lines.render(f, area);

@@ -84,7 +84,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let bar = epic_bar(epic, app.status_rules(), EPIC_BAR_WIDTH, meta_style);
         let mut meta = app.delight.rainbow_bar(&epic.key, bar, Instant::now());
         meta.extend(status_counts(app, epic, meta_style));
-        lines.note_spans(meta);
+        lines.glyph_line(Span::raw(" "), meta);
 
         let Some(children) = &group.tickets else {
             lines.push("");

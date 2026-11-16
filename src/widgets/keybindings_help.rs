@@ -156,7 +156,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             Style::default().add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
-    app.text_selection.borrow_mut().area = inner;
+    app.text_selection.borrow_mut().areas = vec![inner];
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(3)])

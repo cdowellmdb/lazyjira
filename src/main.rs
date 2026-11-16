@@ -747,15 +747,6 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         .split(f.area());
 
     mouse::begin_layer(app);
-    // A drag copies a row's text, not its marker or checkbox, so the selectable area starts
-    // after them.
-    let lead = (views::common::lead_width(app.is_marking()) as u16).min(chunks[1].width);
-    app.text_selection.borrow_mut().area = ratatui::layout::Rect::new(
-        chunks[1].x + lead,
-        chunks[1].y,
-        chunks[1].width - lead,
-        chunks[1].height,
-    );
     top_bar::render(f, app, chunks[0]);
 
     // Content area
@@ -765,9 +756,12 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         && app.cache.epics.is_empty()
         && app.filter_results.is_empty()
     {
-        let loading =
-            ratatui::widgets::Paragraph::new(Span::styled(" Loading...", style::warning()));
-        f.render_widget(loading, chunks[1]);
+        let mut loading = views::common::ListLines::new(app);
+        loading.glyph_line(
+            Span::raw(" "),
+            vec![Span::styled("Loading...", style::warning())],
+        );
+        loading.render(f, chunks[1]);
     } else {
         match app.active_tab {
             Tab::MyWork => views::my_work::render(f, chunks[1], app),

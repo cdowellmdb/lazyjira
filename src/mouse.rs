@@ -39,11 +39,15 @@ pub enum Target {
 
 #[derive(Default)]
 pub struct TextSelection {
-    pub area: Rect,
+    /// The text a drag can select, as drawn this frame: each list and pane registers its own, so
+    /// a drag skips a list row's marker and checkbox and stays inside the pane it started in.
+    pub areas: Vec<Rect>,
     pub editor_selected: bool,
     // ponytail: selects visible rendered rows; use source ranges if offscreen selection is needed.
     screen: Buffer,
     range: Option<(Position, Position)>,
+    /// The area `range` was dragged in, which its rows and points stay inside.
+    pane: Option<Rect>,
     pressed: Option<Press>,
 }
 
@@ -55,8 +59,13 @@ struct Press {
 }
 
 impl TextSelection {
+    /// The area a selection stays inside: the one it was dragged in.
+    fn pane(&self) -> Rect {
+        self.pane.unwrap_or(self.screen.area)
+    }
+
     fn point(&self, point: Position) -> Position {
-        let area = self.screen.area;
+        let area = self.pane();
         let y = point.y.clamp(area.y, area.bottom().saturating_sub(1));
         let column = point.x.clamp(area.x, area.right());
         let mut x = area.x;
@@ -80,16 +89,9 @@ impl TextSelection {
         }
         (start.y..=end.y)
             .map(|y| {
-                let left = if y == start.y {
-                    start.x
-                } else {
-                    self.screen.area.x
-                };
-                let right = if y == end.y {
-                    end.x
-                } else {
-                    self.screen.area.right()
-                };
+                let pane = self.pane();
+                let left = if y == start.y { start.x } else { pane.x };
+                let right = if y == end.y { end.x } else { pane.right() };
                 Rect::new(left, y, right.saturating_sub(left), 1)
             })
             .collect()
@@ -108,7 +110,7 @@ impl TextSelection {
                         text.push_str(symbol);
                         x += unicode_width::UnicodeWidthStr::width(symbol).max(1) as u16;
                     }
-                    if row.right() == self.screen.area.right() {
+                    if row.right() == self.pane().right() {
                         text.trim_end().to_string()
                     } else {
                         text
@@ -122,7 +124,15 @@ impl TextSelection {
 
 pub fn render_selection(f: &mut ratatui::Frame, app: &App) {
     let mut selection = app.text_selection.borrow_mut();
-    let area = selection.area.intersection(f.area());
+    for area in &mut selection.areas {
+        *area = area.intersection(f.area());
+    }
+    let area = selection
+        .areas
+        .iter()
+        .copied()
+        .reduce(|a, b| a.union(b))
+        .unwrap_or_default();
     let mut screen = Buffer::empty(area);
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
@@ -136,6 +146,9 @@ pub fn render_selection(f: &mut ratatui::Frame, app: &App) {
         .filter(|(_, target)| !matches!(target, Target::Text { .. } | Target::Copy))
         .map(|(area, _)| area.intersection(screen.area));
     if selection.screen.area != screen.area
+        || selection
+            .pane
+            .is_some_and(|pane| !selection.areas.contains(&pane))
         || selection.rows().iter().any(|row| {
             (row.x..row.right())
                 .any(|x| selection.screen[(x, row.y)].symbol() != screen[(x, row.y)].symbol())
@@ -148,6 +161,7 @@ pub fn render_selection(f: &mut ratatui::Frame, app: &App) {
         })
     {
         selection.range = None;
+        selection.pane = None;
         selection.pressed = None;
     }
     selection.screen = screen;
@@ -183,7 +197,14 @@ pub fn render_selection(f: &mut ratatui::Frame, app: &App) {
 
 pub fn begin_layer(app: &App) {
     app.mouse_targets.borrow_mut().clear();
-    app.text_selection.borrow_mut().editor_selected = false;
+    let mut selection = app.text_selection.borrow_mut();
+    selection.areas.clear();
+    selection.editor_selected = false;
+}
+
+/// Makes `area` selectable by a drag, beside what else this frame has drawn.
+pub fn selectable(app: &App, area: Rect) {
+    app.text_selection.borrow_mut().areas.push(area);
 }
 
 pub fn selected_text(app: &mut App) -> Option<String> {
@@ -222,6 +243,7 @@ pub fn clear(app: &mut App) {
 pub fn clear_screen(app: &App) {
     let mut selection = app.text_selection.borrow_mut();
     selection.range = None;
+    selection.pane = None;
     selection.pressed = None;
 }
 
@@ -318,7 +340,13 @@ fn drag(app: &mut App, point: Position) {
         }
     } else {
         let mut selection = app.text_selection.borrow_mut();
-        if selection.screen.area.contains(press.start) {
+        if let Some(pane) = selection
+            .areas
+            .iter()
+            .copied()
+            .find(|area| area.contains(press.start))
+        {
+            selection.pane = Some(pane);
             selection.range = Some((selection.point(press.start), selection.point(point)));
         }
     }
@@ -711,6 +739,150 @@ mod tests {
                     "marking {marking}, column {x}"
                 );
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn dragging_in_a_filters_pane_copies_that_panes_text_without_its_marker_or_checkbox() {
+        let mut config: AppConfig = toml::from_str(
+            "[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n\
+             [[filters]]\nname = 'Mine'\njql = 'a'\n\
+             [[filters]]\nname = 'Backlog'\njql = 'b'\n",
+        )
+        .unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        // The sidebar's gutter is 3 cells and the results pane starts at column 21, after the
+        // sidebar's 20 and the divider's 1.
+        for (marking, results_lead) in [(false, 3), (true, 5)] {
+            for focus in [FilterFocus::Sidebar, FilterFocus::Results] {
+                let mut app = App::new();
+                app.loading = false;
+                app.switch_tab(Tab::Filters);
+                app.filter_results = vec![
+                    Ticket::for_test("DEMO-1", "In Progress"),
+                    Ticket::for_test("DEMO-2", "In Progress"),
+                ];
+                app.mark_cache_changed();
+                app.filter_focus = focus;
+                app.selected_index = 1;
+                if marking {
+                    app.selected_ticket_keys.insert("DEMO-1".into());
+                }
+                let buffer = draw(&app, &config);
+                let case = format!("marking {marking}, {focus:?}");
+
+                // The title and each filter's name, with or without the pane's focus.
+                for (text, expected, row) in [
+                    ("Saved Filters", "Saved Filters", None),
+                    ("Mine", "Mine", None),
+                    ("Backlog", "Backlog", None),
+                ] {
+                    let start = locate(&app, text);
+                    let row = row.unwrap_or(start.y);
+                    drag_between(&mut app, &mut config, &tx, start, Position::new(79, row)).await;
+                    assert_eq!(
+                        selected_text(&mut app).as_deref(),
+                        Some(expected),
+                        "{case}: {text}"
+                    );
+                }
+
+                // A drag that starts in a filter's gutter selects nothing.
+                let row = locate(&app, "Mine").y;
+                clear_screen(&app);
+                for x in 0..3 {
+                    drag_between(
+                        &mut app,
+                        &mut config,
+                        &tx,
+                        Position::new(x, row),
+                        Position::new(19, row),
+                    )
+                    .await;
+                    assert_eq!(selected_text(&mut app), None, "{case}: sidebar column {x}");
+                }
+
+                let title = locate(&app, "Results (2)");
+                drag_between(
+                    &mut app,
+                    &mut config,
+                    &tx,
+                    title,
+                    Position::new(80, title.y),
+                )
+                .await;
+                assert_eq!(
+                    selected_text(&mut app).as_deref(),
+                    Some("Results (2)"),
+                    "{case}"
+                );
+
+                let row = locate(&app, "DEMO-1").y;
+                let line: String = (21..80).map(|x| buffer[(x, row)].symbol()).collect();
+                let gutter = if focus == FilterFocus::Results {
+                    " › "
+                } else {
+                    "   "
+                };
+                let checkbox = if marking { "☒ " } else { "" };
+                assert!(
+                    line.starts_with(&format!("{gutter}{checkbox}DEMO-1")),
+                    "{case}: {line:?}"
+                );
+                let start = Position::new(21 + results_lead, row);
+                drag_between(&mut app, &mut config, &tx, start, Position::new(79, row)).await;
+                let copied = selected_text(&mut app).unwrap();
+                assert!(copied.starts_with("DEMO-1  "), "{case}: {copied:?}");
+                assert!(!copied.contains(['›', '☐', '☒']), "{case}: {copied:?}");
+
+                // A drag that starts in the results' gutter or checkbox selects nothing.
+                clear_screen(&app);
+                for x in 21..start.x {
+                    drag_between(
+                        &mut app,
+                        &mut config,
+                        &tx,
+                        Position::new(x, row),
+                        Position::new(79, row),
+                    )
+                    .await;
+                    assert_eq!(selected_text(&mut app), None, "{case}: results column {x}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_drag_from_the_lead_copies_an_empty_state_line_whole() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        for (tab, loading, text) in [
+            (Tab::MyWork, false, "No tickets found"),
+            (Tab::Team, false, "No team members"),
+            (Tab::MyWork, true, "Loading..."),
+            (
+                Tab::Filters,
+                false,
+                "Select a filter and press Enter to run it",
+            ),
+        ] {
+            let mut app = my_work_app(&[]);
+            app.loading = loading;
+            app.switch_tab(tab);
+            draw(&app, &config);
+            let row = locate(&app, text).y;
+            // The gutter is 3 cells, and the text starts right after it.
+            let start = if tab == Tab::Filters { 24 } else { 3 };
+            drag_between(
+                &mut app,
+                &mut config,
+                &tx,
+                Position::new(start, row),
+                Position::new(80, row),
+            )
+            .await;
+            assert_eq!(selected_text(&mut app).as_deref(), Some(text), "{tab:?}");
         }
     }
 

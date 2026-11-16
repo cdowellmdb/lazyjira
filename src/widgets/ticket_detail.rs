@@ -91,12 +91,12 @@ fn render_frame(f: &mut ratatui::Frame, app: &App, key: &str) -> (Rect, Rect) {
         );
     }
     let inner = block.inner(area);
-    app.text_selection.borrow_mut().area = Rect::new(
+    app.text_selection.borrow_mut().areas = vec![Rect::new(
         area.x.saturating_add(1),
         area.y,
         area.width.saturating_sub(2),
         area.height.saturating_sub(1),
-    );
+    )];
     f.render_widget(block, area);
     if area.width > 2 && area.height > 0 {
         app.mouse_targets.borrow_mut().push((
