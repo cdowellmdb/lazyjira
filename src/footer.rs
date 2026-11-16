@@ -109,11 +109,12 @@ fn indicators(app: &App) -> String {
     parts.join(SEPARATOR)
 }
 
-/// What the bulk bar offers. Its priorities are the order it drops them in, from the right.
+/// What the bulk bar offers. `bulk_bar` drops hints from the right, so their order is the drop
+/// order and every priority is 1, unread.
 const BULK: &[Hint] = &[
     hint("B", "move or assign", 1),
-    hint("u", "clear", 2),
-    hint("A", "all", 3),
+    hint("u", "clear", 1),
+    hint("A", "all", 1),
 ];
 
 /// Cells between the count and the hints in the bulk bar.
@@ -130,6 +131,7 @@ pub fn bulk_bar(app: &App, width: u16) -> Option<Line<'static>> {
     let count = format!("{selected} selected");
     let mut hints: Vec<&Hint> = BULK.iter().collect();
     let room = (width as usize).saturating_sub(1 + count.width() + COUNT_GAP);
+    // `hints_width` counts the cell that leads the footer's hints, which this bar's gap replaces.
     while hints_width(&hints) - 1 > room {
         hints.pop();
     }
