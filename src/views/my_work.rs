@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
-use crate::style::status_color;
+use crate::style;
 use crate::views::common::{
     fold_indicator, group_marker, panel, status_label, ticket_cells, ticket_marker, Ages, Columns,
     ListLines, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
@@ -64,7 +64,7 @@ fn empty_lines(app: &App) -> Vec<Line<'static>> {
     let Some((art, caption)) = scene else {
         return vec![Line::from(Span::styled(
             "  No tickets found",
-            Style::default().fg(Color::DarkGray),
+            style::secondary(),
         ))];
     };
     let mut lines = vec![Line::from("")];
@@ -93,7 +93,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let heading_style = Style::default()
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
-    let separator = |style: Style| Span::styled(" │ ", style.fg(Color::DarkGray));
+    let separator = |style: Style| Span::styled(" │ ", style.patch(style::secondary()));
 
     let mut lines = ListLines::default();
     let mut has_rows = false;
@@ -110,10 +110,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             let header_w = header.width();
             lines.push(header);
             lines.extend(shared.line(header_w));
-            lines.push(Span::styled(
-                "─".repeat(header_w),
-                Style::default().fg(Color::DarkGray),
-            ));
+            lines.push(Span::styled("─".repeat(header_w), style::secondary()));
             lines.push("");
         }
 
@@ -131,15 +128,11 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             status_label(app, status).to_uppercase(),
             total_count
         );
+        let header_style = style::status(status, app.status_rules()).add_modifier(Modifier::BOLD);
         let header_style = if is_header_selected {
-            Style::default()
-                .fg(status_color(status, app.status_rules()))
-                .add_modifier(Modifier::BOLD)
-                .bg(Color::DarkGray)
+            header_style.patch(style::selected_row())
         } else {
-            Style::default()
-                .fg(status_color(status, app.status_rules()))
-                .add_modifier(Modifier::BOLD)
+            header_style
         };
         lines.header(
             group.index,
@@ -157,7 +150,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             let is_selected = *index == app.selected_index;
 
             let base = if is_selected {
-                Style::default().bg(Color::DarkGray)
+                style::selected_row()
             } else {
                 Style::default()
             };

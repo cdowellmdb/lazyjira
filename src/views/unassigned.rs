@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
-use crate::style::status_color;
+use crate::style;
 use crate::views::common::{
     fit, fold_indicator, group_marker, narrow_for_summary, panel, status_label, status_width,
     ticket_cells, ticket_marker, Ages, Columns, ListLines, Shared, KEY_WIDTH, SEPARATOR_WIDTH,
@@ -36,9 +36,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     if !grouped.is_empty() {
         let mut header = Line::from(vec![
             Span::styled(format!("    {:<key_w$}", "SEL KEY"), heading_style),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", style::secondary()),
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", style::secondary()),
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
         ]);
         shared.push_trailing_headings(&mut header, heading_style, 0, 0);
@@ -61,11 +61,9 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             format!("{} {} {}  {}", marker, indicator, epic_key, epic_summary)
         };
         let header_style = if is_header_selected {
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .bg(Color::DarkGray)
+            style::heading().patch(style::selected_row())
         } else {
-            Style::default().add_modifier(Modifier::BOLD)
+            style::heading()
         };
         lines.header(
             group.index,
@@ -75,7 +73,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let count_style = if is_header_selected {
             Style::default().fg(Color::Gray)
         } else {
-            Style::default().fg(Color::DarkGray)
+            style::secondary()
         };
         lines.push(Line::from(vec![
             Span::raw("  "),
@@ -91,18 +89,17 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             let is_selected = *index == app.selected_index;
 
             let base = if is_selected {
-                Style::default().bg(Color::DarkGray)
+                style::selected_row()
             } else {
                 Style::default()
             };
 
             let base = ages.fade(ticket, base);
+            let status_style = style::status(&ticket.status, app.status_rules());
             let status_style = if is_selected {
-                Style::default()
-                    .fg(status_color(&ticket.status, app.status_rules()))
-                    .bg(Color::DarkGray)
+                status_style.patch(style::selected_row())
             } else {
-                crate::style::status(&ticket.status, app.status_rules())
+                status_style
             };
             let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
             let (key_cell, summary) = ticket_cells(
@@ -116,7 +113,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
             let cells = vec![
                 Span::styled(format!("    {:<key_w$}", key_cell), base),
-                Span::styled(" │ ", base.fg(Color::DarkGray)),
+                Span::styled(" │ ", base.patch(style::secondary())),
                 Span::styled(
                     fit(status_label(app, &ticket.status), status_w),
                     status_style,
@@ -135,10 +132,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         } else {
             "  No unassigned tickets found".to_string()
         };
-        lines.push(Span::styled(
-            empty_text,
-            Style::default().fg(Color::DarkGray),
-        ));
+        lines.push(Span::styled(empty_text, style::secondary()));
     }
 
     lines.render(f, area, app, panel());

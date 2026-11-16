@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
-use crate::style::status_color;
+use crate::style;
 use crate::views::common::{
     fit, fold_indicator, group_marker, muted, narrow_for_summary, panel, status_label,
     status_width, ticket_cells, ticket_marker, Ages, Columns, ListLines, Shared, KEY_WIDTH,
@@ -44,7 +44,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
         let is_header_selected = group.index == app.selected_index;
         let header_base = if is_header_selected {
-            Style::default().bg(Color::DarkGray)
+            style::selected_row()
         } else {
             Style::default()
         };
@@ -84,16 +84,13 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         );
 
         if active.is_empty() && done.is_empty() {
-            lines.push(Span::styled(
-                "  (no tickets)",
-                Style::default().fg(Color::DarkGray),
-            ));
+            lines.push(Span::styled("  (no tickets)", style::secondary()));
         } else {
             let mut header = Line::from(vec![
                 Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
-                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" │ ", style::secondary()),
                 Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
-                Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" │ ", style::secondary()),
                 Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
             ]);
             shared.push_trailing_headings(&mut header, heading_style, epic_w, labels_w);
@@ -108,18 +105,18 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let is_selected = *index == app.selected_index;
 
                 let base = if is_selected {
-                    Style::default().bg(Color::DarkGray)
+                    style::selected_row()
                 } else {
                     Style::default()
                 };
 
                 let base = ages.fade(ticket, base);
 
-                let status_fg = status_color(&ticket.status, app.status_rules());
+                let status_style = style::status(&ticket.status, app.status_rules());
                 let colored = if is_selected {
-                    Style::default().fg(status_fg).bg(Color::DarkGray)
+                    status_style.patch(style::selected_row())
                 } else {
-                    Style::default().fg(status_fg)
+                    status_style
                 };
                 let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let (key_cell, summary) = ticket_cells(
@@ -133,7 +130,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
                 let cells = vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
-                    Span::styled(" │ ", base.fg(Color::DarkGray)),
+                    Span::styled(" │ ", base.patch(style::secondary())),
                     Span::styled(fit(status_label(app, &ticket.status), status_w), colored),
                 ];
                 let row = lines.ticket(*index, is_selected, cells, base, summary);
@@ -143,9 +140,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             if !done.is_empty() {
                 lines.push(Span::styled(
                     format!("    done ({})", done_count),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
+                    style::secondary().add_modifier(Modifier::DIM),
                 ));
             }
 
@@ -153,18 +148,18 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 let is_selected = *index == app.selected_index;
 
                 let base = if is_selected {
-                    Style::default().bg(Color::DarkGray)
+                    style::selected_row()
                 } else {
                     Style::default().add_modifier(Modifier::DIM)
                 };
 
                 let base = ages.fade(ticket, base);
 
-                let status_fg = status_color(&ticket.status, app.status_rules());
+                let status_style = style::status(&ticket.status, app.status_rules());
                 let colored = if is_selected {
-                    Style::default().fg(status_fg).bg(Color::DarkGray)
+                    status_style.patch(style::selected_row())
                 } else {
-                    Style::default().fg(status_fg).add_modifier(Modifier::DIM)
+                    status_style.add_modifier(Modifier::DIM)
                 };
                 let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let (key_cell, summary) = ticket_cells(
@@ -178,7 +173,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
                 let cells = vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
-                    Span::styled(" │ ", base.fg(Color::DarkGray)),
+                    Span::styled(" │ ", base.patch(style::secondary())),
                     Span::styled(fit(status_label(app, &ticket.status), status_w), colored),
                 ];
                 let row = lines.ticket(*index, is_selected, cells, base, summary);
@@ -189,7 +184,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 Span::raw("  "),
                 Span::styled(
                     format!("active: {}  done: {}", active_count, done_count),
-                    Style::default().fg(Color::DarkGray),
+                    style::secondary(),
                 ),
             ]));
         }
@@ -199,10 +194,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     }
 
     if lines.is_empty() {
-        lines.push(Span::styled(
-            "  No team members",
-            Style::default().fg(Color::DarkGray),
-        ));
+        lines.push(Span::styled("  No team members", style::secondary()));
     }
 
     lines.render(f, area, app, panel());

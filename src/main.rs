@@ -765,7 +765,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     let tab_titles: Vec<Line> = Tab::all().iter().map(|t| Line::from(t.title())).collect();
     let tabs = Tabs::new(tab_titles)
         .block(panel().title(" lazyjira "))
-        .divider(Span::styled(" · ", Style::default().fg(Color::DarkGray)))
+        .divider(Span::styled(" · ", style::secondary()))
         .select(match app.active_tab {
             Tab::MyWork => 0,
             Tab::Team => 1,
