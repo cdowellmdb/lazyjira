@@ -4,10 +4,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, FilterFocus};
+use crate::style;
 use crate::views::common::{
-    fit, fold_indicator, group_marker, highlight_row, narrow_for_summary, panel, status_color,
-    status_label, status_width, ticket_cells, ticket_marker, Ages, Columns, ListLines, Shared,
-    KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
+    fit, fold_indicator, group_marker, highlight_row, narrow_for_summary, panel, status_label,
+    status_width, ticket_cells, ticket_marker, Ages, Columns, ListLines, Shared, KEY_WIDTH,
+    SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
@@ -30,7 +31,7 @@ fn render_sidebar(
     let border_style = if sidebar_focused {
         Style::default().fg(Color::Yellow)
     } else {
-        Style::default().fg(Color::DarkGray)
+        style::secondary()
     };
 
     let mut lines = Vec::new();
@@ -38,12 +39,12 @@ fn render_sidebar(
     if config.filters.is_empty() {
         lines.push(Line::from(Span::styled(
             "  No saved filters",
-            Style::default().fg(Color::DarkGray),
+            style::secondary(),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  Press n to create one",
-            Style::default().fg(Color::DarkGray),
+            style::secondary(),
         )));
     } else {
         for (i, filter) in config.filters.iter().enumerate() {
@@ -54,7 +55,7 @@ fn render_sidebar(
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
-                    .bg(Color::DarkGray)
+                    .patch(style::selected_row())
             } else if is_selected {
                 Style::default()
                     .fg(Color::Reset)
@@ -111,7 +112,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let border_style = if results_focused {
         Style::default().fg(Color::Yellow)
     } else {
-        Style::default().fg(Color::DarkGray)
+        style::secondary()
     };
 
     let mut lines = ListLines::default();
@@ -127,7 +128,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     } else if app.filter_results.is_empty() {
         lines.push(Span::styled(
             "  Select a filter and press Enter to run it",
-            Style::default().fg(Color::DarkGray),
+            style::secondary(),
         ));
     } else if groups.is_empty() {
         // Every result is in a status group, so only a search leaves none.
@@ -136,7 +137,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 "  No results match \"{}\"",
                 app.search.as_deref().unwrap_or_default()
             ),
-            Style::default().fg(Color::DarkGray),
+            style::secondary(),
         ));
     } else {
         let key_w = KEY_WIDTH;
@@ -149,19 +150,16 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let shared = Shared::of(&groups, Columns::Neither);
         let mut header = Line::from(vec![
             Span::styled(format!("  {:<key_w$}", "SEL KEY"), heading_style),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", style::secondary()),
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", style::secondary()),
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
         ]);
         shared.push_trailing_headings(&mut header, heading_style, 0, 0);
         let header_w = header.width();
         lines.push(header);
         lines.extend(shared.line(header_w));
-        lines.push(Span::styled(
-            "─".repeat(header_w),
-            Style::default().fg(Color::DarkGray),
-        ));
+        lines.push(Span::styled("─".repeat(header_w), style::secondary()));
         lines.push("");
 
         for group in groups {
@@ -170,15 +168,12 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
             let indicator = fold_indicator(group.tickets.is_none());
             let marker = group_marker(app.group_selection_state(status.as_str()));
+            let header_style =
+                style::status(status, app.status_rules()).add_modifier(Modifier::BOLD);
             let header_style = if is_header_selected {
-                Style::default()
-                    .fg(status_color(status, app.status_rules()))
-                    .add_modifier(Modifier::BOLD)
-                    .bg(Color::DarkGray)
+                header_style.patch(style::selected_row())
             } else {
-                Style::default()
-                    .fg(status_color(status, app.status_rules()))
-                    .add_modifier(Modifier::BOLD)
+                header_style
             };
 
             lines.header(
@@ -206,7 +201,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
                 let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let base = if is_selected {
-                    Style::default().bg(Color::DarkGray)
+                    style::selected_row()
                 } else {
                     Style::default()
                 };
@@ -220,17 +215,16 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     base,
                 );
 
+                let status_style = style::status(&ticket.status, app.status_rules());
                 let status_style = if is_selected {
-                    Style::default()
-                        .fg(status_color(&ticket.status, app.status_rules()))
-                        .bg(Color::DarkGray)
+                    status_style.patch(style::selected_row())
                 } else {
-                    Style::default().fg(status_color(&ticket.status, app.status_rules()))
+                    status_style
                 };
 
                 let cells = vec![
                     Span::styled(format!("  {:<key_w$}", key_cell), base),
-                    Span::styled(" │ ", base.fg(Color::DarkGray)),
+                    Span::styled(" │ ", base.patch(style::secondary())),
                     Span::styled(
                         fit(status_label(app, &ticket.status), status_w),
                         status_style,

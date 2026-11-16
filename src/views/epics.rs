@@ -5,10 +5,11 @@ use std::time::Instant;
 
 use crate::app::{App, VisibleGroup};
 use crate::cache::{Epic, Ticket};
+use crate::style;
 use crate::views::common::{
     column_width, epic_bar, fit, fold_indicator, group_marker, narrow_for_summary, panel,
-    status_color, status_label, status_width, ticket_cells, ticket_marker, Ages, ListLines,
-    EPIC_BAR_WIDTH, KEY_WIDTH, SEPARATOR_WIDTH,
+    status_label, status_width, ticket_cells, ticket_marker, Ages, ListLines, EPIC_BAR_WIDTH,
+    KEY_WIDTH, SEPARATOR_WIDTH,
 };
 
 /// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so
@@ -43,7 +44,7 @@ fn status_counts(app: &App, epic: &Epic, style: Style) -> Vec<Span<'static>> {
         spans.push(Span::styled(if at == 0 { ": " } else { " · " }, style));
         spans.push(Span::styled(
             format!("{count} {}", status_label(app, &status)),
-            style.fg(status_color(&status, rules)),
+            style.patch(style::status(&status, rules)),
         ));
     }
     spans
@@ -63,16 +64,16 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     if !visible_epics.is_empty() {
         let header = Line::from(vec![
             Span::styled(format!("    {:<key_w$}", "SEL KEY"), heading_style),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", style::secondary()),
             Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", style::secondary()),
             Span::styled(format!("{:<assignee_w$}", "ASSIGNEE"), heading_style),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", style::secondary()),
             Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
         ]);
         let rule = "─".repeat(header.width());
         lines.push(header);
-        lines.push(Span::styled(rule, Style::default().fg(Color::DarkGray)));
+        lines.push(Span::styled(rule, style::secondary()));
         lines.push("");
     }
 
@@ -88,14 +89,12 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let epic_summary_w = inner.saturating_sub(prefix).max(12);
 
         let header_key_style = if is_header_selected {
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .bg(Color::DarkGray)
+            style::heading().patch(style::selected_row())
         } else {
-            Style::default().add_modifier(Modifier::BOLD)
+            style::heading()
         };
         let header_summary_style = if is_header_selected {
-            Style::default().bg(Color::DarkGray)
+            style::selected_row()
         } else {
             Style::default()
         };
@@ -114,7 +113,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let meta_style = if is_header_selected {
             Style::default().fg(Color::Gray)
         } else {
-            Style::default().fg(Color::DarkGray)
+            style::secondary()
         };
         let mut meta = vec![Span::raw("  ")];
         let bar = epic_bar(epic, app.status_rules(), EPIC_BAR_WIDTH, meta_style);
@@ -128,27 +127,23 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         };
 
         if children.is_empty() {
-            lines.push(Span::styled(
-                "    (no related tickets)",
-                Style::default().fg(Color::DarkGray),
-            ));
+            lines.push(Span::styled("    (no related tickets)", style::secondary()));
         } else {
             for (index, ticket) in children {
                 let is_selected = *index == app.selected_index;
 
                 let base = if is_selected {
-                    Style::default().bg(Color::DarkGray)
+                    style::selected_row()
                 } else {
                     Style::default()
                 };
 
                 let base = ages.fade(ticket, base);
+                let status_style = style::status(&ticket.status, app.status_rules());
                 let status_style = if is_selected {
-                    Style::default()
-                        .fg(status_color(&ticket.status, app.status_rules()))
-                        .bg(Color::DarkGray)
+                    status_style.patch(style::selected_row())
                 } else {
-                    Style::default().fg(status_color(&ticket.status, app.status_rules()))
+                    status_style
                 };
                 let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let (key_cell, summary) = ticket_cells(
@@ -162,12 +157,12 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
                 let cells = vec![
                     Span::styled(format!("    {:<key_w$}", key_cell), base),
-                    Span::styled(" │ ", base.fg(Color::DarkGray)),
+                    Span::styled(" │ ", base.patch(style::secondary())),
                     Span::styled(
                         fit(status_label(app, &ticket.status), status_w),
                         status_style,
                     ),
-                    Span::styled(" │ ", base.fg(Color::DarkGray)),
+                    Span::styled(" │ ", base.patch(style::secondary())),
                     Span::styled(fit(assignee(ticket), assignee_w), base),
                 ];
                 lines.ticket(*index, is_selected, cells, base, summary);
@@ -184,7 +179,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         } else if let Some(search) = app.search.as_ref().filter(|s| !s.is_empty()) {
             lines.push(Span::styled(
                 format!("  No epics match \"{}\"", search),
-                Style::default().fg(Color::DarkGray),
+                style::secondary(),
             ));
             ""
         } else {
@@ -192,10 +187,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         };
 
         if !empty_text.is_empty() {
-            lines.push(Span::styled(
-                empty_text,
-                Style::default().fg(Color::DarkGray),
-            ));
+            lines.push(Span::styled(empty_text, style::secondary()));
         }
     }
 

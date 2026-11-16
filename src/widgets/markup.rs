@@ -538,8 +538,8 @@ impl Inline<'_> {
             for (pat, symbol, color) in [
                 ("(/)", "✓", Color::Green),
                 ("(x)", "✗", Color::Red),
-                ("(!)", "⚠", Color::Yellow),
-                ("(i)", "ℹ", Color::LightBlue),
+                ("(!)", "!", Color::Yellow),
+                ("(i)", "i", Color::LightBlue),
                 ("(*)", "★", Color::Yellow),
             ] {
                 if self.starts_with(i, pat) {

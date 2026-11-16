@@ -695,7 +695,7 @@ mod tests {
             app.flash.as_deref(),
             Some(
                 "Bulk move complete: 2 succeeded, 0 failed, 0 skipped · \
-                 🎉 Epic DEMO-300 complete: Mobile onboarding"
+                 Epic DEMO-300 complete: Mobile onboarding"
             )
         );
     }

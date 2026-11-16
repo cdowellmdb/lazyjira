@@ -9,6 +9,7 @@ mod cache_refresh;
 mod cli;
 mod config;
 mod delight;
+mod footer;
 mod jira_client;
 mod jira_issue;
 mod jira_reads;
@@ -22,6 +23,7 @@ mod move_picker;
 mod moves;
 mod settings;
 mod setup;
+mod style;
 mod subtasks;
 mod theme;
 mod transitions;
@@ -727,36 +729,6 @@ fn edit_externally(
     Ok(())
 }
 
-fn format_age_minutes(age_secs: u64) -> String {
-    let mins = age_secs / 60;
-    if mins == 0 {
-        "<1m".to_string()
-    } else {
-        format!("{}m", mins)
-    }
-}
-
-fn shortcut_hints(text: &str) -> ratatui::text::Line<'static> {
-    use ratatui::style::{Color, Style};
-    use ratatui::text::{Line, Span};
-
-    let muted = Style::default().fg(Color::DarkGray);
-    let mut spans = Vec::new();
-    // Hints use "key: label"; status indicators use "name:value".
-    for hint in text.split_inclusive("  ") {
-        if let Some((key, label)) = hint.split_once(": ") {
-            spans.push(Span::styled(
-                key.to_string(),
-                Style::default().fg(Color::Cyan),
-            ));
-            spans.push(Span::styled(format!(": {}", label), muted));
-        } else {
-            spans.push(Span::styled(hint.to_string(), muted));
-        }
-    }
-    Line::from(spans)
-}
-
 fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     use crate::views::common::panel;
     use ratatui::layout::{Constraint, Direction, Layout};
@@ -792,8 +764,8 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     }
     let tab_titles: Vec<Line> = Tab::all().iter().map(|t| Line::from(t.title())).collect();
     let tabs = Tabs::new(tab_titles)
-        .block(panel().title(app.delight.title()))
-        .divider(Span::styled(" · ", Style::default().fg(Color::DarkGray)))
+        .block(panel().title(" lazyjira "))
+        .divider(Span::styled(" · ", style::secondary()))
         .select(match app.active_tab {
             Tab::MyWork => 0,
             Tab::Team => 1,
@@ -801,7 +773,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
             Tab::Unassigned => 3,
             Tab::Filters => 4,
         })
-        .style(Style::default().fg(Color::Reset))
+        .style(style::primary())
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)
@@ -851,40 +823,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     } else if let Some(pending) = app.moves.pending_message() {
         Line::from(Span::styled(pending, Style::default().fg(Color::Yellow)))
     } else {
-        let selected_count = app.selected_ticket_count();
-        if app.active_tab == Tab::Filters {
-            let pane = match app.filter_focus {
-                FilterFocus::Sidebar => "sidebar",
-                FilterFocus::Results => "results",
-            };
-            shortcut_hints(&format!(
-                    " j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  z/Z: fold  sel:{}  Tab/S-Tab: switch pane({})  Enter: run/open  n: new  e: edit  x: delete  ?: keys  q: quit ",
-                    selected_count, pane
-                ))
-        } else {
-            let done_state = if app.show_done { "on" } else { "off" };
-            let epic_state = if app.epics_refreshing {
-                "syncing"
-            } else {
-                "ready"
-            };
-            let ticket_state = match app.ticket_sync_stage {
-                Some(TicketSyncStage::ActiveOnly) => "sync-active",
-                Some(TicketSyncStage::Full) => "sync-full",
-                None if app.loading => "refreshing",
-                None => "ready",
-            };
-            let freshness_state = app
-                .cache_stale_age_secs
-                .map(|age| format!("stale {}", format_age_minutes(age)))
-                .unwrap_or_else(|| "fresh".to_string());
-            let focus_state = app.status_focus.as_deref().unwrap_or("all");
-            let spooky_hint = app.delight.theme_hint(&config.preferences.theme);
-            shortcut_hints(&format!(
-                    " {spooky_hint}Tab: switch  j/k: navigate  Space: mark  A: all  u: clear  B: bulk  U: upload  sel:{}  Enter: detail  z: fold  d: done({})  f/F: focus({})  ?: keys  t:{}  c:{}  e:{}  r: refresh  /: search  q: quit ",
-                    selected_count, done_state, focus_state, ticket_state, freshness_state, epic_state
-                ))
-        }
+        footer::line(app, &config.preferences.theme, chunks[2].width)
     };
     f.render_widget(ratatui::widgets::Paragraph::new(status_line), chunks[2]);
 
@@ -1943,50 +1882,85 @@ mod tests {
         );
     }
 
+    fn footer_row(app: &App, width: u16) -> (ratatui::buffer::Buffer, String) {
+        use ratatui::backend::TestBackend;
+
+        let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+        terminal.draw(|f| ui(f, app, &sample_config())).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text = (0..width).map(|x| buffer[(x, 11)].symbol()).collect();
+        (buffer, text)
+    }
+
     #[test]
     fn main_footer_highlights_shortcuts_and_keeps_status_indicators_muted() {
-        use ratatui::backend::TestBackend;
-        use ratatui::style::Color;
+        use ratatui::style::{Color, Modifier};
 
         let mut app = App::new();
+        app.loading = false;
+        app.show_done = false;
         app.ticket_sync_stage = Some(TicketSyncStage::Full);
         app.cache_stale_age_secs = Some(180);
         app.epics_refreshing = true;
         app.status_focus = Some("In Progress".to_string());
-        let mut terminal = Terminal::new(TestBackend::new(300, 12)).unwrap();
 
         for tab in Tab::all() {
             app.active_tab = *tab;
-            terminal.draw(|f| ui(f, &app, &sample_config())).unwrap();
-            let buffer = terminal.backend().buffer();
-            let text: String = (0..300).map(|x| buffer[(x, 11)].symbol()).collect();
-            let mut expected = vec![
-                ("j/k", Color::Cyan),
-                ("Space", Color::Cyan),
-                ("Enter", Color::Cyan),
-                ("q: quit", Color::Cyan),
-                ("navigate", Color::DarkGray),
-                ("sel:0", Color::DarkGray),
-            ];
-            if *tab == Tab::Filters {
-                expected.extend([("Tab/S-Tab", Color::Cyan), ("z/Z", Color::Cyan)]);
+            let (buffer, text) = footer_row(&app, 300);
+            let (keys, indicators) = if *tab == Tab::Filters {
+                (vec!["j/k", "Enter", "Tab", "n", "x", "z", "B"], "")
             } else {
-                expected.extend([
-                    ("Tab", Color::Cyan),
-                    ("f/F", Color::Cyan),
-                    ("focus(In Progress)", Color::DarkGray),
-                    ("t:sync-full", Color::DarkGray),
-                    ("c:stale 3m", Color::DarkGray),
-                    ("e:syncing", Color::DarkGray),
-                ]);
-            }
-            for (token, color) in expected {
-                let x = text
+                (
+                    vec!["Tab", "j/k", "Space", "Enter", "B", "/", "r", "q"],
+                    "done hidden · focus In Progress · syncing · stale 3m · epics syncing",
+                )
+            };
+            let at = |token: &str, offset: usize| {
+                let byte = text
                     .find(token)
                     .unwrap_or_else(|| panic!("missing {token}: {text}"));
-                assert_eq!(buffer[(x as u16, 11)].fg, color, "{token}");
+                &buffer[((text[..byte].chars().count() + offset) as u16, 11)]
+            };
+            for key in keys {
+                let cell = at(&format!(" {key} "), 1);
+                assert_eq!(cell.fg, Color::Cyan, "{key}");
+                assert!(cell.modifier.contains(Modifier::BOLD), "{key}");
             }
+            assert_eq!(at("move", 0).fg, Color::DarkGray);
+            assert_eq!(at("more", 0).fg, Color::DarkGray);
+            if !indicators.is_empty() {
+                assert!(text.ends_with(&format!("{indicators} ")), "{text}");
+                assert_eq!(at(indicators, 0).fg, Color::DarkGray);
+            }
+            assert!(!text.contains("sel:"), "{text}");
         }
+    }
+
+    #[test]
+    fn the_footer_at_80_and_120_columns_keeps_whole_hints_and_a_right_aligned_segment() {
+        let mut app = App::new();
+        app.loading = false;
+        let full = " Tab switch · j/k move · Space mark · Enter open · B bulk · / search · r refresh · q quit · ? more";
+        for (width, expected) in [
+            (
+                80,
+                " Tab switch · j/k move · Space mark · Enter open · / search · q quit · ? more",
+            ),
+            (120, full),
+        ] {
+            let (_, text) = footer_row(&app, width);
+            assert_eq!(text.trim_end(), expected, "{width}");
+        }
+
+        app.cache_stale_age_secs = Some(180);
+        let (_, text) = footer_row(&app, 120);
+        assert_eq!(text, format!("{full}{}stale 3m ", " ".repeat(13)));
+        let (_, text) = footer_row(&app, 80);
+        assert_eq!(
+            text.trim_end(),
+            " Tab switch · j/k move · Space mark · Enter open · / search · q quit · ? more",
+            "the segment goes before a hint"
+        );
     }
 
     /// Presses `code` the way the event loop does, through `handle_key`.
@@ -2051,6 +2025,137 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// An app with a fossil, spooky season and a description full of Jira's icon markers, so the
+    /// glyphs the app draws on its own are all on screen.
+    fn app_that_draws_every_glyph(tab: Tab, selected_index: usize) -> App {
+        let mut app = app_with_a_ticket_on_every_tab(tab);
+        app.selected_index = selected_index;
+        app.delight.enabled = true;
+        app.delight.today = Some(delight::Today {
+            weekday: 5,
+            month: 10,
+            day: 23,
+        });
+        let lists = [
+            &mut app.cache.my_tickets,
+            &mut app.cache.team_tickets,
+            &mut app.filter_results,
+        ];
+        let tickets = lists.into_iter().flatten().chain(
+            app.cache
+                .epics
+                .iter_mut()
+                .flat_map(|epic| &mut epic.children),
+        );
+        for ticket in tickets {
+            ticket.updated = Some("2020-01-02T03:04:05.000+0000".to_string());
+            ticket.detail_loaded = true;
+            ticket.labels = vec!["label".to_string()];
+            ticket.description = Some("(!) careful (i) note (/) ok (x) no (*) star".to_string());
+        }
+        app.mark_cache_changed();
+        app
+    }
+
+    #[tokio::test]
+    async fn every_cell_on_every_tab_and_overlay_is_one_column_wide_at_80_120_and_160_columns() {
+        use ratatui::backend::TestBackend;
+        use unicode_width::UnicodeWidthStr;
+
+        fn assert_one_column_cells(app: &App, config: &AppConfig, scene: &str) {
+            for width in [80, 120, 160] {
+                let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
+                terminal.draw(|f| ui(f, app, config)).unwrap();
+                for cell in &terminal.backend().buffer().content {
+                    assert_eq!(
+                        cell.symbol().width(),
+                        1,
+                        "{scene} at {width} columns drew {:?}",
+                        cell.symbol()
+                    );
+                }
+            }
+        }
+
+        type Scene = (&'static str, Tab, usize, Vec<KeyCode>, fn(&App) -> bool);
+        let on_ticket = |scene, tab, keys: &[char], is_open| -> Scene {
+            let presses = keys.iter().map(|key| KeyCode::Char(*key)).collect();
+            (scene, tab, 1, presses, is_open)
+        };
+        let in_detail = |scene, keys: &[char], is_open| -> Scene {
+            let mut scene = on_ticket(scene, Tab::MyWork, keys, is_open);
+            scene.3.insert(0, KeyCode::Enter);
+            scene
+        };
+        let scenes: Vec<Scene> = vec![
+            on_ticket("My Work", Tab::MyWork, &[], |_| true),
+            on_ticket("Team", Tab::Team, &[], |_| true),
+            on_ticket("Epics", Tab::Epics, &[], |_| true),
+            on_ticket("Unassigned", Tab::Unassigned, &[], |_| true),
+            on_ticket("Filters", Tab::Filters, &[], |_| true),
+            in_detail("ticket detail", &[], App::is_detail_open),
+            in_detail("comment", &['C'], App::is_comment_open),
+            in_detail("assign", &['a'], App::is_assign_open),
+            in_detail("edit", &['e'], App::is_edit_open),
+            in_detail("activity", &['h'], |app| {
+                matches!(app.detail_mode, DetailMode::History { .. })
+            }),
+            ("epic detail", Tab::Epics, 0, vec![KeyCode::Enter], |app| {
+                app.detail_epic_key.is_some()
+            }),
+            on_ticket(
+                "create ticket",
+                Tab::MyWork,
+                &['c'],
+                App::is_create_ticket_open,
+            ),
+            on_ticket("bulk actions", Tab::MyWork, &['B'], App::is_bulk_open),
+            on_ticket("bulk upload", Tab::MyWork, &['U'], App::is_bulk_upload_open),
+            on_ticket(
+                "filter editor",
+                Tab::Filters,
+                &['n'],
+                App::is_filter_edit_open,
+            ),
+            on_ticket("help", Tab::MyWork, &['?'], |app| app.show_keybindings),
+            on_ticket("settings", Tab::MyWork, &['S'], |app| {
+                app.settings.is_some()
+            }),
+        ];
+        for (scene, tab, index, keys, is_open) in scenes {
+            let mut config = two_saved_filters();
+            let mut app = app_that_draws_every_glyph(tab, index);
+            for key in keys {
+                press(&mut app, &mut config, key).await;
+            }
+            assert!(is_open(&app), "{scene} did not open");
+            assert_one_column_cells(&app, &config, scene);
+        }
+
+        let config = two_saved_filters();
+        let mut app = app_that_draws_every_glyph(Tab::MyWork, 1);
+        app.open_detail("DEMO-1".to_string());
+        let Some(move_picker::JiraCall::FetchTransitions { key, request }) =
+            move_picker::open(&mut app)
+        else {
+            panic!("m should ask Jira for transitions");
+        };
+        let transitions = transitions::parse_transitions(transitions::tests::BACKLOG_EPIC).unwrap();
+        move_picker::receive(&mut app, &key, request, Ok(transitions));
+        assert!(matches!(app.detail_mode, DetailMode::MovePicker(_)));
+        assert_one_column_cells(&app, &config, "move picker");
+
+        let mut app = app_that_draws_every_glyph(Tab::MyWork, 1);
+        assert!(app.moves.start("DEMO-1", "Done"));
+        app.finish_move("DEMO-1", Err("Jira answered 400 Bad Request.".to_string()));
+        assert!(!app.moves.failures().is_empty());
+        assert_one_column_cells(&app, &config, "move failure");
+
+        let mut app = app_that_draws_every_glyph(Tab::MyWork, 1);
+        app.record_move("DEMO-1", "Done");
+        assert_one_column_cells(&app, &config, "after a move to done");
     }
 
     #[test]

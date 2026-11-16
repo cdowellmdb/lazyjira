@@ -76,7 +76,7 @@ pub const PRESETS: &[(&str, Theme)] = &[
     (
         "dracula",
         preset(
-            0x282a36, 0xf8f8f2, 0x6272a4, 0xbfbfbf, 0x44475a, 0x8be9fd, 0xf1fa8c, 0xff5555,
+            0x282a36, 0xf8f8f2, 0x8894ba, 0xbfbfbf, 0x44475a, 0x8be9fd, 0xf1fa8c, 0xff5c5c,
             0x50fa7b, 0xbd93f9, 0xff79c6,
         ),
     ),
@@ -90,28 +90,28 @@ pub const PRESETS: &[(&str, Theme)] = &[
     (
         "nord",
         preset(
-            0x2e3440, 0xd8dee9, 0x616e88, 0xa0a8b7, 0x3b4252, 0x88c0d0, 0xebcb8b, 0xbf616a,
+            0x2e3440, 0xd8dee9, 0x848ea2, 0xa0a8b7, 0x3b4252, 0x88c0d0, 0xebcb8b, 0xc7767d,
             0xa3be8c, 0x81a1c1, 0xb48ead,
         ),
     ),
     (
         "catppuccin",
         preset(
-            0x1e1e2e, 0xcdd6f4, 0x6c7086, 0xa6adc8, 0x313244, 0x89dceb, 0xf9e2af, 0xf38ba8,
+            0x1e1e2e, 0xcdd6f4, 0x787b90, 0xa6adc8, 0x313244, 0x89dceb, 0xf9e2af, 0xf38ba8,
             0xa6e3a1, 0x89b4fa, 0xcba6f7,
         ),
     ),
     (
         "solarized-light",
         preset(
-            0xfdf6e3, 0x586e75, 0x657b83, 0x586e75, 0xeee8d5, 0x2aa198, 0xb58900, 0xdc322f,
-            0x859900, 0x268bd2, 0xd33682,
+            0xfdf6e3, 0x586e75, 0x657b83, 0x586e75, 0xeee8d5, 0x27948c, 0xa87f00, 0xdc322f,
+            0x7a8d00, 0x268bd2, 0xd33682,
         ),
     ),
     (
         SPOOKY,
         preset(
-            0x1a1022, 0xf2e9e4, 0x6b5b7a, 0xb8a9c9, 0x3a2449, 0xff8c1a, 0xffb347, 0xe63946,
+            0x1a1022, 0xf2e9e4, 0x80728d, 0xb8a9c9, 0x3a2449, 0xff8c1a, 0xffb347, 0xe63946,
             0x9bdc5b, 0xb388ff, 0xff4fd8,
         ),
     ),
@@ -185,6 +185,73 @@ mod tests {
     use super::*;
     use ratatui::layout::Rect;
     use ratatui::style::Style;
+
+    fn luminance(color: Color) -> f64 {
+        let Color::Rgb(r, g, b) = color else {
+            panic!("{color:?} is not a preset color")
+        };
+        let linear = |channel: u8| {
+            let c = f64::from(channel) / 255.0;
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+
+    /// WCAG 2 contrast ratio, 1.0 to 21.0.
+    fn contrast(a: Color, b: Color) -> f64 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn contrast_follows_wcag() {
+        let round = |ratio: f64| (ratio * 100.0).round() / 100.0;
+        let (black, white) = (Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255));
+        assert_eq!(round(contrast(black, white)), 21.0);
+        assert_eq!(round(contrast(white, white)), 1.0);
+        assert_eq!(round(contrast(Color::Rgb(0x77, 0x77, 0x77), white)), 4.48);
+        assert_eq!(round(contrast(white, Color::Rgb(0x77, 0x77, 0x77))), 4.48);
+    }
+
+    #[test]
+    fn every_preset_keeps_text_and_the_roles_readable_on_its_background_and_selection() {
+        for (name, theme) in PRESETS {
+            let color = |role: Option<Color>| role.unwrap_or_else(|| panic!("{name} has no role"));
+            let (background, selection) = (color(theme.background), color(theme.selection));
+            assert!(
+                contrast(color(theme.text), background) >= 4.5,
+                "{name}: text on background"
+            );
+            assert!(
+                contrast(color(theme.text), selection) >= 3.0,
+                "{name}: text on selection"
+            );
+            for (role, fg) in [
+                ("muted", theme.muted),
+                ("subtle", theme.subtle),
+                ("accent", theme.accent),
+                ("highlight", theme.highlight),
+                ("info", theme.info),
+                ("special", theme.special),
+                ("success", theme.success),
+                ("error", theme.error),
+            ] {
+                let fg = color(fg);
+                assert!(
+                    contrast(fg, background) >= 3.0,
+                    "{name}: {role} on background"
+                );
+                assert!(
+                    contrast(fg, selection) >= 3.0,
+                    "{name}: {role} on selection"
+                );
+            }
+        }
+    }
 
     #[test]
     fn themes_recolor_by_role_and_leave_unset_roles_alone() {

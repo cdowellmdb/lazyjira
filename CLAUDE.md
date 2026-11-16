@@ -33,8 +33,10 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/cache.rs** — Data types (Ticket, Epic, TeamMember, Status, Cache)
 - **src/config.rs** — `config.toml` schema, defaults, load/save
 - **src/settings.rs** — In-app team, epic, startup, and theme preferences
-- **src/delight.rs** — Confetti, the quit receipt, stale-ticket marks, the empty My Work scene and spooky season; all off with `preferences.delight = false`
-- **src/theme.rs** — Color themes: presets, custom themes from `[themes]`, and the pass that recolors a drawn frame
+- **src/delight.rs** — Confetti, the quit receipt, stale-ticket fading, the empty My Work scene and spooky season; all off with `preferences.delight = false`
+- **src/theme.rs** — Color themes: presets, custom themes from `[themes]`, and the pass that recolors a drawn frame; a test keeps every preset's text and roles readable
+- **src/style.rs** — The shared styles, one function per role in `docs/tui-style.md` (primary, secondary, accent, key hint, heading, selected row, status) and `status_color`, in the ANSI colors `theme.rs` recolors
+- **src/footer.rs** — The idle footer: `Hint`s (key, label, priority) that drop as the terminal narrows, and the muted segment of non-default state at the right
 - **src/mouse.rs** — Hit targets registered by renderers and mouse event handling
 - **src/setup.rs** — First-run setup screen (project key, team name); imports the legacy `team.yml` roster
 - **src/jira_client.rs** — The `jira` CLI: `jira me`, creating tickets, comments, assignment and field edits
@@ -69,8 +71,8 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 - **Grouped rows, selection, tab switching, cache mutation helpers, mouse targets or form fields**: "Visible rows"
 - **Sub-tasks, parents or folding**: "Sub-tasks nest under their parent"
 - **The event loop, or anything that should change the screen without a key press**: "The event loop sleeps until woken"
-- **Colors or themes**: "Themes recolor the finished frame"
-- **Confetti, the quit receipt, stale marks or spooky season**: the `delight.rs` bullet of "Current UX behavior"
+- **Colors, themes, borders, spacing, footers, overlays or glyphs**: [docs/tui-style.md](docs/tui-style.md), then "Themes recolor the finished frame"
+- **Confetti, the quit receipt, stale fading or spooky season**: the `delight.rs` bullet of "Current UX behavior"
 - **Columns, marks, Team including the current user, done-group folding, done ordering (`order_done`) or the detail overlay's scrolling**: "Current UX behavior"
 
 ## Configuration

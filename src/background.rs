@@ -699,7 +699,7 @@ mod tests {
         );
 
         let receipt = app.delight.receipt().expect("a receipt");
-        assert!(receipt.contains("💬 1"), "{receipt}");
+        assert!(receipt.contains("✎ 1"), "{receipt}");
         assert!(receipt.contains("✚ 3 created"), "{receipt}");
     }
 

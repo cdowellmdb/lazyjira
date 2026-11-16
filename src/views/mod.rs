@@ -12,6 +12,11 @@ mod tests {
     use crate::cache::{Epic, TeamMember, Ticket};
     use ratatui::{backend::TestBackend, style::Color, Terminal};
 
+    /// The background `style::selected_row` puts behind the selected row.
+    fn selected_bg() -> Color {
+        crate::style::selected_row().bg.unwrap()
+    }
+
     #[test]
     fn rendered_selection_matches_navigation_across_tabs_and_collapsed_groups() {
         for &tab in Tab::all() {
@@ -74,14 +79,14 @@ mod tests {
                             for x in 0..160 {
                                 let cell = &buffer[(x, y)];
                                 text.push_str(cell.symbol());
-                                if cell.bg == Color::DarkGray {
+                                if cell.bg == selected_bg() {
                                     row.push_str(cell.symbol());
                                 }
                             }
                             if !row.trim().is_empty() {
                                 assert_eq!(
                                     buffer[(157, y)].bg,
-                                    Color::DarkGray,
+                                    selected_bg(),
                                     "{tab:?}, row {index}: highlight fills the row"
                                 );
                                 highlighted.push(row);
@@ -1003,7 +1008,7 @@ mod tests {
                         .map(|x| &buffer[(x, rect.y)])
                         .find(|cell| cell.symbol().starts_with(common::MARKS))
                         .unwrap_or_else(|| panic!("no mark under {rect:?}: {}", row_text(rect.y)));
-                    let highlighted = cell.bg == Color::DarkGray;
+                    let highlighted = cell.bg == selected_bg();
                     marks.push((
                         cell.symbol().to_string(),
                         cell.fg,
@@ -1149,7 +1154,7 @@ mod tests {
     };
 
     #[test]
-    fn stale_active_tickets_lead_their_age_with_a_mark_and_fossils_fade() {
+    fn stale_active_tickets_show_a_plain_age_and_fossils_fade() {
         const DAY: i64 = 24 * 60 * 60;
         // Ages sit mid-unit, so the clock moving on while the test runs can't change them.
         let now = crate::local_cache::now_unix_secs() as i64;
@@ -1195,8 +1200,8 @@ mod tests {
         };
         for (key, age) in [
             ("DEMO-1", "2w"),
-            ("DEMO-2", "💤 3w"),
-            ("DEMO-3", "🦕 13w"),
+            ("DEMO-2", "3w"),
+            ("DEMO-3", "13w"),
             ("DEMO-4", "13w"),
         ] {
             let drawn = &rows[row(key)];
@@ -1227,9 +1232,7 @@ mod tests {
 
         app.delight.enabled = false;
         let rows = draw(&app, Tab::MyWork, 120);
-        assert!(!rows
-            .iter()
-            .any(|(row, _)| row.contains('💤') || row.contains('🦕')));
+        assert!(line_with(&rows, "DEMO-3").unwrap().0.contains(" 13w"));
     }
 
     #[test]
@@ -1347,13 +1350,9 @@ mod tests {
         (0..height)
             .map(|y| {
                 let text: String = (0..width).map(|x| buffer[(x, y)].symbol()).collect();
-                let lit = (0..width).any(|x| buffer[(x, y)].bg == Color::DarkGray);
+                let lit = (0..width).any(|x| buffer[(x, y)].bg == selected_bg());
                 if lit {
-                    assert_eq!(
-                        buffer[(width - 3, y)].bg,
-                        Color::DarkGray,
-                        "{tab:?}: {text}"
-                    );
+                    assert_eq!(buffer[(width - 3, y)].bg, selected_bg(), "{tab:?}: {text}");
                 }
                 (text, lit)
             })

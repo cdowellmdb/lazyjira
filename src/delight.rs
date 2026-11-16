@@ -1,6 +1,6 @@
 //! The fun parts, all off with `preferences.delight = false`: confetti when a ticket reaches a
-//! done status, a receipt of the session printed on quit, marks on active tickets nobody has
-//! touched for weeks, an empty My Work that celebrates, and spooky season in late October.
+//! done status, a receipt of the session printed on quit, a faded row for active tickets nobody has
+//! touched for months, an empty My Work that celebrates, and spooky season in late October.
 
 use std::time::{Duration, Instant};
 
@@ -15,7 +15,7 @@ use crate::cache::{StatusKind, StatusRules, Ticket};
 use crate::views::common::{fit, DONE_CELL};
 
 const DAY: i64 = 24 * 60 * 60;
-/// An active ticket untouched this long is dusty.
+/// An active ticket untouched this long gets a line in its detail view.
 const DUSTY_AFTER: i64 = 21 * DAY;
 /// An active ticket untouched this long is a fossil, and its row fades.
 const FOSSIL_AFTER: i64 = 90 * DAY;
@@ -50,13 +50,6 @@ struct Shipped {
     idle: Option<i64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Staleness {
-    Fresh,
-    Dusty,
-    Fossil,
-}
-
 impl Delight {
     /// Late October, from the 15th through Halloween.
     pub fn spooky(&self) -> bool {
@@ -66,23 +59,10 @@ impl Delight {
                 .is_some_and(|today| today.month == 10 && today.day >= 15)
     }
 
-    /// The title of the tab bar's frame.
-    pub fn title(&self) -> &'static str {
-        if self.spooky() {
-            " lazyjira 🎃 "
-        } else {
-            " lazyjira "
-        }
-    }
-
-    /// The footer's first hint: in spooky season, until `theme` is the spooky one, where to
-    /// find it. `S` stays Settings; the hint only points there. Empty otherwise.
-    pub fn theme_hint(&self, theme: &str) -> &'static str {
-        if self.spooky() && !theme.eq_ignore_ascii_case(crate::theme::SPOOKY) {
-            "🎃 S: settings › spooky theme  "
-        } else {
-            ""
-        }
+    /// Whether the footer should point to the spooky theme: in spooky season, until `theme` is
+    /// the spooky one. `S` stays Settings; the hint only points there.
+    pub fn suggests_spooky_theme(&self, theme: &str) -> bool {
+        self.spooky() && !theme.eq_ignore_ascii_case(crate::theme::SPOOKY)
     }
 
     pub fn commented(&mut self) {
@@ -182,15 +162,7 @@ impl Delight {
     }
 
     /// How long `ticket` has sat untouched at `now` (Unix seconds). Done tickets, tickets
-    /// whose read had no `updated`, and everything while delight is off are fresh.
-    fn staleness(&self, rules: &StatusRules, ticket: &Ticket, now: i64) -> Staleness {
-        match self.idle(rules, ticket, now) {
-            Some(idle) if idle >= FOSSIL_AFTER => Staleness::Fossil,
-            Some(idle) if idle >= DUSTY_AFTER => Staleness::Dusty,
-            _ => Staleness::Fresh,
-        }
-    }
-
+    /// whose read had no `updated`, and everything while delight is off have no idle time.
     fn idle(&self, rules: &StatusRules, ticket: &Ticket, now: i64) -> Option<i64> {
         if !self.enabled || rules.is_done(&ticket.status) {
             return None;
@@ -200,24 +172,8 @@ impl Delight {
 
     /// Whether `ticket` is a fossil at `now`, so its row fades.
     pub fn is_fossil(&self, rules: &StatusRules, ticket: &Ticket, now: i64) -> bool {
-        self.staleness(rules, ticket, now) == Staleness::Fossil
-    }
-
-    /// The mark the Updated column shows before a stale ticket's age at `now`. Each is two
-    /// columns wide and shown as an emoji by default, so the column stays in line.
-    pub fn stale_mark(
-        &self,
-        rules: &StatusRules,
-        ticket: &Ticket,
-        now: i64,
-    ) -> Option<&'static str> {
-        match (self.staleness(rules, ticket, now), self.spooky()) {
-            (Staleness::Fresh, _) => None,
-            (Staleness::Dusty, false) => Some("💤"),
-            (Staleness::Fossil, false) => Some("🦕"),
-            (Staleness::Dusty, true) => Some("👻"),
-            (Staleness::Fossil, true) => Some("💀"),
-        }
+        self.idle(rules, ticket, now)
+            .is_some_and(|idle| idle >= FOSSIL_AFTER)
     }
 
     /// A line for the ticket detail about how long a stale ticket has waited.
@@ -231,13 +187,13 @@ impl Delight {
         if idle < DUSTY_AFTER {
             None
         } else if self.spooky() {
-            Some("Untouched for weeks. This one haunts the backlog 👻")
+            Some("Untouched for weeks. This one haunts the backlog")
         } else if idle >= YEAR {
-            Some("Untouched for over a year. It has had a birthday 🎂")
+            Some("Untouched for over a year. It has had a birthday")
         } else if idle >= FOSSIL_AFTER {
-            Some("Untouched for months. Older than most houseplants survive 🪴")
+            Some("Untouched for months. Older than most houseplants survive")
         } else {
-            Some("Untouched for weeks. Older than a carton of milk 🥛")
+            Some("Untouched for weeks. Older than a carton of milk")
         }
     }
 
@@ -264,7 +220,7 @@ impl Delight {
         let stats: Vec<String> = [
             (tally.shipped.len(), "✓", " shipped"),
             (tally.moved, "↻", " moved"),
-            (tally.comments, "💬", ""),
+            (tally.comments, "✎", ""),
             (tally.created, "✚", " created"),
         ]
         .into_iter()
@@ -299,7 +255,7 @@ impl Delight {
             None => "─ lazyjira ".to_string(),
         };
         let sign_off = match self.today {
-            _ if self.spooky() => "happy haunting 🎃",
+            _ if self.spooky() => "happy haunting",
             Some(today) => today.sign_off(),
             None => "see you soon",
         };
@@ -345,8 +301,7 @@ impl App {
                     && epic.done_count(rules) == epic.total()
             })
         });
-        let message =
-            finished.map(|epic| format!("🎉 Epic {} complete: {}", epic.key, epic.summary));
+        let message = finished.map(|epic| format!("Epic {} complete: {}", epic.key, epic.summary));
         let epic = finished.map(|epic| epic.key.clone());
         let now = crate::local_cache::now_unix_secs() as i64;
         self.delight.moved(shipped.as_ref(), epic.as_deref(), now);
@@ -603,49 +558,32 @@ mod tests {
     }
 
     #[test]
-    fn active_tickets_turn_dusty_at_three_weeks_and_fossil_at_ninety_days() {
-        let delight = on(None);
-        let rules = StatusRules::default();
-        let ticket = untouched("In Progress");
-        let at = |now| delight.staleness(&rules, &ticket, now);
-        assert_eq!(at(DUSTY_AFTER - 1), Staleness::Fresh);
-        assert_eq!(at(DUSTY_AFTER), Staleness::Dusty);
-        assert_eq!(at(FOSSIL_AFTER - 1), Staleness::Dusty);
-        assert_eq!(at(FOSSIL_AFTER), Staleness::Fossil);
-    }
-
-    #[test]
     fn done_tickets_and_delight_off_are_never_stale() {
         let rules = StatusRules::default();
         let done = untouched("Done");
-        assert_eq!(
-            on(None).staleness(&rules, &done, FOSSIL_AFTER),
-            Staleness::Fresh
-        );
+        assert!(!on(None).is_fossil(&rules, &done, FOSSIL_AFTER));
         let active = untouched("In Progress");
-        assert_eq!(
-            Delight::default().staleness(&rules, &active, FOSSIL_AFTER),
-            Staleness::Fresh
-        );
+        assert!(!Delight::default().is_fossil(&rules, &active, FOSSIL_AFTER));
+        assert_eq!(Delight::default().stale_quip(&rules, &active, YEAR), None);
         assert_eq!(on(None).stale_quip(&rules, &done, YEAR), None);
     }
 
     #[test]
-    fn stale_marks_are_two_columns_and_spooky_in_season() {
+    fn only_fossils_are_flagged_and_no_stale_text_carries_an_emoji() {
         let rules = StatusRules::default();
         let ticket = untouched("In Progress");
-        let mark = |delight: &Delight, now| delight.stale_mark(&rules, &ticket, now);
-        let plain = on(date(5, 10, 1));
-        let spooky = on(date(5, 10, 23));
-        assert_eq!(mark(&plain, DUSTY_AFTER - 1), None);
-        assert_eq!(mark(&plain, DUSTY_AFTER), Some("💤"));
-        assert_eq!(mark(&plain, FOSSIL_AFTER), Some("🦕"));
-        assert_eq!(mark(&spooky, DUSTY_AFTER), Some("👻"));
-        assert_eq!(mark(&spooky, FOSSIL_AFTER), Some("💀"));
-        assert!(!plain.is_fossil(&rules, &ticket, FOSSIL_AFTER - 1));
-        assert!(plain.is_fossil(&rules, &ticket, FOSSIL_AFTER));
-        for mark in ["💤", "🦕", "👻", "💀"] {
-            assert_eq!(mark.width(), 2, "{mark}");
+        let delight = on(date(5, 10, 23));
+        assert!(!delight.is_fossil(&rules, &ticket, FOSSIL_AFTER - 1));
+        assert!(delight.is_fossil(&rules, &ticket, FOSSIL_AFTER));
+        let quips = [DUSTY_AFTER, FOSSIL_AFTER, YEAR].map(|now| {
+            let plain = on(date(5, 11, 1));
+            [
+                delight.stale_quip(&rules, &ticket, now),
+                plain.stale_quip(&rules, &ticket, now),
+            ]
+        });
+        for quip in quips.into_iter().flatten().map(Option::unwrap) {
+            assert!(quip.is_ascii(), "{quip}");
         }
     }
 
@@ -787,7 +725,7 @@ mod tests {
         let receipt = delight.receipt().unwrap();
         let expected = [
             "╭─ lazyjira · Fri Oct 9 ───────────────────╮",
-            "│ ✓ 1 shipped  ↻ 2 moved  💬 2             │",
+            "│ ✓ 1 shipped  ↻ 2 moved  ✎ 2              │",
             "│                                          │",
             "│ DEMO-41  Fix login redirect              │",
             "│ oldest slain: DEMO-41 (91 days)          │",
@@ -803,7 +741,7 @@ mod tests {
         delight.today = date(6, 9, 5);
         assert!(delight.receipt().unwrap().contains(" enjoy the weekend "));
         delight.today = date(6, 10, 31);
-        assert!(delight.receipt().unwrap().contains(" happy haunting 🎃 "));
+        assert!(delight.receipt().unwrap().contains(" happy haunting "));
     }
 
     #[test]
@@ -894,13 +832,8 @@ mod tests {
     #[test]
     fn the_footer_points_to_the_spooky_theme_in_settings_until_it_is_chosen() {
         let spooky = on(date(5, 10, 23));
-        assert_eq!(
-            spooky.theme_hint("default"),
-            "🎃 S: settings › spooky theme  "
-        );
-        assert_eq!(spooky.theme_hint("Spooky"), "");
-        assert_eq!(on(date(5, 11, 1)).theme_hint("default"), "");
-        assert_eq!(spooky.title(), " lazyjira 🎃 ");
-        assert_eq!(on(date(5, 11, 1)).title(), " lazyjira ");
+        assert!(spooky.suggests_spooky_theme("default"));
+        assert!(!spooky.suggests_spooky_theme("Spooky"));
+        assert!(!on(date(5, 11, 1)).suggests_spooky_theme("default"));
     }
 }

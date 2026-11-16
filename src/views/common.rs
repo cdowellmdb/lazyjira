@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 use crate::app::{App, GroupSelectionState, VisibleGroup};
 use crate::cache::{Epic, Status, StatusKind, StatusRules, Ticket};
 use crate::delight::Delight;
+use crate::style;
 use crate::subtasks::Family;
 use unicode_width::UnicodeWidthStr;
 
@@ -42,33 +43,12 @@ pub fn highlight_row(lines: &mut [Line<'_>], selected: Option<Range<usize>>, wid
         line.spans.push(Span::raw(
             " ".repeat((width as usize).saturating_sub(line.width())),
         ));
-        line.style = line.style.bg(Color::DarkGray);
+        line.style = line.style.patch(style::selected_row());
         if at == first {
             if let Some(key) = line.spans.first_mut() {
                 key.style = key.style.add_modifier(Modifier::BOLD);
             }
         }
-    }
-}
-
-/// Color for a status name: gray when it's dropped (readable on the selected row's dark gray, as
-/// `muted` is), green when it's done, otherwise by the built-in status it reads as, and magenta
-/// for workflow statuses the app doesn't know.
-pub fn status_color(status: &str, rules: &StatusRules) -> Color {
-    match rules.kind(status) {
-        StatusKind::Dropped => return Color::Gray,
-        StatusKind::Done => return Color::Green,
-        StatusKind::Active => {}
-    }
-    match Status::from_str(status) {
-        Status::NeedsTriage => Color::Reset,
-        Status::ReadyForWork => Color::Blue,
-        Status::InProgress => Color::Yellow,
-        Status::ToDo => Color::Reset,
-        Status::InReview => Color::Cyan,
-        Status::Blocked => Color::Red,
-        Status::Closed => Color::Green,
-        Status::Other(_) => Color::Magenta,
     }
 }
 
@@ -102,7 +82,7 @@ pub fn epic_bar(
         };
         spans.push(Span::styled(
             mark.repeat(cells),
-            style.fg(status_color(status, rules)),
+            style.fg(style::status_color(status, rules)),
         ));
     }
     spans
@@ -251,7 +231,7 @@ fn color_marks(lines: &mut [Line<'_>]) {
         let mark_style = if mark.starts_with(UNSELECTED) {
             muted(row)
         } else {
-            row.fg(Color::Cyan)
+            row.patch(style::accent())
         };
         let parts = [
             Span::styled(before.to_string(), span.style),
@@ -598,7 +578,7 @@ impl Shared {
 }
 
 /// Ticket ages at one moment, read once per render so every age on screen is measured to it,
-/// and what `delight` makes of them: a stale ticket's mark, and a fossil's faded row.
+/// and what `delight` makes of them: a fossil's faded row.
 #[derive(Clone, Copy)]
 pub struct Ages<'a> {
     /// Unix seconds.
@@ -616,18 +596,13 @@ impl<'a> Ages<'a> {
         }
     }
 
-    /// A row's Updated cell: how long before `now` Jira last updated the ticket, after its stale
-    /// mark when it has one, right-aligned by display width, or "-" when the read didn't say.
+    /// A row's Updated cell: how long before `now` Jira last updated the ticket, right-aligned
+    /// by display width, or "-" when the read didn't say.
     pub fn updated_cell(&self, ticket: &Ticket) -> String {
         let age = ticket
             .updated_secs()
             .map_or_else(|| "-".to_string(), |at| age(at, self.now));
-        let cell = match self.delight.stale_mark(self.rules, ticket, self.now) {
-            Some(mark) => format!("{mark} {age}"),
-            None => age,
-        };
-        let pad = UPDATED_WIDTH.saturating_sub(cell.width());
-        format!("{}{cell}", " ".repeat(pad))
+        format!("{age:>width$}", width = UPDATED_WIDTH)
     }
 
     /// `base`, muted when `ticket` is a fossil, so its whole row fades.
@@ -700,13 +675,6 @@ mod tests {
             colors,
             vec![Some(Color::Green), Some(Color::Yellow), Some(Color::Gray)]
         );
-    }
-
-    #[test]
-    fn a_dropped_status_stays_readable_on_the_selected_row() {
-        // Rows draw a selected status cell on dark gray, so its text can't be dark gray too.
-        assert_eq!(status_color("Won't Do", &rules()), Color::Gray);
-        assert_eq!(status_color("Done", &rules()), Color::Green);
     }
 
     #[test]

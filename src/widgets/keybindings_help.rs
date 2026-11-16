@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Padding, Paragraph};
 
 use crate::app::App;
+use crate::style;
 use crate::views::common::panel;
 use crate::widgets::{form, markup};
 
@@ -71,6 +72,12 @@ const DETAIL: &[(&str, &str)] = &[
     ("n / e / x", "New / edit / delete filter"),
 ];
 
+/// Every key column of the help, for the footer's test that each hint is documented.
+#[cfg(test)]
+pub(crate) fn keys() -> impl Iterator<Item = &'static str> {
+    MAIN.iter().chain(DETAIL).map(|(keys, _)| *keys)
+}
+
 fn rows(bindings: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let key_width = if width >= 40 { 17 } else { 0 };
@@ -82,12 +89,7 @@ fn rows(bindings: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
             lines.extend(markup::wrap(
                 vec![],
                 vec![],
-                vec![Span::styled(
-                    label.to_string(),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                )],
+                vec![Span::styled(label.to_string(), style::heading())],
                 width as usize,
             ));
         } else {
