@@ -46,6 +46,11 @@ pub fn fold_indicator(collapsed: bool) -> &'static str {
     }
 }
 
+/// The columns before a row's key: the gutter, and the checkbox while tickets are `marking`.
+pub fn lead_width(marking: bool) -> usize {
+    GUTTER + if marking { CHECKBOX_WIDTH } else { 0 }
+}
+
 /// The `GUTTER` cells of a line: `glyph` in `GLYPH_COLUMN`, blanks around it.
 pub fn gutter(glyph: Span<'static>) -> Vec<Span<'static>> {
     let margin = GLYPH_COLUMN as usize;
@@ -394,14 +399,9 @@ impl<'a> ListLines<'a> {
         self.ages
     }
 
-    /// The columns before a row's key: the gutter, and the checkbox while tickets are marked.
+    /// The columns before a row's key.
     pub fn lead_width(&self) -> usize {
-        GUTTER
-            + if self.app.is_marking() {
-                CHECKBOX_WIDTH
-            } else {
-                0
-            }
+        lead_width(self.app.is_marking())
     }
 
     /// Whether the item at `index` is the selected one, in a list that has the selection.

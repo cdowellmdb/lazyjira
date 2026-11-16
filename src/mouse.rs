@@ -664,6 +664,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dragging_across_a_list_row_copies_its_text_without_the_marker_or_the_checkbox() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        for (marking, lead) in [(false, 3), (true, 5)] {
+            let mut app = my_work_app(&["DEMO-1", "DEMO-2"]);
+            app.selected_index = 1;
+            if marking {
+                app.selected_ticket_keys.insert("DEMO-1".into());
+            }
+            let buffer = draw(&app, &config);
+            let row = locate(&app, "DEMO-1").y;
+            let line: String = (0..80).map(|x| buffer[(x, row)].symbol()).collect();
+            assert!(line.starts_with(if marking {
+                " › ☒ DEMO-1"
+            } else {
+                " › DEMO-1"
+            }));
+            let start = Position::new(lead, row);
+            drag_between(&mut app, &mut config, &tx, start, Position::new(79, row)).await;
+            let copied = selected_text(&mut app).unwrap();
+            assert!(
+                copied.starts_with("DEMO-1  "),
+                "marking {marking}: {copied:?}"
+            );
+            assert!(
+                !copied.contains(['›', '☐', '☒']),
+                "marking {marking}: {copied:?}"
+            );
+
+            // A drag that starts in the gutter or the checkbox selects nothing.
+            clear_screen(&app);
+            for x in 0..lead {
+                drag_between(
+                    &mut app,
+                    &mut config,
+                    &tx,
+                    Position::new(x, row),
+                    Position::new(79, row),
+                )
+                .await;
+                assert_eq!(
+                    selected_text(&mut app),
+                    None,
+                    "marking {marking}, column {x}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn dragging_selects_visible_text_without_opening_rows_or_clicking_through_modals() {
         let mut config: AppConfig =
             toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();

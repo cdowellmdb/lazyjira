@@ -747,7 +747,15 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         .split(f.area());
 
     mouse::begin_layer(app);
-    app.text_selection.borrow_mut().area = chunks[1];
+    // A drag copies a row's text, not its marker or checkbox, so the selectable area starts
+    // after them.
+    let lead = (views::common::lead_width(app.is_marking()) as u16).min(chunks[1].width);
+    app.text_selection.borrow_mut().area = ratatui::layout::Rect::new(
+        chunks[1].x + lead,
+        chunks[1].y,
+        chunks[1].width - lead,
+        chunks[1].height,
+    );
     top_bar::render(f, app, chunks[0]);
 
     // Content area
