@@ -7,8 +7,17 @@ use crate::style;
 
 /// The characters a backslash escapes. `\\` is a forced line break, and a backslash before any
 /// other character is kept, so `C:\dir` reads as written.
-pub(super) fn is_escapable(c: char) -> bool {
+fn is_escapable(c: char) -> bool {
     "()[]{}*_+-|!^~?".contains(c)
+}
+
+/// The character a backslash at `chars[i]` escapes, if it is one of the escapable ones. A
+/// backtick is not: Jira has no backtick syntax to escape.
+pub(super) fn escaped_char(chars: &[char], i: usize) -> Option<char> {
+    if chars.get(i) != Some(&'\\') {
+        return None;
+    }
+    chars.get(i + 1).copied().filter(|n| is_escapable(*n))
 }
 
 /// Parses inline markup: `*bold*`, `_italic_`, `-strike-`, `+underline+`,
@@ -72,8 +81,12 @@ impl Inline<'_> {
         let Some(&c) = self.chars.get(at) else {
             return false;
         };
-        let escape = c == '\\' && self.chars.get(at + 1).is_some_and(|n| is_escapable(*n));
-        !c.is_whitespace() && !"<>\"|[]".contains(c) && !escape
+        !c.is_whitespace() && !"<>\"|[]".contains(c) && escaped_char(self.chars, at).is_none()
+    }
+
+    /// Draws `text` as inline code: a chip in the text color on the selection background.
+    fn code(&mut self, text: String) {
+        self.emit(text, self.style.patch(style::code()));
     }
 
     fn at_word_start(&self, i: usize) -> bool {
@@ -100,16 +113,20 @@ impl Inline<'_> {
         let c = self.chars[i];
 
         if c == '\\' {
-            let next = *self.chars.get(i + 1).filter(|n| is_escapable(**n))?;
-            self.buf.push(next);
+            self.buf.push(escaped_char(self.chars, i)?);
             return Some(i + 2);
         }
 
         if self.starts_with(i, "{{") {
             let end = self.find(i + 2, "}}")?;
-            let code: String = self.chars[i + 2..end].iter().collect();
-            self.emit(code, self.style.patch(style::code()));
+            self.code(self.chars[i + 2..end].iter().collect());
             return Some(end + 2);
+        }
+
+        if c == '`' {
+            let end = self.closing(i, c)?;
+            self.code(self.chars[i + 1..end].iter().collect());
+            return Some(end + 1);
         }
 
         if self.starts_with(i, "{color:") {
@@ -192,16 +209,10 @@ impl Inline<'_> {
             '_' => Modifier::ITALIC,
             '-' => Modifier::CROSSED_OUT,
             '+' => Modifier::UNDERLINED,
-            '`' => Modifier::empty(),
             _ => return None,
         };
         let end = self.closing(i, c)?;
-        if c == '`' {
-            let code: String = self.chars[i + 1..end].iter().collect();
-            self.emit(code, self.style.patch(style::code()));
-        } else {
-            self.nested(i + 1, end, self.style.add_modifier(modifier));
-        }
+        self.nested(i + 1, end, self.style.add_modifier(modifier));
         Some(end + 1)
     }
 
@@ -219,7 +230,7 @@ impl Inline<'_> {
         (i + 2..self.chars.len()).find(|&j| {
             self.chars[j] == marker
                 && !self.chars[j - 1].is_whitespace()
-                && !(is_escapable(marker) && self.chars[j - 1] == '\\')
+                && escaped_char(self.chars, j - 1).is_none()
                 && self.chars.get(j + 1).is_none_or(|n| !n.is_alphanumeric())
         })
     }

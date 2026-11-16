@@ -317,6 +317,26 @@ fn an_escaped_marker_does_not_start_emphasis_a_link_or_code() {
 }
 
 #[test]
+fn a_backtick_cannot_be_escaped_so_a_backslash_before_the_closing_one_stays_in_the_code() {
+    let chip = style::code();
+    assert_eq!(
+        inline("`a\\`", style::primary()),
+        vec![Span::styled("a\\", chip)]
+    );
+    assert_eq!(
+        inline("\\`b`", style::primary()),
+        vec![
+            Span::styled("\\", style::primary()),
+            Span::styled("b", chip)
+        ]
+    );
+    assert_eq!(
+        inline("`a\\(b`", style::primary()),
+        vec![Span::styled("a\\(b", chip)]
+    );
+}
+
+#[test]
 fn escapes_hold_in_paragraphs_and_list_items_but_not_in_code() {
     let lines = render("\\* not a list\n* \\(item)\n{code}\n\\(x\\)\n{code}", 40);
     assert_eq!(text(&lines), vec!["* not a list", "• (item)", "│ \\(x\\)"]);

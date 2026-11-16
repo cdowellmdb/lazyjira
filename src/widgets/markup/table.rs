@@ -4,7 +4,7 @@
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 
-use super::inline::{inline, is_escapable};
+use super::inline::{escaped_char, inline};
 use super::wrap::{spans_width, text_width, wrap};
 use crate::style;
 use crate::views::common::fit;
@@ -162,10 +162,10 @@ pub(super) fn parse_table_row(row: &str) -> Vec<Cell> {
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        if c == '\\' && chars.get(i + 1).is_some_and(|n| is_escapable(*n)) {
+        if let Some(escaped) = escaped_char(&chars, i) {
             if let Some(cell) = current.as_mut() {
                 cell.text.push(c);
-                cell.text.push(chars[i + 1]);
+                cell.text.push(escaped);
             }
             i += 2;
             continue;

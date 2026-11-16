@@ -286,7 +286,8 @@ fn parse_list_item(line: &str) -> Option<(&str, &str)> {
     Some((&line[..markers_len], rest.trim()))
 }
 
-/// Splits on Jira's forced line break, `\\`.
+/// Splits on Jira's forced line break, `\\`. Run it before `inline`, which would read the `\\` of
+/// `\\(x)` as a backslash and an escaped `(`.
 fn split_breaks(text: &str) -> Vec<&str> {
     text.split("\\\\").collect()
 }
