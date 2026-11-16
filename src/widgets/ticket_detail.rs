@@ -214,7 +214,7 @@ fn render_scrollable(
                 .symbols(symbols::scrollbar::VERTICAL)
                 .begin_symbol(None)
                 .end_symbol(None)
-                .track_style(style::secondary())
+                .track_symbol(None)
                 .thumb_style(style::primary()),
             area,
             &mut state,
@@ -679,6 +679,10 @@ mod tests {
         assert_eq!(last, 29, "the last line sits on the pane's last row");
         // The scrollbar is the pane's last column, its thumb at the bottom.
         assert!(lines[last].trim_end().ends_with('█'));
+        // Only the thumb is drawn: the track is blank, so no vertical rule but the divider.
+        assert!(lines
+            .iter()
+            .all(|line| matches!(line.chars().last(), Some('█' | ' '))));
     }
 
     #[test]
