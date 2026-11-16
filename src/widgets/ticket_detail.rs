@@ -538,7 +538,7 @@ fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, 
         }
         counts.push(Span::styled(
             format!("{}:\u{a0}{}", status.as_str(), count).replace(' ', "\u{a0}"),
-            Style::default().fg(status_color(status.as_str(), rules)),
+            crate::style::status_dot(status.as_str(), rules),
         ));
     }
     if counts.is_empty() {
@@ -564,7 +564,7 @@ fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, 
             ),
             Span::styled(
                 fit(&ticket.status, 15),
-                Style::default().fg(status_color(&ticket.status, rules)),
+                crate::style::status_dot(&ticket.status, rules),
             ),
             Span::raw("  "),
             Span::styled(

@@ -4,11 +4,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Padding, Paragraph};
 
 use crate::app::App;
+use crate::style;
 use crate::views::common::panel;
 use crate::widgets::{form, markup};
 
 // An empty key marks a section heading.
-const MAIN: &[(&str, &str)] = &[
+pub(crate) const MAIN: &[(&str, &str)] = &[
     ("", "Navigation"),
     ("Tab", "Next tab"),
     ("Shift+Tab", "Previous tab / filter sidebar"),
@@ -37,7 +38,7 @@ const MAIN: &[(&str, &str)] = &[
     ("r", "Refresh tickets"),
 ];
 
-const DETAIL: &[(&str, &str)] = &[
+pub(crate) const DETAIL: &[(&str, &str)] = &[
     ("", "Detail navigation"),
     ("j/k · ↑/↓", "Scroll"),
     ("PgUp/PgDn", "Scroll a page (Space: next)"),
@@ -82,12 +83,7 @@ fn rows(bindings: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
             lines.extend(markup::wrap(
                 vec![],
                 vec![],
-                vec![Span::styled(
-                    label.to_string(),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                )],
+                vec![Span::styled(label.to_string(), style::heading())],
                 width as usize,
             ));
         } else {

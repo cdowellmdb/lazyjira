@@ -66,23 +66,10 @@ impl Delight {
                 .is_some_and(|today| today.month == 10 && today.day >= 15)
     }
 
-    /// The title of the tab bar's frame.
-    pub fn title(&self) -> &'static str {
-        if self.spooky() {
-            " lazyjira 🎃 "
-        } else {
-            " lazyjira "
-        }
-    }
-
-    /// The footer's first hint: in spooky season, until `theme` is the spooky one, where to
-    /// find it. `S` stays Settings; the hint only points there. Empty otherwise.
-    pub fn theme_hint(&self, theme: &str) -> &'static str {
-        if self.spooky() && !theme.eq_ignore_ascii_case(crate::theme::SPOOKY) {
-            "🎃 S: settings › spooky theme  "
-        } else {
-            ""
-        }
+    /// Whether the footer should point to the spooky theme: in spooky season, until `theme` is
+    /// the spooky one. `S` stays Settings; the hint only points there.
+    pub fn suggests_spooky_theme(&self, theme: &str) -> bool {
+        self.spooky() && !theme.eq_ignore_ascii_case(crate::theme::SPOOKY)
     }
 
     pub fn commented(&mut self) {
@@ -894,13 +881,8 @@ mod tests {
     #[test]
     fn the_footer_points_to_the_spooky_theme_in_settings_until_it_is_chosen() {
         let spooky = on(date(5, 10, 23));
-        assert_eq!(
-            spooky.theme_hint("default"),
-            "🎃 S: settings › spooky theme  "
-        );
-        assert_eq!(spooky.theme_hint("Spooky"), "");
-        assert_eq!(on(date(5, 11, 1)).theme_hint("default"), "");
-        assert_eq!(spooky.title(), " lazyjira 🎃 ");
-        assert_eq!(on(date(5, 11, 1)).title(), " lazyjira ");
+        assert!(spooky.suggests_spooky_theme("default"));
+        assert!(!spooky.suggests_spooky_theme("Spooky"));
+        assert!(!on(date(5, 11, 1)).suggests_spooky_theme("default"));
     }
 }

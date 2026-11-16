@@ -101,7 +101,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     .fg(status_color(&ticket.status, app.status_rules()))
                     .bg(Color::DarkGray)
             } else {
-                Style::default().fg(status_color(&ticket.status, app.status_rules()))
+                crate::style::status_dot(&ticket.status, app.status_rules())
             };
             let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
             let (key_cell, summary) = ticket_cells(

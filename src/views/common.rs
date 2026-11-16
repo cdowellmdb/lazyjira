@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 use crate::app::{App, GroupSelectionState, VisibleGroup};
 use crate::cache::{Epic, Status, StatusKind, StatusRules, Ticket};
 use crate::delight::Delight;
+use crate::style;
 use crate::subtasks::Family;
 use unicode_width::UnicodeWidthStr;
 
@@ -42,7 +43,7 @@ pub fn highlight_row(lines: &mut [Line<'_>], selected: Option<Range<usize>>, wid
         line.spans.push(Span::raw(
             " ".repeat((width as usize).saturating_sub(line.width())),
         ));
-        line.style = line.style.bg(Color::DarkGray);
+        line.style = line.style.patch(style::selected_row());
         if at == first {
             if let Some(key) = line.spans.first_mut() {
                 key.style = key.style.add_modifier(Modifier::BOLD);
@@ -251,7 +252,7 @@ fn color_marks(lines: &mut [Line<'_>]) {
         let mark_style = if mark.starts_with(UNSELECTED) {
             muted(row)
         } else {
-            row.fg(Color::Cyan)
+            row.patch(style::accent())
         };
         let parts = [
             Span::styled(before.to_string(), span.style),
