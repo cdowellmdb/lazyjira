@@ -198,6 +198,11 @@ pub fn render_pairs(f: &mut ratatui::Frame, app: &App, area: Rect, pairs: Pairs)
     }
 }
 
+/// The line `render_pairs` draws for `pairs` in `width` columns, with no click targets.
+pub fn pairs_line(pairs: Pairs, width: u16) -> Line<'static> {
+    hints_line(&choose(&pair_hints(pairs), "", width as usize).kept)
+}
+
 /// `pairs` split into as few rows of at most `width` columns as hold them, in order, each hint
 /// whole on one row, and the rows as even as the hints allow. A hint wider than `width` has a
 /// row to itself.
