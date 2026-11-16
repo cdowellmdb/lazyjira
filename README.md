@@ -29,7 +29,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 
 **Keyboard or mouse**
 - Click to select, click again to open; works on rows, menus, and pickers
-- Click the left edge of a row (or a checkbox, once you are marking) to mark tickets, fold arrows to fold groups, and **[×]** to close a detail
+- Click the left edge of a row (or a checkbox, once you are marking) to mark tickets, fold arrows to fold groups, and the **×** at the right end of a detail's first line to close it
 - Click into form fields and buttons; scroll lists and details with the wheel
 - Drag across text to select it, then copy with `Ctrl+C`
 - Edit in `$EDITOR`, paste multiple lines, and filter pickers by typing
@@ -215,7 +215,7 @@ Refresh keeps the loaded list visible and follows the selected ticket even when 
 
 Click a tab or row to select it; click the selected row again to open it. Menus (bulk actions, and the move and resolution pickers) work the same way: click an option to choose it, and click it again to take it. Click the left edge of a row or group to mark it, and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
 
-With a detail open beside the list, click a row of the list to show that ticket. Click **[×]** at the right end of the detail's first line to close it. Forms, pickers and notices open as one panel under the list with their own **[×]**, and Help and Settings are sheets over the whole screen with one at the right end of their title line. Help's `Esc/? close` hint closes it too, and its scroll hint does nothing when clicked.
+With a detail open beside the list, click a row of the list to show that ticket. Click the muted **×** at the right end of the detail's first line to close it. Forms, pickers and notices open as one panel under the list with their own **×**, and Help and Settings are sheets over the whole screen with one at the right end of their title line. Help's `Esc/? close` hint closes it too, and its scroll hint does nothing when clicked.
 
 Forms support clicking fields, positioning the text cursor, choosing picker options, and clicking their action buttons. Type to filter assignee and epic pickers; use arrow keys or the wheel to choose. Bulk actions still require the separate confirmation step.
 

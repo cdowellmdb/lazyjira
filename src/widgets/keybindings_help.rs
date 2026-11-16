@@ -145,7 +145,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     app.keybindings_scroll_max.set(max);
     app.keybindings_page_height.set(body.height.max(1));
     if max > 0 {
-        // Where the view is, ending before the `[×]`.
+        // Where the view is, ending before the `×`.
         let head = Rect::new(inner.x, 0, inner.width.saturating_sub(7), 1);
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(

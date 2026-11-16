@@ -374,25 +374,25 @@ pub fn render_menu(f: &mut ratatui::Frame, app: &crate::app::App, area: Rect, me
     f.render_widget(Paragraph::new(menu.lines).scroll((scroll as u16, 0)), body);
 }
 
-/// Cells of a close button: ` [×] `.
+/// Cells of a close button: `  ×  `, its click cell with the glyph in the middle.
 const CLOSE_WIDTH: u16 = 5;
 
-/// A muted `[×]` ending one cell before the right edge of `row`'s first line, which does
-/// `target` when clicked.
+/// A muted `×` centered in a click cell that ends one cell before the right edge of `row`'s
+/// first line and does `target` when clicked.
 pub fn close_button(f: &mut ratatui::Frame, app: &crate::app::App, row: Rect, target: Target) {
     if row.width < 2 * CLOSE_WIDTH || row.is_empty() {
         return;
     }
     let rect = Rect::new(row.right() - CLOSE_WIDTH - 1, row.y, CLOSE_WIDTH, 1);
     f.render_widget(
-        Paragraph::new(Span::styled(" [×] ", style::secondary())),
+        Paragraph::new(Span::styled("  ×  ", style::secondary())),
         rect,
     );
     app.mouse_targets.borrow_mut().push((rect, target));
 }
 
 /// Draws a sheet over the whole frame, which it clears: `title` in bold on the first row with
-/// a `[×]` that closes it, a blank row, then the body. Returns the body, two cells in from
+/// a `×` that closes it, a blank row, then the body. Returns the body, two cells in from
 /// each side, and makes it selectable.
 pub fn render_sheet(f: &mut ratatui::Frame, app: &crate::app::App, title: &str) -> Rect {
     let area = f.area();
@@ -425,7 +425,7 @@ pub fn title(name: impl Into<String>, detail: &str) -> Line<'static> {
 }
 
 /// Draws the frame of a panel docked in `area`: it clears the area, draws a muted rule across
-/// its top, `title` under it and a `[×]` that cancels, and makes what is under the title
+/// its top, `title` under it and a `×` that cancels, and makes what is under the title
 /// selectable. Returns the body and the last row, for the buttons or hints, a cell in from each
 /// side.
 pub fn render_panel_frame(

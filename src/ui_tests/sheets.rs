@@ -83,7 +83,7 @@ async fn help_and_settings_are_sheets_over_the_whole_frame_with_a_title_a_close_
             let rows = screen(&app, width, height);
             let case = format!("{name} at {width}x{height}\n{}", rows.join("\n"));
             assert!(rows[0].starts_with(&format!(" {title} ")), "{case}");
-            assert!(rows[0].ends_with(" [×]  "), "{case}");
+            assert!(rows[0].ends_with("  ×   "), "{case}");
             // Nothing of the screen behind it shows: not the top bar, the list or the footer.
             for covered in [
                 " lazyjira   My Work",

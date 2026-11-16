@@ -4,7 +4,7 @@ A user opens a ticket from any list and reads its fields, its description render
 
 ## Sub-features
 
-- `detail-open` opens the detail: its first line is `<KEY>  N of M` with `[×]` at the right end. At 120 columns or wider it sits beside the list, which stays on the left (50 cells, keys and summaries, one `│` divider between). Below 120 columns it replaces the list. The key hints are the bottom line while it is open.
+- `detail-open` opens the detail: its first line is `<KEY>  N of M` with a muted `×` at the right end. At 120 columns or wider it sits beside the list, which stays on the left (50 cells, keys and summaries, one `│` divider between). Below 120 columns it replaces the list. The key hints are the bottom line while it is open.
 - `detail-fields` shows Status, Assignee, Reporter, Epic and Labels.
 - `detail-markup` renders headings, numbered lists, tables, links and mentions in the description.
 - `detail-scroll` scrolls with `j/k`, `Space`, `g/G`.
@@ -23,7 +23,7 @@ Preconditions:
 
 - Fresh run.
 
-- **Open by search.** `$V <run> keys /`, `$V <run> type DEMO-201`, `$V <run> wait '● Ready for Work 1'`, `$V <run> keys Down`, `$V <run> keys Enter`, `$V <run> wait 'DEMO-201  1 of 1 .*\[×\]'`.
+- **Open by search.** `$V <run> keys /`, `$V <run> type DEMO-201`, `$V <run> wait '● Ready for Work 1'`, `$V <run> keys Down`, `$V <run> keys Enter`, `$V <run> wait 'DEMO-201  1 of 1 .*×'`.
 - **Fields and markup.** `$V <run> snap detail-open`. The screen shows `Status    ● Ready for Work`, `Assignee  Alex Rivera`, `Reporter  Priya Shah`, `Epic      DEMO-200 · Search performance`, the `Acceptance criteria` numbered list and the `Rollout` table (`Stage │ Traffic │ Owner`).
 - **Scroll** (*not yet driven*). `$V <run> keys G`, then snap. The end of the description and comments shows.
 - **Step** (*not yet driven*). Open from the unfiltered list instead (`Escape` the search first, `keys Down Enter`), then `$V <run> keys Right`. The key in the title changes and `N of M` counts up.
