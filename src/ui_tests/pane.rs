@@ -76,7 +76,11 @@ const TEXT_FIRST: usize = 52;
 /// The last text column at `width`: the scrollbar's column is the last, and two blank cells
 /// come before it.
 fn text_last(width: u16) -> usize {
-    width as usize - 4
+    match width {
+        120 => 116,
+        160 => 156,
+        _ => panic!("no last text column pinned for {width} columns"),
+    }
 }
 
 /// The `count` cells of `row` from `from`.
@@ -91,9 +95,14 @@ fn find_cell(rows: &[String], text: &str) -> (u16, u16) {
     (rows[y][..byte].chars().count() as u16, y as u16)
 }
 
-/// The rows under the top bar and the rule, above the hints: two hint rows below 121 columns.
+/// The rows under the top bar and the rule, above the hints: two hint rows at 80 and 120
+/// columns, one at 160.
 fn pane_rows(rows: &[String], width: u16) -> &[String] {
-    let hints = if width < 121 { 2 } else { 1 };
+    let hints = match width {
+        80 | 120 => 2,
+        160 => 1,
+        _ => panic!("no hint rows pinned for {width} columns"),
+    };
     &rows[2..rows.len() - hints]
 }
 
@@ -215,6 +224,23 @@ async fn code_reaches_the_frame_as_a_chip_and_the_sample_pane_has_no_red_or_cyan
             );
         }
     }
+}
+
+#[tokio::test]
+async fn a_theme_gives_the_frames_code_chip_its_selection_background_and_the_text_around_it_the_main_one(
+) {
+    let (mut app, rows) = pane(160, 40).await;
+    let (x, y) = find_cell(&rows, "facet_counts");
+    let nord = theme::resolve("nord", &Default::default());
+    app.theme = nord;
+    let buf = draw(&app, 160, 40);
+    let (selection, background) = (nord.selection.unwrap(), nord.background.unwrap());
+    for i in 0..12 {
+        assert_eq!(buf[(x + i, y)].fg, nord.text.unwrap(), "x {}", x + i);
+        assert_eq!(buf[(x + i, y)].bg, selection, "x {}", x + i);
+    }
+    assert_eq!(buf[(x - 1, y)].bg, background);
+    assert_eq!(buf[(x + 12, y)].bg, background);
 }
 
 /// Presses at `from`, drags to `to` and releases, drawing after each event; the text copied.
