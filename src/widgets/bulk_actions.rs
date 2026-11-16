@@ -1,14 +1,12 @@
-use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::App;
 use crate::bulk_actions::{BulkAction, BulkState, BulkSummary, BulkTarget};
 use crate::cache::{Status, MOVE_SHORTCUTS};
 use crate::style;
 
-use super::form;
+use super::form::{self, Menu};
 
 /// An option drawn like the move picker's: the selected one on a highlight bar.
 fn render_option(lines: &mut Vec<Line<'static>>, label: &str, selected: bool, base: Style) {
@@ -102,52 +100,12 @@ fn render_result(lines: &mut Vec<Line<'static>>, summary: &BulkSummary) {
     push_ticket_reasons(lines, "Skipped:", style::warning(), &summary.skipped);
 }
 
-/// What the panel shows for a bulk state.
-struct Body {
-    title: &'static str,
-    lines: Vec<Line<'static>>,
-    /// The line each option is on, with its index.
-    choices: Vec<(usize, usize)>,
-    selected: Option<usize>,
-    scroll: u16,
-    hints: &'static [(&'static str, &'static str)],
+/// The panel's menu for the open bulk state, if there is one.
+pub fn menu(app: &App) -> Option<Menu> {
+    app.bulk_state.as_ref().map(|state| menu_of(app, state))
 }
 
-/// The rows the panel's body needs: the lines and the hint line.
-pub fn rows(app: &App) -> u16 {
-    app.bulk_state
-        .as_ref()
-        .map_or(0, |state| body(app, state).lines.len() as u16 + 1)
-}
-
-pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
-    let Some(state) = app.bulk_state.as_ref() else {
-        return;
-    };
-    let Body {
-        title,
-        lines,
-        choices,
-        selected,
-        scroll,
-        hints,
-    } = body(app, state);
-    let inner = form::render_modal_frame(f, app, area, form::title(title, ""));
-    match selected {
-        Some(selected) => form::menu(f, app, inner, lines, (&choices, selected), hints),
-        None => {
-            let text = form::hint_row(f, app, inner, hints);
-            f.render_widget(
-                Paragraph::new(lines)
-                    .wrap(Wrap { trim: false })
-                    .scroll((scroll, 0)),
-                text,
-            );
-        }
-    }
-}
-
-fn body(app: &App, state: &BulkState) -> Body {
+fn menu_of(app: &App, state: &BulkState) -> Menu {
     let title = match state {
         BulkState::Result { .. } => "Bulk Results",
         BulkState::Confirm { .. } => "Confirm Bulk Action",
@@ -340,8 +298,8 @@ fn body(app: &App, state: &BulkState) -> Body {
         | BulkState::AssignPicker { selected, .. } => Some(*selected),
         _ => None,
     };
-    Body {
-        title,
+    Menu {
+        title: form::title(title, ""),
         lines,
         choices,
         selected,

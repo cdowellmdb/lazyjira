@@ -1,36 +1,38 @@
 use crossterm::event::KeyCode;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 
-use super::form;
+use super::form::{self, Row};
 use crate::app::App;
 
-/// The rows the panel's body needs: the summary and labels, the description (its label and
-/// from 3 to 12 lines) and the buttons.
-pub fn rows(app: &App) -> u16 {
+/// The panel's body: the summary and labels, and the description (its label and from 3 to 12
+/// lines).
+fn rows(app: &App) -> [Row; 3] {
     let lines = app
         .edit_state
         .as_ref()
         .map_or(0, |s| s.description.lines().len());
-    1 + 1 + 1 + lines.clamp(3, 12) as u16 + 1
+    [
+        Row::fixed(1),
+        Row::fixed(1),
+        Row::flex(1 + lines.clamp(3, 12) as u16, 1),
+    ]
+}
+
+pub fn need(app: &App) -> form::Need {
+    form::need(&rows(app))
 }
 
 pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let Some(state) = &app.edit_state else {
         return;
     };
-    let inner = form::render_modal_frame(
+    let (body, footer) = form::render_panel_frame(
         f,
         app,
         area,
         form::title(format!("Edit {}", state.ticket_key), ""),
     );
-    let [summary, labels, description, footer] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .areas(inner);
+    let [summary, labels, description] = form::split(rows(app), body);
     form::render_editor(
         f,
         app,

@@ -6,13 +6,14 @@
 use ratatui::layout::Rect;
 
 use super::{
-    assign, bulk_actions, bulk_upload, comment, create_ticket, edit_fields, filter_edit,
+    assign, bulk_actions, bulk_upload, comment, create_ticket, edit_fields, filter_edit, form,
     move_failure, move_status,
 };
 use crate::app::App;
 
-/// The rows a panel's rule and title take.
-pub const CHROME: u16 = 2;
+/// The rows a panel's rule and title take, and the last row, for its buttons or hints.
+const CHROME: u16 = form::CHROME;
+const FOOTER: u16 = 1;
 /// The most of the content area a panel takes, in percent.
 const MAX_PERCENT: u16 = 60;
 
@@ -46,26 +47,52 @@ pub fn open(app: &App) -> Option<Panel> {
     .find_map(|(open, panel)| open.then_some(panel))
 }
 
-/// The rows `panel` takes of `content`: what it needs for its title and body, but no more than
-/// `MAX_PERCENT` of the area.
-pub fn height(app: &App, panel: Panel, content: Rect) -> u16 {
-    let rows = match panel {
-        Panel::MoveFailure => move_failure::rows(app),
-        Panel::FilterEdit => filter_edit::rows(app),
-        Panel::BulkUpload => bulk_upload::rows(app),
-        Panel::Create => create_ticket::rows(app),
-        Panel::Comment => comment::rows(app),
-        Panel::Assign => assign::rows(app),
-        Panel::Edit => edit_fields::rows(app),
-        Panel::Bulk => bulk_actions::rows(app),
-        Panel::Move => move_status::rows(app),
-    };
-    let most = u32::from(content.height) * u32::from(MAX_PERCENT) / 100;
-    (CHROME + rows).min(most as u16)
+/// A panel ready to draw: which it is, how tall, and the body of a menu, built once.
+pub struct Docked {
+    panel: Panel,
+    menu: Option<form::Menu>,
+    pub height: u16,
 }
 
-pub fn render(f: &mut ratatui::Frame, app: &App, panel: Panel, area: Rect) {
-    match panel {
+/// The panel that has the keys, sized for `content`: the rows its rule, title, body and last row
+/// take, but no more than `MAX_PERCENT` of the area, and no fewer than every row of its body
+/// needs to show (`form::Row`), whatever the cap says.
+pub fn plan(app: &App, content: Rect) -> Option<Docked> {
+    let panel = open(app)?;
+    let menu = match panel {
+        Panel::Bulk => bulk_actions::menu(app),
+        Panel::Move => move_status::menu(app),
+        _ => None,
+    };
+    let need = match (&menu, panel) {
+        (Some(menu), _) => form::need(&menu.shape()),
+        (None, Panel::MoveFailure) => move_failure::need(app),
+        (None, Panel::FilterEdit) => filter_edit::need(app),
+        (None, Panel::BulkUpload) => bulk_upload::need(app),
+        (None, Panel::Create) => create_ticket::need(app),
+        (None, Panel::Comment) => comment::need(app),
+        (None, Panel::Assign) => assign::need(app),
+        (None, Panel::Edit) => edit_fields::need(app),
+        (None, Panel::Bulk | Panel::Move) => form::need(&[]),
+    };
+    let frame = CHROME + FOOTER;
+    let cap = (u32::from(content.height) * u32::from(MAX_PERCENT) / 100) as u16;
+    let height = (frame + need.want)
+        .min(cap)
+        .max(frame + need.min)
+        .min(content.height);
+    Some(Docked {
+        panel,
+        menu,
+        height,
+    })
+}
+
+pub fn render(f: &mut ratatui::Frame, app: &App, docked: Docked, area: Rect) {
+    if let Some(menu) = docked.menu {
+        return form::render_menu(f, app, area, menu);
+    }
+    match docked.panel {
         Panel::MoveFailure => move_failure::render(f, app, area),
         Panel::FilterEdit => filter_edit::render(f, app, area),
         Panel::BulkUpload => bulk_upload::render(f, app, area),
@@ -73,7 +100,6 @@ pub fn render(f: &mut ratatui::Frame, app: &App, panel: Panel, area: Rect) {
         Panel::Comment => comment::render(f, app, area),
         Panel::Assign => assign::render(f, app, area),
         Panel::Edit => edit_fields::render(f, app, area),
-        Panel::Bulk => bulk_actions::render(f, app, area),
-        Panel::Move => move_status::render(f, app, area),
+        Panel::Bulk | Panel::Move => {}
     }
 }

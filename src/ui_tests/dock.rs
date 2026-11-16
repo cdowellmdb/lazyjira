@@ -145,9 +145,9 @@ async fn a_panel_takes_the_rows_it_needs_up_to_60_percent_of_the_content_at_80x2
                 [bottom - expected as usize],
                 "{name} at {width}x{height}: a panel of {expected} rows"
             );
-            let panel = widgets::dock::open(&app).unwrap();
             let area = Rect::new(0, 2, width, content);
-            assert_eq!(widgets::dock::height(&app, panel, area), expected, "{name}");
+            let docked = widgets::dock::plan(&app, area).unwrap();
+            assert_eq!(docked.height, expected, "{name}");
         }
     }
 }

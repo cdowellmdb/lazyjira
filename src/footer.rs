@@ -153,41 +153,48 @@ pub fn bulk_bar(app: &App, width: u16) -> Option<Line<'static>> {
     Some(Line::from(spans))
 }
 
-/// An overlay's hints (key, label) as one line in `width` columns, drawn like the footer's.
-/// `Esc` is never dropped; the others go from the right, so their order is the drop order.
-pub fn pairs_line(pairs: &[(&'static str, &'static str)], width: u16) -> Line<'static> {
-    let hints: Vec<Hint> = pairs
+/// A panel's or the detail's hints, `(key, label)`: `Esc` is never dropped and the others go
+/// from the right, so their order is the drop order.
+type Pairs<'a> = &'a [(&'static str, &'static str)];
+
+fn pair_hints(pairs: Pairs) -> Vec<Hint> {
+    pairs
         .iter()
         .enumerate()
         .map(|(at, &(key, label))| hint(key, label, if key == "Esc" { 0 } else { 1 + at as u8 }))
-        .collect();
-    fit(&hints, "", width as usize)
+        .collect()
 }
 
-/// Registers a click target over each key of `line` that is one key press (`Esc`, `Enter` or a
-/// character), and over each arrow of `←→`, for a line drawn at the start of `area`'s first row.
-pub fn register_keys(app: &App, line: &Line, area: Rect) {
-    let mut x = area.x;
-    for span in &line.spans {
-        let width = span.width() as u16;
-        if span.style == style::key_hint() {
-            let key = match span.content.as_ref() {
-                "Esc" => Some(KeyCode::Esc),
-                "Enter" => Some(KeyCode::Enter),
-                value if value.chars().count() == 1 => value.chars().next().map(KeyCode::Char),
-                _ => None,
-            };
-            let mut targets = app.mouse_targets.borrow_mut();
-            if let Some(key) = key {
-                let room = area.right().saturating_sub(x);
-                targets.push((Rect::new(x, area.y, width.min(room), 1), Target::Key(key)));
-            }
-            if span.content == "←→" {
-                targets.push((Rect::new(x, area.y, 1, 1), Target::Key(KeyCode::Left)));
-                targets.push((Rect::new(x + 1, area.y, 1, 1), Target::Key(KeyCode::Right)));
-            }
+/// Draws `pairs` in `area`'s first row like the footer's hints, dropping whole hints from the
+/// right to fit, and makes each kept key that is one key press (`Esc`, `Enter` or a character)
+/// a click target, and each arrow of `←→`.
+pub fn render_pairs(f: &mut ratatui::Frame, app: &App, area: Rect, pairs: Pairs) {
+    if area.is_empty() {
+        return;
+    }
+    let row = Rect::new(area.x, area.y, area.width, 1);
+    let hints = pair_hints(pairs);
+    let kept = choose(&hints, "", row.width as usize).kept;
+    f.render_widget(ratatui::widgets::Paragraph::new(hints_line(&kept)), row);
+    let mut x = row.x.saturating_add(1);
+    let mut targets = app.mouse_targets.borrow_mut();
+    for hint in kept {
+        let width = hint.key.width() as u16;
+        let key = match hint.key {
+            "Esc" => Some(KeyCode::Esc),
+            "Enter" => Some(KeyCode::Enter),
+            key if key.chars().count() == 1 => key.chars().next().map(KeyCode::Char),
+            _ => None,
+        };
+        if let Some(key) = key {
+            let room = row.right().saturating_sub(x);
+            targets.push((Rect::new(x, row.y, width.min(room), 1), Target::Key(key)));
         }
-        x = x.saturating_add(width);
+        if hint.key == "←→" {
+            targets.push((Rect::new(x, row.y, 1, 1), Target::Key(KeyCode::Left)));
+            targets.push((Rect::new(x + 1, row.y, 1, 1), Target::Key(KeyCode::Right)));
+        }
+        x = x.saturating_add(width + 1 + hint.label.width() as u16 + SEPARATOR.width() as u16);
     }
 }
 
@@ -219,10 +226,16 @@ fn hint_spans(hints: &[&Hint]) -> Vec<Span<'static>> {
     spans
 }
 
-/// `hints` and `indicators` in `width` columns. The indicators go first when they don't fit
-/// beside the hints, then hints from the highest priority number, rightmost first, so a hint
-/// is whole or gone. A priority of zero stays even when nothing fits.
-fn fit(hints: &[Hint], indicators: &str, width: usize) -> Line<'static> {
+/// What `choose` kept: the hints that fit, and the indicators if they fit beside them.
+struct Fitted<'a> {
+    kept: Vec<&'a Hint>,
+    indicators: &'a str,
+}
+
+/// Which of `hints` and `indicators` fit in `width` columns. The indicators go first when they
+/// don't fit beside the hints, then hints from the highest priority number, rightmost first, so
+/// a hint is whole or gone. A priority of zero stays even when nothing fits.
+fn choose<'a>(hints: &'a [Hint], indicators: &'a str, width: usize) -> Fitted<'a> {
     let mut keep = vec![true; hints.len()];
     let shown = |keep: &[bool]| -> Vec<&Hint> {
         hints
@@ -248,15 +261,30 @@ fn fit(hints: &[Hint], indicators: &str, width: usize) -> Line<'static> {
         }
         keep[at] = false;
     }
-    let kept = shown(&keep);
+    Fitted {
+        kept: shown(&keep),
+        indicators,
+    }
+}
+
+/// `kept` as a line: a cell, then each hint.
+fn hints_line(kept: &[&Hint]) -> Line<'static> {
     let mut spans = vec![Span::raw(" ")];
-    spans.extend(hint_spans(&kept));
+    spans.extend(hint_spans(kept));
+    Line::from(spans)
+}
+
+/// `hints` and `indicators` in `width` columns, the indicators right-aligned.
+fn fit(hints: &[Hint], indicators: &str, width: usize) -> Line<'static> {
+    let Fitted { kept, indicators } = choose(hints, indicators, width);
+    let mut line = hints_line(&kept);
     if !indicators.is_empty() {
         let pad = width.saturating_sub(hints_width(&kept) + indicators.width() + 1);
-        spans.push(Span::raw(" ".repeat(pad)));
-        spans.push(Span::styled(format!("{indicators} "), style::secondary()));
+        line.spans.push(Span::raw(" ".repeat(pad)));
+        line.spans
+            .push(Span::styled(format!("{indicators} "), style::secondary()));
     }
-    Line::from(spans)
+    line
 }
 
 #[cfg(test)]
@@ -424,12 +452,24 @@ mod tests {
             (36, " ↑↓ scroll · Esc close"),
             (22, " ↑↓ scroll · Esc close"),
             (21, " Esc close"),
-            (0, " Esc close"),
+            (10, " Esc close"),
         ] {
-            assert_eq!(text(&pairs_line(&pairs, width)), expected, "{width}");
+            let app = app();
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 8)).unwrap();
+            terminal
+                .draw(|f| render_pairs(f, &app, Rect::new(0, 0, width, 1), &pairs))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let row: String = (0..width).map(|x| buffer[(x, 0)].symbol()).collect();
+            assert_eq!(row.trim_end(), expected, "{width}");
         }
         let app = app();
-        register_keys(&app, &pairs_line(&pairs, 50), Rect::new(10, 7, 50, 1));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 8)).unwrap();
+        terminal
+            .draw(|f| render_pairs(f, &app, Rect::new(10, 7, 50, 1), &pairs))
+            .unwrap();
         let targets: Vec<(Rect, Target)> = app.mouse_targets.borrow().clone();
         assert_eq!(
             targets,

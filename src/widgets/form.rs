@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 use tui_textarea::{CursorMove, TextArea};
 use unicode_width::UnicodeWidthStr;
 
@@ -307,35 +307,8 @@ pub fn button_row(
     hints: &[(&'static str, &'static str)],
 ) {
     let x = buttons(f, app, row, buttons_);
-    let room = Rect::new(
-        x,
-        row.y,
-        row.right().saturating_sub(x),
-        u16::from(!row.is_empty()),
-    );
-    if !room.is_empty() {
-        let line = crate::footer::pairs_line(hints, room.width);
-        crate::footer::register_keys(app, &line, room);
-        f.render_widget(Paragraph::new(line), room);
-    }
-}
-
-/// The bottom row of `area` as a hint line, and the rows above it.
-pub fn hint_row(
-    f: &mut ratatui::Frame,
-    app: &crate::app::App,
-    area: Rect,
-    hints: &[(&'static str, &'static str)],
-) -> Rect {
-    let [body, row] = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(u16::from(!area.is_empty())),
-    ])
-    .areas(area);
-    let line = crate::footer::pairs_line(hints, row.width);
-    crate::footer::register_keys(app, &line, row);
-    f.render_widget(Paragraph::new(line), row);
-    body
+    let room = Rect::new(x, row.y, row.right().saturating_sub(x), row.height.min(1));
+    crate::footer::render_pairs(f, app, room, hints);
 }
 
 /// Registers a click target over each option's line in `body`, which shows its lines from line
@@ -359,25 +332,46 @@ pub fn choice_targets(
     }
 }
 
-/// A menu: `lines` over a hint line, scrolled to keep the chosen option (`choices.1`) in view,
-/// each option clickable.
-pub fn menu(
-    f: &mut ratatui::Frame,
-    app: &crate::app::App,
-    area: Rect,
-    lines: Vec<Line<'static>>,
-    choices: (&[(usize, usize)], usize),
-    hints: &[(&'static str, &'static str)],
-) {
-    let body = hint_row(f, app, area, hints);
-    let selected_line = choices
-        .0
+/// What a menu panel shows, built once a frame: the title, the lines, the line each option is
+/// on, the chosen option, where a body with no options is scrolled to, and the hints.
+pub struct Menu {
+    pub title: Line<'static>,
+    pub lines: Vec<Line<'static>>,
+    pub choices: Vec<(usize, usize)>,
+    pub selected: Option<usize>,
+    pub scroll: u16,
+    pub hints: &'static [(&'static str, &'static str)],
+}
+
+impl Menu {
+    /// The body's rows: every line, down to one.
+    pub fn shape(&self) -> [Row; 1] {
+        [Row::flex(self.lines.len() as u16, 1)]
+    }
+}
+
+/// Draws a menu in the panel docked in `area`. With a chosen option its lines scroll to keep it
+/// in view and each option is clickable; without, the lines wrap and scroll as the menu says.
+pub fn render_menu(f: &mut ratatui::Frame, app: &crate::app::App, area: Rect, menu: Menu) {
+    let (body, footer) = render_panel_frame(f, app, area, menu.title);
+    crate::footer::render_pairs(f, app, footer, menu.hints);
+    let Some(selected) = menu.selected else {
+        f.render_widget(
+            Paragraph::new(menu.lines)
+                .wrap(Wrap { trim: false })
+                .scroll((menu.scroll, 0)),
+            body,
+        );
+        return;
+    };
+    let selected_line = menu
+        .choices
         .iter()
-        .find(|(_, index)| *index == choices.1)
+        .find(|(_, index)| *index == selected)
         .map_or(0, |(line, _)| *line);
     let scroll = selected_line.saturating_sub(body.height.saturating_sub(1) as usize);
-    choice_targets(app, body, scroll, choices.0);
-    f.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), body);
+    choice_targets(app, body, scroll, &menu.choices);
+    f.render_widget(Paragraph::new(menu.lines).scroll((scroll as u16, 0)), body);
 }
 
 /// Cells of a close button: ` [×] `.
@@ -432,13 +426,14 @@ pub fn title(name: impl Into<String>, detail: &str) -> Line<'static> {
 
 /// Draws the frame of a panel docked in `area`: it clears the area, draws a muted rule across
 /// its top, `title` under it and a `[×]` that cancels, and makes what is under the title
-/// selectable. Returns that area, a cell in from each side.
-pub fn render_modal_frame(
+/// selectable. Returns the body and the last row, for the buttons or hints, a cell in from each
+/// side.
+pub fn render_panel_frame(
     f: &mut ratatui::Frame,
     app: &crate::app::App,
     area: Rect,
     title: Line<'static>,
-) -> Rect {
+) -> (Rect, Rect) {
     f.render_widget(Clear, area);
     let [rule, head, rest] = Layout::vertical([
         Constraint::Length(1),
@@ -459,7 +454,83 @@ pub fn render_modal_frame(
         rest.height,
     );
     crate::mouse::selectable(app, inner);
-    inner
+    let [body, footer] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(u16::from(!inner.is_empty())),
+    ])
+    .areas(inner);
+    (body, footer)
+}
+
+/// The rows of a panel's chrome: its rule and its title.
+pub const CHROME: u16 = 2;
+
+/// One row of a panel's body: the rows it wants, and the fewest it keeps when the panel is
+/// short. A field's rows are its label and its value, so a field's minimum is one row, the
+/// label and value side by side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Row {
+    want: u16,
+    min: u16,
+}
+
+impl Row {
+    /// A row that keeps its height until nothing else can give.
+    pub const fn fixed(rows: u16) -> Row {
+        Row {
+            want: rows,
+            min: rows,
+        }
+    }
+
+    /// A row that wants `want` rows and gives up to `want - min` of them when the panel is short.
+    pub const fn flex(want: u16, min: u16) -> Row {
+        Row { want, min }
+    }
+}
+
+/// How tall a panel's body wants to be, and the least it needs for every row to show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Need {
+    pub want: u16,
+    pub min: u16,
+}
+
+/// The rows `rows` want and need in all. A panel declares its `rows` once, and sizes itself
+/// (`need`) and lays itself out (`split`) from them, so the two cannot drift apart.
+pub fn need(rows: &[Row]) -> Need {
+    Need {
+        want: rows.iter().map(|row| row.want).sum(),
+        min: rows.iter().map(|row| row.min).sum(),
+    }
+}
+
+/// Splits `area` into `rows`, top to bottom. Short of room, the last rows give up theirs first,
+/// each down to its minimum, then the last row to have any left gives up the rest. Room left over
+/// goes to the last row that gives.
+pub fn split<const N: usize>(rows: [Row; N], area: Rect) -> [Rect; N] {
+    let mut heights = rows.map(|row| row.want);
+    let mut deficit = heights.iter().sum::<u16>().saturating_sub(area.height);
+    for (height, row) in heights.iter_mut().zip(rows).rev() {
+        let give = deficit.min(*height - row.min);
+        *height -= give;
+        deficit -= give;
+    }
+    for height in heights.iter_mut().rev() {
+        let give = deficit.min(*height);
+        *height -= give;
+        deficit -= give;
+    }
+    let spare = area.height.saturating_sub(heights.iter().sum::<u16>());
+    if let Some(at) = rows.iter().rposition(|row| row.want > row.min) {
+        heights[at] += spare;
+    }
+    let mut y = area.y;
+    heights.map(|height| {
+        let rect = Rect::new(area.x, y, area.width, height);
+        y += height;
+        rect
+    })
 }
 
 #[cfg(test)]
@@ -495,6 +566,45 @@ mod tests {
         assert!(!buffer[(1, 0)].modifier.contains(Modifier::UNDERLINED));
         let targets: Vec<Rect> = app.mouse_targets.borrow().iter().map(|(r, _)| *r).collect();
         assert_eq!(targets, [Rect::new(0, 0, 6, 1), Rect::new(8, 0, 8, 1)]);
+    }
+
+    /// The heights `split` gives `rows` in `height` rows.
+    fn heights<const N: usize>(rows: [Row; N], height: u16) -> [u16; N] {
+        split(rows, Rect::new(0, 5, 10, height)).map(|rect| rect.height)
+    }
+
+    #[test]
+    fn rows_are_split_top_down_and_the_last_rows_give_up_theirs_first_down_to_their_minimums() {
+        // The create form's body: pickers (4, at least 2), summary, labels, description
+        // (1 + 3 lines, at least 1).
+        let create = [
+            Row::flex(4, 2),
+            Row::fixed(1),
+            Row::fixed(1),
+            Row::flex(4, 1),
+        ];
+        assert_eq!(need(&create), Need { want: 10, min: 5 });
+        assert_eq!(heights(create, 10), [4, 1, 1, 4]);
+        assert_eq!(heights(create, 9), [4, 1, 1, 3]);
+        assert_eq!(heights(create, 7), [4, 1, 1, 1]);
+        assert_eq!(heights(create, 6), [3, 1, 1, 1]);
+        assert_eq!(heights(create, 5), [2, 1, 1, 1]);
+        // Below the minimums the last rows go first, down to nothing.
+        assert_eq!(heights(create, 4), [2, 1, 1, 0]);
+        assert_eq!(heights(create, 3), [2, 1, 0, 0]);
+        assert_eq!(heights(create, 0), [0, 0, 0, 0]);
+        // Room left over goes to the last row that gives.
+        assert_eq!(heights(create, 12), [4, 1, 1, 6]);
+        let rects = split(create, Rect::new(2, 5, 10, 6));
+        assert_eq!(
+            rects,
+            [
+                Rect::new(2, 5, 10, 3),
+                Rect::new(2, 8, 10, 1),
+                Rect::new(2, 9, 10, 1),
+                Rect::new(2, 10, 10, 1),
+            ]
+        );
     }
 
     #[test]

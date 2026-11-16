@@ -1,5 +1,5 @@
 use crossterm::event::KeyCode;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -7,7 +7,7 @@ use crate::app::{App, BulkUploadState};
 use crate::style;
 use crate::views::common::truncate;
 
-use super::form;
+use super::form::{self, Row};
 
 /// A form's buttons and the hints beside them.
 type Footer = (
@@ -45,13 +45,15 @@ fn title(state: &BulkUploadState) -> &'static str {
     }
 }
 
-/// The rows the panel's body needs: for the path, its editor and a line; otherwise the lines and
-/// the buttons.
-pub fn rows(app: &App) -> u16 {
+/// The path's body: its editor, and a line under it.
+const PATH_ROWS: [Row; 2] = [Row::fixed(1), Row::fixed(1)];
+
+/// The rows the panel's body needs: for the path, its editor and a line; otherwise the lines.
+pub fn need(app: &App) -> form::Need {
     match app.bulk_upload_state.as_ref() {
-        None => 0,
-        Some(BulkUploadState::PathInput { .. }) => 3,
-        Some(state) => lines(state, MAX_PREVIEW_ROWS).0.len() as u16 + 1,
+        None => form::need(&[]),
+        Some(BulkUploadState::PathInput { .. }) => form::need(&PATH_ROWS),
+        Some(state) => form::need(&[Row::flex(lines(state, MAX_PREVIEW_ROWS).0.len() as u16, 1)]),
     }
 }
 
@@ -211,8 +213,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let Some(state) = app.bulk_upload_state.as_ref() else {
         return;
     };
-    let inner = form::render_modal_frame(f, app, area, form::title(title(state), ""));
-    let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    let (body, footer) = form::render_panel_frame(f, app, area, form::title(title(state), ""));
 
     let (buttons, hints): Footer = match state {
         BulkUploadState::PathInput { .. } => (
@@ -240,8 +241,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
     form::button_row(f, app, footer, buttons, hints);
 
     if let BulkUploadState::PathInput { path, loading } = state {
-        let [editor, note] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
+        let [editor, note] = form::split(PATH_ROWS, body);
         form::render_editor(f, app, editor, "CSV path", path, !loading, 0);
         f.render_widget(
             Paragraph::new(Span::styled(

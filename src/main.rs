@@ -746,10 +746,10 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         ])
         .split(f.area());
     // A panel docks at the bottom of the content, which shrinks to make room.
-    let panel = widgets::dock::open(app);
+    let panel = widgets::dock::plan(app, chunks[1]);
     let [content, dock] = Layout::vertical([
         Constraint::Min(0),
-        Constraint::Length(panel.map_or(0, |panel| widgets::dock::height(app, panel, chunks[1]))),
+        Constraint::Length(panel.as_ref().map_or(0, |panel| panel.height)),
     ])
     .areas(chunks[1]);
 
@@ -790,9 +790,8 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         // The panel has its own hints.
         Line::default()
     } else if detail {
-        let hints = footer::pairs_line(widgets::ticket_detail::hints(app), chunks[3].width);
-        footer::register_keys(app, &hints, chunks[3]);
-        hints
+        footer::render_pairs(f, app, chunks[3], widgets::ticket_detail::hints(app));
+        Line::default()
     } else {
         footer::line(app, &config.preferences.theme, chunks[3].width)
     };

@@ -1,35 +1,37 @@
 use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
 
-use super::form;
+use super::form::{self, Row};
 use crate::app::{App, ISSUE_TYPES};
 
-/// Rows of the pickers: their label and three options.
+/// Rows of the pickers: their label and three options, down to the label and the chosen one.
 const PICKER_ROWS: u16 = 4;
 
-/// The rows the panel's body needs: the pickers, the summary and labels, the description (its
-/// label and from 3 to 12 lines) and the buttons.
-pub fn rows(app: &App) -> u16 {
+/// The panel's body: the pickers, the summary and labels, and the description (its label and
+/// from 3 to 12 lines).
+fn rows(app: &App) -> [Row; 4] {
     let lines = app
         .create_ticket
         .as_ref()
         .map_or(0, |s| s.description.lines().len());
-    PICKER_ROWS + 1 + 1 + 1 + lines.clamp(3, 12) as u16 + 1
+    [
+        Row::flex(PICKER_ROWS, 2),
+        Row::fixed(1),
+        Row::fixed(1),
+        Row::flex(1 + lines.clamp(3, 12) as u16, 1),
+    ]
+}
+
+pub fn need(app: &App) -> form::Need {
+    form::need(&rows(app))
 }
 
 pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let Some(state) = &app.create_ticket else {
         return;
     };
-    let inner = form::render_modal_frame(f, app, area, form::title("Create Ticket", ""));
-    let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
-    let [pickers, summary, labels, description] = Layout::vertical([
-        Constraint::Length(PICKER_ROWS),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(0),
-    ])
-    .areas(body);
+    let (body, footer) = form::render_panel_frame(f, app, area, form::title("Create Ticket", ""));
+    let [pickers, summary, labels, description] = form::split(rows(app), body);
     let [kind, assignee, epic] = Layout::horizontal([
         Constraint::Percentage(24),
         Constraint::Percentage(38),
