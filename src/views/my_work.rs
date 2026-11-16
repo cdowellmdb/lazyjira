@@ -5,33 +5,27 @@ use ratatui::text::{Line, Span};
 use crate::app::App;
 use crate::style;
 use crate::views::common::{
-    cells_width, key_width, lead_width, Columns, ListLines, Shared, COLUMN_GAP, UPDATED_WIDTH,
+    key_width, lead_width, Columns, ListLines, Shared, Trailing, COLUMN_GAP, UPDATED_WIDTH,
 };
 
 /// The least Summary keeps on a terminal too narrow for it, the row running off the edge.
 const SUMMARY_FLOOR: usize = 12;
 
-/// (summary, epic, labels) widths: Epic (24) and Labels (22) are drawn only where Summary keeps
-/// `SUMMARY_MIN` beside them, Labels dropped first, judged as if no ticket were marked so that
-/// marking never adds or drops a column. Summary takes the rest, and never less than
+/// Summary's width and the trailing cells: Epic (24) and Labels (22) are drawn only where Summary
+/// keeps `SUMMARY_MIN` beside them, Labels dropped first, judged as if no ticket were marked so
+/// that marking never adds or drops a column. Summary takes the rest, and never less than
 /// `SUMMARY_FLOOR`.
 pub(super) fn my_work_column_widths(
     area: Rect,
     lead: usize,
     key_w: usize,
     shared: &Shared,
-) -> (usize, usize, usize) {
+) -> (usize, Trailing) {
     let width = area.width as usize;
     let fixed = key_w + 2 * COLUMN_GAP + UPDATED_WIDTH;
-    let unmarked_room = width.saturating_sub(lead_width(false) + fixed);
-    let (epic_w, labels_w) = shared.trailing_widths(unmarked_room, 24, 22);
-    let room = width.saturating_sub(lead + fixed);
-    (
-        room.saturating_sub(cells_width(epic_w, labels_w))
-            .max(SUMMARY_FLOOR),
-        epic_w,
-        labels_w,
-    )
+    let trailing = shared.trailing(width.saturating_sub(lead_width(false) + fixed), 24, 22);
+    let summary = width.saturating_sub(lead + fixed + trailing.width());
+    (summary.max(SUMMARY_FLOOR), trailing)
 }
 
 /// What My Work shows with no rows: a scene when nothing is left to do (no active ticket, and no
@@ -67,8 +61,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, compact: Option<u16
     let key_w = key_width(&grouped);
     let mut lines = ListLines::new(app).compact(compact);
     let ages = lines.ages();
-    let (summary_w, epic_w, labels_w) =
-        my_work_column_widths(area, lines.lead_width(), key_w, &shared);
+    let (summary_w, trailing) = my_work_column_widths(area, lines.lead_width(), key_w, &shared);
 
     if !grouped.is_empty() {
         lines.intro(Some(&shared), area.width as usize);
@@ -84,7 +77,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, compact: Option<u16
 
         for row in tickets {
             let (line, base) = lines.ticket_row(group, row, key_w, summary_w, false, |_| vec![]);
-            shared.push_trailing_cells(ages, line, row.1, base, epic_w, labels_w);
+            shared.push_trailing_cells(ages, line, row.1, base, trailing);
         }
 
         // Blank line between groups

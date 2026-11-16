@@ -5,7 +5,7 @@ use super::support::*;
 use crate::app::{App, Tab};
 use crate::cache::{TeamMember, Ticket};
 use crate::mouse::Target;
-use crate::views::common::{Columns, Shared};
+use crate::views::common::{Columns, Shared, Trailing};
 use crate::views::{my_work, my_work::my_work_column_widths};
 use ratatui::{backend::TestBackend, layout::Rect, Terminal};
 
@@ -323,12 +323,20 @@ fn summary_is_exactly_37_beside_epic_at_86_columns_and_marking_takes_2_cells_fro
     assert_eq!(key_w, 12);
     let widths =
         |width, lead| my_work_column_widths(Rect::new(0, 0, width, 10), lead, key_w, &shared);
-    assert_eq!(widths(85, 3), (62, 0, 0));
-    assert_eq!(widths(86, 3), (37, 24, 0));
-    assert_eq!(widths(85, 5), (60, 0, 0));
-    assert_eq!(widths(86, 5), (35, 24, 0));
-    assert_eq!(widths(110, 3), (37, 24, 22));
-    assert_eq!(widths(110, 5), (35, 24, 22));
+    let epic = Trailing {
+        epic: Some(24),
+        labels: None,
+    };
+    let both = Trailing {
+        epic: Some(24),
+        labels: Some(22),
+    };
+    assert_eq!(widths(85, 3), (62, Trailing::NONE));
+    assert_eq!(widths(86, 3), (37, epic));
+    assert_eq!(widths(85, 5), (60, Trailing::NONE));
+    assert_eq!(widths(86, 5), (35, epic));
+    assert_eq!(widths(110, 3), (37, both));
+    assert_eq!(widths(110, 5), (35, both));
 }
 
 #[test]
@@ -345,7 +353,7 @@ fn my_work_keeps_summary_at_12_columns_however_narrow_the_terminal() {
         (35, 12),
         (36, 13),
     ] {
-        let (got, epic, labels) = my_work_column_widths(Rect::new(0, 0, width, 10), 3, 12, &shared);
-        assert_eq!((got, epic, labels), (summary, 0, 0), "{width} columns");
+        let widths = my_work_column_widths(Rect::new(0, 0, width, 10), 3, 12, &shared);
+        assert_eq!(widths, (summary, Trailing::NONE), "{width} columns");
     }
 }

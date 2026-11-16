@@ -6,7 +6,7 @@ use crate::app::{App, FilterFocus};
 use crate::style;
 use crate::views::common::{
     gutter, highlight_row, key_width, narrow_for_summary, status_cell, status_width, Columns,
-    ListLines, Shared, COLUMN_GAP, GUTTER, STATUS_DOT_WIDTH, UPDATED_WIDTH,
+    ListLines, Shared, Trailing, COLUMN_GAP, GUTTER, STATUS_DOT_WIDTH, UPDATED_WIDTH,
 };
 
 /// Rows a pane's title and the blank line under it take.
@@ -213,7 +213,7 @@ fn render_results(
                 let (line, base) = lines.ticket_row(&group, row, key_w, summary_w, false, |base| {
                     vec![status_cell(app, row.1, base, status_w)]
                 });
-                shared.push_trailing_cells(ages, line, row.1, base, 0, 0);
+                shared.push_trailing_cells(ages, line, row.1, base, Trailing::NONE);
             }
 
             lines.push("");

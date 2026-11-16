@@ -4,7 +4,7 @@ use ratatui::text::Span;
 use crate::app::App;
 use crate::style;
 use crate::views::common::{
-    key_width, narrow_for_summary, status_cell, status_width, Columns, ListLines, Shared,
+    key_width, narrow_for_summary, status_cell, status_width, Columns, ListLines, Shared, Trailing,
     COLUMN_GAP, STATUS_DOT_WIDTH, UPDATED_WIDTH,
 };
 
@@ -58,7 +58,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, compact: Option<u16
             let (line, base) = lines.ticket_row(&group, row, key_w, summary_w, false, |base| {
                 vec![status_cell(app, row.1, base, status_w)]
             });
-            shared.push_trailing_cells(ages, line, row.1, base, 0, 0);
+            shared.push_trailing_cells(ages, line, row.1, base, Trailing::NONE);
         }
 
         lines.push("");

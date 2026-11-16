@@ -629,14 +629,29 @@ pub fn status_label<'a>(app: &App, status: &'a str) -> &'a str {
 /// judged as if nothing were marked, and the checkbox takes its cells from Summary.
 pub const SUMMARY_MIN: usize = 37;
 
-/// The columns an Epic cell of `epic_w` and a Labels cell of `labels_w` take, with their gaps; a
-/// width of 0 is a column not drawn and takes none.
-pub fn cells_width(epic_w: usize, labels_w: usize) -> usize {
-    [epic_w, labels_w]
-        .into_iter()
-        .filter(|&w| w > 0)
-        .map(|w| COLUMN_GAP + w)
-        .sum()
+/// The Epic and Labels cells a list draws after Summary: `Some(width)` for a column drawn, `None`
+/// for one not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Trailing {
+    pub epic: Option<usize>,
+    pub labels: Option<usize>,
+}
+
+impl Trailing {
+    /// Neither column: what Unassigned and Filters, which have none, draw.
+    pub const NONE: Trailing = Trailing {
+        epic: None,
+        labels: None,
+    };
+
+    /// The columns the cells take, each with the gap before it.
+    pub fn width(self) -> usize {
+        [self.epic, self.labels]
+            .into_iter()
+            .flatten()
+            .map(|width| COLUMN_GAP + width)
+            .sum()
+    }
 }
 
 /// The columns a tab has that `Shared` may hide, which decides what its shared line names.
@@ -697,28 +712,27 @@ impl Shared {
         }
     }
 
-    /// The Epic and Labels widths (0 for a column not drawn) a list has room for, with `room`
-    /// columns for Summary and these two. A column is drawn at its full width or not at all:
-    /// Labels is dropped first, then Epic, until Summary keeps `SUMMARY_MIN`. A column every row
-    /// shares needs no room, and a width of 0 in `epic_w` or `labels_w` has none to give.
-    pub fn trailing_widths(&self, room: usize, epic_w: usize, labels_w: usize) -> (usize, usize) {
-        let wanted = |shown: bool, width: usize| if shown { width } else { 0 };
-        let (epic, labels) = (
-            wanted(self.epic_column, epic_w),
-            wanted(self.labels_column, labels_w),
-        );
-        let fits = |extra: usize| room >= SUMMARY_MIN + extra;
-        if fits(cells_width(epic, labels)) {
-            (epic, labels)
-        } else if fits(cells_width(epic, 0)) {
-            (epic, 0)
-        } else {
-            (0, 0)
-        }
+    /// The Epic and Labels cells a list has room for, with `room` columns for Summary and these
+    /// two, each at most `epic_max` and `labels_max` wide. A column is drawn at its full width or
+    /// not at all: Labels is dropped first, then Epic, until Summary keeps `SUMMARY_MIN`. A column
+    /// every row shares needs no room.
+    pub fn trailing(&self, room: usize, epic_max: usize, labels_max: usize) -> Trailing {
+        let wanted = Trailing {
+            epic: self.epic_column.then_some(epic_max),
+            labels: self.labels_column.then_some(labels_max),
+        };
+        let epic_only = Trailing {
+            labels: None,
+            ..wanted
+        };
+        [wanted, epic_only]
+            .into_iter()
+            .find(|cells| room >= SUMMARY_MIN + cells.width())
+            .unwrap_or(Trailing::NONE)
     }
 
-    /// Pushes a row's trailing cells, a `COLUMN_GAP` apart: Epic (when `epic_w` is not 0), Updated
-    /// (`Ages::updated_cell`), and Labels (when `labels_w` is not 0), muted in `base`, the row's
+    /// Pushes a row's trailing cells, a `COLUMN_GAP` apart: Epic (when `trailing` has it), Updated
+    /// (`Ages::updated_cell`), and Labels (when `trailing` has them), muted in `base`, the row's
     /// style.
     pub fn push_trailing_cells(
         &self,
@@ -726,21 +740,20 @@ impl Shared {
         row: &mut Line<'static>,
         ticket: &Ticket,
         base: Style,
-        epic_w: usize,
-        labels_w: usize,
+        trailing: Trailing,
     ) {
         let gap = Span::raw(" ".repeat(COLUMN_GAP));
-        if epic_w > 0 {
+        if let Some(width) = trailing.epic {
             let epic = ticket.epic_name.as_deref().unwrap_or("-");
             row.push_span(gap.clone());
-            row.push_span(Span::styled(fit(epic, epic_w), muted(base)));
+            row.push_span(Span::styled(fit(epic, width), muted(base)));
         }
         row.push_span(gap.clone());
         row.push_span(Span::styled(ages.updated_cell(ticket), muted(base)));
-        if labels_w > 0 {
+        if let Some(width) = trailing.labels {
             row.push_span(gap);
             row.push_span(Span::styled(
-                fit(&self.row_labels(ticket), labels_w),
+                fit(&self.row_labels(ticket), width),
                 muted(base),
             ));
         }
@@ -1040,5 +1053,67 @@ mod tests {
         ] {
             assert_eq!(age(now - ago, now), expected, "{ago}s ago");
         }
+    }
+
+    /// A `Shared` whose rows differ in both epics and labels, so each column is wanted.
+    fn both_columns() -> Shared {
+        Shared {
+            epic: None,
+            labels: vec![],
+            epic_column: true,
+            labels_column: true,
+        }
+    }
+
+    #[test]
+    fn trailing_drops_labels_then_epic_until_summary_keeps_its_minimum() {
+        let (epic, labels) = (24, 22);
+        let at = |room| both_columns().trailing(room, epic, labels);
+        let epic_only = Trailing {
+            epic: Some(24),
+            labels: None,
+        };
+        // Epic and a gap need 26 beside Summary's 37, Labels and a gap 24 more.
+        assert_eq!(at(87).width(), 26 + 24);
+        assert_eq!(
+            at(87),
+            Trailing {
+                epic: Some(24),
+                labels: Some(22)
+            }
+        );
+        assert_eq!(at(86), epic_only);
+        assert_eq!(at(63), epic_only);
+        assert_eq!(at(62), Trailing::NONE);
+        assert_eq!(at(0), Trailing::NONE);
+        assert_eq!(SUMMARY_MIN + COLUMN_GAP + epic, 63);
+    }
+
+    #[test]
+    fn trailing_asks_no_room_for_a_column_every_row_shares() {
+        let labels_only = Shared {
+            epic_column: false,
+            ..both_columns()
+        };
+        let cells = Trailing {
+            epic: None,
+            labels: Some(22),
+        };
+        assert_eq!(labels_only.trailing(61, 24, 22), cells);
+        assert_eq!(labels_only.trailing(60, 24, 22), Trailing::NONE);
+        let neither = Shared {
+            labels_column: false,
+            ..labels_only
+        };
+        assert_eq!(neither.trailing(200, 24, 22), Trailing::NONE);
+    }
+
+    #[test]
+    fn trailing_width_counts_a_gap_before_each_cell_drawn() {
+        let width = |epic, labels| Trailing { epic, labels }.width();
+        assert_eq!(width(None, None), 0);
+        assert_eq!(width(Some(24), None), 26);
+        assert_eq!(width(None, Some(22)), 24);
+        assert_eq!(width(Some(24), Some(22)), 50);
     }
 }
