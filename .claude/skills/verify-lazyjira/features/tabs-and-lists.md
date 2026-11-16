@@ -36,4 +36,4 @@ Preconditions:
 
 - Done groups start folded in My Work. DEMO-110 is hidden until you unfold or press `d`.
 - Team includes you (Alex Rivera) per the README. Check that before calling an extra row a bug.
-- The `💤` ages come from the fake data's dates relative to today. They change as the real clock moves.
+- The ages come from the fake data's dates relative to today. They change as the real clock moves. A stale ticket shows its age with no icon.

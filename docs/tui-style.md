@@ -140,7 +140,7 @@ The work ships as a stack of four PRs, each based on the one below.
 
 ## Rules for new UI
 
-- Take a style from the shared module. Do not write `Color::Cyan` or `Modifier::BOLD` inline in a renderer.
+- Take a style from `src/style.rs`. Do not write `Color::Cyan` or `Modifier::BOLD` inline in a renderer.
 - Add a `TestBackend` snapshot for any new screen, at 80 and 120 columns.
 - Test wide characters with `unicode-width`, not `str::len`.
 - Update this guide when a rule changes.

@@ -38,9 +38,9 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 **Little joys**
 - Confetti when Jira confirms a ticket's move to Done, and a screen-wide shower, with the epic's progress bar in rainbow colors, when that finishes an epic
 - Quitting prints a receipt of the session (shipped, moved, commented, created) that stays in your terminal
-- Active tickets nobody has touched for 3 weeks show 💤 before their age; after 90 days 🦕, and the row fades. The detail view puts the wait in perspective
+- Active tickets nobody has touched for 3 weeks show their age as usual; after 90 days the row fades. The detail view puts the wait in perspective
 - An empty My Work shows a little scene instead of an empty table, picked each time you start lazyjira
-- Spooky season, October 15th to 31st: 🎃 in the title, 👻 and 💀 for stale tickets, Blocked shows as Cursed, and a `spooky` theme to try
+- Spooky season, October 15th to 31st: a ghost in the empty My Work, Blocked shows as Cursed, and a `spooky` theme to try
 - Set `preferences.delight = false` to turn all of these off
 
 ## Requirements
@@ -149,7 +149,7 @@ accent = "#4fd1c5"
 | `preferences.show_done` | `true` | Whether Done tickets are visible. Updated when you press `d` or save preferences. |
 | `preferences.start_tab` | `"My Work"` | Starting tab: `My Work`, `Team`, `Epics`, `Unassigned`, or `Filters`. |
 | `preferences.theme` | `"default"` | Color theme: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin`, `solarized-light`, `spooky`, or a custom theme's name, in any case. An unknown name uses the default. |
-| `preferences.delight` | `true` | Confetti, the quit receipt, stale-ticket marks, the empty My Work scene and spooky season. See [Little joys](#features). |
+| `preferences.delight` | `true` | Confetti, the quit receipt, stale-ticket fading, the empty My Work scene and spooky season. See [Little joys](#features). |
 | `preferences.wrap_summaries` | `false` | Wrap a ticket's summary onto as many lines as it needs, in every tab, instead of cutting it with `...`. Epic headers in the Epics tab stay on one line. Set it with **Wrap summaries** in settings (`S`). |
 | `themes.<name>` | empty | Custom themes. See [Themes](#themes). |
 
@@ -200,9 +200,11 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 | `?` | Keybindings help |
 | `q` | Quit |
 
+The bottom line lists the keys that matter most, like `Tab switch · j/k move · Enter open · ? more`. As the terminal narrows it drops the least important keys from the right, never half of one, and `? more` always stays; `?` lists every key. Whatever differs from the defaults sits muted at the right edge while it fits: how many tickets are selected, hidden Done groups, the focused status, a refresh in progress, how stale the cache is, and epics syncing. The Filters tab has its own keys there.
+
 Each tab remembers its selection, search, status focus, and folded groups during the session. Folded parents are one set shared by every tab: a parent folded in My Work is folded in Epics too. A folded parent shows `▶` and how many sub-tasks are hidden, and a sub-task whose parent is in another group leads with the parent's key, muted. Done groups start folded in My Work and each time a filter runs, and list the most recently updated tickets first.
 
-Rows are marked `☐`, or `☒` when selected; a group header shows `⊟` when only some of its tickets are selected. My Work, Team, Unassigned and Filters show an Updated column with how long ago Jira last changed each ticket (`12m`, `5h`, `2d`, `3w`). An active ticket unchanged for 3 weeks leads its age with 💤, and after 90 days with 🦕, its summary muted (👻 and 💀 in late October). When every row with an epic shares it, or every row carries the same labels, a muted line under the column headers names them once, like `all rows · epic Payments Platform Revamp · DEMO, Q3` (Unassigned, already grouped by epic, names only labels). My Work and Team then drop the Epic column, and their Labels column keeps only the labels that differ.
+Rows are marked `☐`, or `☒` when selected; a group header shows `⊟` when only some of its tickets are selected. My Work, Team, Unassigned and Filters show an Updated column with how long ago Jira last changed each ticket (`12m`, `5h`, `2d`, `3w`). An active ticket unchanged for 3 weeks keeps its plain age, and after 90 days its row fades. When every row with an epic shares it, or every row carries the same labels, a muted line under the column headers names them once, like `all rows · epic Payments Platform Revamp · DEMO, Q3` (Unassigned, already grouped by epic, names only labels). My Work and Team then drop the Epic column, and their Labels column keeps only the labels that differ.
 
 Refresh keeps the loaded list visible and follows the selected ticket even when other rows are added or reordered.
 
