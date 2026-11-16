@@ -2,6 +2,7 @@
 //! and the look of code, headings, bullets and quotes.
 
 use super::*;
+use crate::app::DetailMode;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
@@ -57,6 +58,16 @@ async fn pane(width: u16, height: u16) -> (App, Vec<String>) {
     (app, rows)
 }
 
+/// `pane`'s app with the activity view open (`h`), drawn at `width` x `height`.
+async fn history(width: u16, height: u16) -> (App, Vec<String>) {
+    let mut config = sample_config();
+    let (mut app, _) = pane(width, height).await;
+    press(&mut app, &mut config, KeyCode::Char('h')).await;
+    assert!(matches!(app.detail_mode, DetailMode::History { .. }));
+    let rows = screen(&app, width, height);
+    (app, rows)
+}
+
 fn buffer(app: &App, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| ui(f, app, &sample_config())).unwrap();
@@ -86,11 +97,11 @@ fn pane_rows(rows: &[String], width: u16) -> &[String] {
 }
 
 /// The row of the rule under the header fields.
-fn header_rule(rows: &[String]) -> usize {
+fn header_rule(rows: &[String], first: usize) -> usize {
     let below_the_top_bar = &rows[2..];
     2 + below_the_top_bar
         .iter()
-        .position(|row| cells(row, TEXT_FIRST, 2) == "──")
+        .position(|row| cells(row, first, 2) == "──")
         .unwrap_or_else(|| panic!("no rule\n{}", rows.join("\n")))
 }
 
@@ -99,7 +110,7 @@ async fn the_pane_text_ends_two_cells_before_the_scrollbar_column_at_120_and_160
     for (width, last) in TEXT_LAST {
         let (_, rows) = pane(width, 40).await;
         let case = format!("{width} columns\n{}", rows.join("\n"));
-        let rule = &rows[header_rule(&rows)];
+        let rule = &rows[header_rule(&rows, TEXT_FIRST)];
         // The lead cell, the text, two blank cells, then the scrollbar's column.
         assert_eq!(cells(rule, TEXT_FIRST - 1, 1), " ", "{case}");
         assert_eq!(
@@ -133,7 +144,7 @@ async fn one_blank_row_follows_the_rule_under_the_header_fields() {
     for (width, _) in TEXT_LAST {
         let (_, rows) = pane(width, 40).await;
         let case = format!("{width} columns\n{}", rows.join("\n"));
-        let rule = header_rule(&rows);
+        let rule = header_rule(&rows, TEXT_FIRST);
         assert!(
             cells(&rows[rule - 2], 51, 20).contains("Assignee"),
             "{case}"
@@ -275,7 +286,7 @@ async fn the_drag_area_and_the_scroll_page_match_the_drawn_pane_at_120_and_160_c
         );
         assert_eq!(app.detail_page_height.get(), page, "{case}");
 
-        let rule = header_rule(&rows) as u16;
+        let rule = header_rule(&rows, TEXT_FIRST) as u16;
         // Dragging across the rule, the gap and the scrollbar copies the text cells only.
         let copied = drag(width, (52, rule), (width - 1, rule)).await.unwrap();
         assert_eq!(copied, "─".repeat(text_width as usize), "{case}");
@@ -332,5 +343,93 @@ fn the_epic_view_ends_two_cells_before_the_scrollbar_column_too() {
                 .any(|row| cells(row, last + 3, 1) == "█"),
             "{case}"
         );
+    }
+}
+
+/// The column after the last text cell of any pane row: the activity view's widest line.
+fn text_end(rows: &[String]) -> usize {
+    rows[2..rows.len() - 1]
+        .iter()
+        .map(|row| cells(row, 52, 200).trim_end().chars().count() + 52)
+        .max()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_history_view_keeps_the_drag_area_and_text_cells_it_had_before_stage_5() {
+    // Pinned to what `feat/tui-narrow-docs` draws: the pane less one cell on each side, so the
+    // text runs from column 52 to the column before the scrollbar's.
+    for (width, area, last) in [
+        (120, Rect::new(52, 2, 67, 37), 118),
+        (160, Rect::new(52, 2, 107, 37), 158),
+    ] {
+        let (mut app, _) = history(width, 40).await;
+        // An author no wider line holds, so it is broken at the text's last cell.
+        app.cache.my_tickets[29].activity[0].author = "x".repeat(300);
+        app.mark_cache_changed();
+        let rows = screen(&app, width, 40);
+        let case = format!("{width} columns\n{}", rows.join("\n"));
+        let areas = app.text_selection.borrow().areas.clone();
+        assert!(areas.contains(&area), "{areas:?}\n{case}");
+        assert_eq!(cells(&rows[3], 51, 12), " Activity: c", "{case}");
+        assert_eq!(text_end(&rows), last + 1, "{case}");
+        assert!(
+            rows.iter()
+                .any(|row| cells(row, 52, last - 51) == "x".repeat(last - 51)),
+            "{case}"
+        );
+        for row in &rows[2..rows.len() - 1] {
+            assert_eq!(cells(row, last + 1, 1), " ", "{case}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn at_80_columns_the_pane_fills_the_area_and_its_text_ends_before_the_scrollbar() {
+    let (app, rows) = pane(80, 24).await;
+    let case = rows.join("\n");
+    assert!(rows.iter().all(|row| !row.contains("LEAK-")), "{case}");
+    assert!(rows.iter().all(|row| cells(row, 50, 1) != "│"), "{case}");
+    let areas = app.text_selection.borrow().areas.clone();
+    assert!(
+        areas.contains(&Rect::new(1, 2, 76, 20)),
+        "{areas:?}\n{case}"
+    );
+    assert_eq!(app.detail_page_height.get(), 19, "{case}");
+    let rule = header_rule(&rows, 1);
+    assert_eq!(
+        cells(&rows[rule], 0, 79),
+        format!(" {}  ", "─".repeat(76)),
+        "{case}"
+    );
+    for row in pane_rows(&rows, 80) {
+        assert_eq!(cells(row, 77, 2), "  ", "{case}");
+        assert!(matches!(cells(row, 79, 1).as_str(), "█" | " "), "{case}");
+    }
+}
+
+#[tokio::test]
+async fn zoomed_at_160_columns_the_pane_text_runs_from_column_1_to_156() {
+    let mut config = sample_config();
+    let (mut app, _) = pane(160, 40).await;
+    press(&mut app, &mut config, KeyCode::Char('z')).await;
+    let rows = screen(&app, 160, 40);
+    let case = rows.join("\n");
+    assert!(rows.iter().all(|row| !row.contains("LEAK-")), "{case}");
+    let areas = app.text_selection.borrow().areas.clone();
+    assert!(
+        areas.contains(&Rect::new(1, 2, 156, 37)),
+        "{areas:?}\n{case}"
+    );
+    assert_eq!(app.detail_page_height.get(), 36, "{case}");
+    let rule = header_rule(&rows, 1);
+    assert_eq!(
+        cells(&rows[rule], 0, 159),
+        format!(" {}  ", "─".repeat(156)),
+        "{case}"
+    );
+    for row in pane_rows(&rows, 160) {
+        assert_eq!(cells(row, 157, 2), "  ", "{case}");
+        assert!(matches!(cells(row, 159, 1).as_str(), "█" | " "), "{case}");
     }
 }
