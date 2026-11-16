@@ -6,7 +6,7 @@ use crate::app::{App, Tab};
 use crate::cache::{TeamMember, Ticket};
 use crate::mouse::Target;
 use crate::views::columns::{Columns, Shared, Trailing};
-use crate::views::{my_work, my_work::my_work_column_widths};
+use crate::views::{my_work, my_work::my_work_column_widths, team};
 use ratatui::{backend::TestBackend, layout::Rect, Terminal};
 
 /// DEMO-101's row from `draw`, `width` columns wide, with the cursor on it.
@@ -180,7 +180,7 @@ fn team_app() -> App {
 #[test]
 fn team_draws_epic_from_91_columns_and_labels_from_111_and_always_keeps_status_and_updated() {
     // Lead 3, Key 6, the Status dot and "In Progress" (11), Updated 4 and three gaps leave 32.
-    // Summary keeps 37, so Epic (20 and a gap) needs 94 columns, Epic and Labels (18 and a gap) 114.
+    // Summary keeps 37, so Epic (20 and a gap) needs 91 columns, Epic and Labels (18 and a gap) 111.
     let app = team_app();
     for (width, expected) in [
         (60, (false, false)),
@@ -207,24 +207,33 @@ fn team_draws_epic_from_91_columns_and_labels_from_111_and_always_keeps_status_a
     );
 }
 
+/// The mouse targets and selectable areas `render` registers for `app` in a `width` x 12 frame.
+fn registered_cells(
+    app: &App,
+    width: u16,
+    render: fn(&mut ratatui::Frame, Rect, &App, Option<u16>),
+) -> (Vec<(Rect, Target)>, Vec<Rect>) {
+    app.mouse_targets.borrow_mut().clear();
+    app.text_selection.borrow_mut().areas.clear();
+    let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+    terminal.draw(|f| render(f, f.area(), app, None)).unwrap();
+    let targets = app.mouse_targets.borrow().clone();
+    let areas = app.text_selection.borrow().areas.clone();
+    (targets, areas)
+}
+
 #[test]
 fn rows_register_the_same_click_and_drag_cells_at_80_and_120_columns() {
+    // Item 1 is DEMO-101 on screen row 2, item 2 DEMO-111 on row 3, item 3 the Ready for Work
+    // header on row 5: each row is selectable across the whole width, its mark is the three
+    // gutter cells, and DEMO-101's fold arrow is the cell after its key.
     let mut app = mockup_app();
     app.selected_index = 1;
     for width in [80u16, 120] {
-        app.mouse_targets.borrow_mut().clear();
-        app.text_selection.borrow_mut().areas.clear();
-        let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
-        terminal
-            .draw(|f| my_work::render(f, f.area(), &app, None))
-            .unwrap();
-        // Item 1 is DEMO-101 on screen row 2, item 2 DEMO-111 on row 3, item 3 the Ready for Work
-        // header on row 5: each row is selectable across the whole width, its mark is the three
-        // gutter cells, and DEMO-101's fold arrow is the cell after its key.
+        let (targets, areas) = registered_cells(&app, width, my_work::render);
         let row = |index, y| (Rect::new(0, y, width, 1), Target::Row(index));
         let mark = |index, y| (Rect::new(0, y, 3, 1), Target::Mark(index));
         let fold = |index, x, y| (Rect::new(x, y, 1, 1), Target::Fold(index));
-        let targets = app.mouse_targets.borrow();
         assert_eq!(
             targets[..9],
             [
@@ -241,9 +250,94 @@ fn rows_register_the_same_click_and_drag_cells_at_80_and_120_columns() {
             "{width} columns"
         );
         // A drag copies from the key on: the gutter is not selectable.
-        let areas = &app.text_selection.borrow().areas;
         assert_eq!(areas[..], [Rect::new(3, 0, width - 3, 12)], "{width}");
     }
+}
+
+#[test]
+fn marked_rows_register_the_same_cells_at_80_and_120_columns_with_a_wider_gutter() {
+    let mut app = mockup_app();
+    app.selected_index = 1;
+    app.selected_ticket_keys.insert("DEMO-201".into());
+    for width in [80u16, 120] {
+        let (targets, areas) = registered_cells(&app, width, my_work::render);
+        let row = |index, y| (Rect::new(0, y, width, 1), Target::Row(index));
+        let mark = |index, y| (Rect::new(0, y, 5, 1), Target::Mark(index));
+        let fold = |index, x, y| (Rect::new(x, y, 1, 1), Target::Fold(index));
+        assert_eq!(
+            targets[..9],
+            [
+                row(0, 1),
+                mark(0, 1),
+                fold(0, 1, 1),
+                row(1, 2),
+                mark(1, 2),
+                fold(1, 14, 2),
+                row(2, 3),
+                mark(2, 3),
+                row(3, 5),
+            ],
+            "{width} columns"
+        );
+        assert_eq!(areas[..], [Rect::new(5, 0, width - 5, 12)], "{width}");
+    }
+}
+
+#[test]
+fn team_rows_register_the_same_cells_at_80_and_120_columns_marked_or_not() {
+    let mut app = demo_team_app();
+    for marked in [false, true] {
+        if marked {
+            app.selected_ticket_keys.insert("DEMO-101".into());
+        }
+        let lead = if marked { 5 } else { 3 };
+        for width in [80u16, 120] {
+            let (targets, areas) = registered_cells(&app, width, team::render);
+            let row = |index, y| (Rect::new(0, y, width, 1), Target::Row(index));
+            let mark = |index, y| (Rect::new(0, y, lead as u16, 1), Target::Mark(index));
+            // Alex's header is on screen row 1, DEMO-101 on row 2 and its sub-task DEMO-111 on row 3.
+            let head = (Rect::new(1, 1, 1, 1), Target::Fold(0));
+            assert_eq!(
+                targets[..7],
+                [
+                    row(0, 1),
+                    mark(0, 1),
+                    head,
+                    row(1, 2),
+                    mark(1, 2),
+                    (Rect::new(lead as u16 + 9, 2, 1, 1), Target::Fold(1)),
+                    row(2, 3),
+                ],
+                "{width} columns, marked {marked}"
+            );
+            assert_eq!(
+                areas[..],
+                [Rect::new(lead as u16, 0, width - lead as u16, 12)],
+                "{width}, marked {marked}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_shared_epic_hides_the_column_without_moving_a_click_cell_at_120_columns() {
+    let mut app = mockup_app();
+    for ticket in &mut app.cache.my_tickets {
+        ticket.epic_name = Some("Checkout redesign".into());
+    }
+    app.mark_cache_changed();
+    app.selected_index = 1;
+    let (at_80, areas_80) = registered_cells(&app, 80, my_work::render);
+    let (at_120, areas_120) = registered_cells(&app, 120, my_work::render);
+    assert!(draw(&app, Tab::MyWork, 120)
+        .iter()
+        .all(|(row, _)| !row.contains("DEMO-101") || !row.contains("Checkout redesign")));
+    // Only the rows' widths differ.
+    let widths = |cells: &[(Rect, Target)]| -> Vec<(u16, u16, u16)> {
+        cells.iter().map(|(r, _)| (r.x, r.y, r.height)).collect()
+    };
+    assert_eq!(widths(&at_80), widths(&at_120));
+    assert_eq!(areas_80[0].x, areas_120[0].x);
 }
 
 /// The demo's Team: DEMO-101 `Ready for Work` with its sub-task DEMO-111, in one epic of its own.
@@ -356,4 +450,20 @@ fn my_work_keeps_summary_at_12_columns_however_narrow_the_terminal() {
         let widths = my_work_column_widths(Rect::new(0, 0, width, 10), 3, 12, &shared);
         assert_eq!(widths, (summary, Trailing::NONE), "{width} columns");
     }
+}
+
+#[test]
+fn at_80_columns_my_work_keeps_epic_beside_6_character_keys_and_drops_it_from_7() {
+    // `SUMMARY_MIN`'s doc: Epic needs 37 + 2 + 24 = 63 columns of room, and 80 columns leave
+    // 80 - 3 - key - 2 gaps - 4 = 69 - key.
+    let app = mockup_app();
+    let grouped = app.my_work_visible_by_status();
+    let shared = Shared::of(&grouped, Columns::EpicAndLabels);
+    let at_80 = |key_w| my_work_column_widths(Rect::new(0, 0, 80, 10), 3, key_w, &shared);
+    let epic = Trailing {
+        epic: Some(24),
+        labels: None,
+    };
+    assert_eq!(at_80(6), (37, epic));
+    assert_eq!(at_80(7), (62, Trailing::NONE));
 }
