@@ -14,21 +14,21 @@ fn app_with_groups() -> App {
     app.loading = false;
     app.cache.my_tickets = vec![
         ticket(
-            "DEMO-1",
+            "DEMO-101",
             "Add saved payment methods to checkout and then some more words to cut",
             "In Progress",
             "Checkout redesign",
             "checkout",
         ),
         ticket(
-            "DEMO-2",
+            "DEMO-102",
             "Profile slow facet queries",
             "Ready for Work",
             "Search performance",
             "search",
         ),
         ticket(
-            "DEMO-3",
+            "DEMO-103",
             "Fix tax rounding",
             "In Review",
             "Checkout redesign",
@@ -61,13 +61,13 @@ fn at_80x24_the_list_is_key_summary_and_age_with_the_footer_on_the_last_row() {
             &"─".repeat(80),
             "",
             " ● In Progress 1",
-            " › DEMO-1  Add saved payment methods to checkout and then some more wor...     -",
+            " › DEMO-101  Add saved payment methods to checkout and then some more w...     -",
             "",
             " ● Ready for Work 1",
-            "   DEMO-2  Profile slow facet queries                                          -",
+            "   DEMO-102  Profile slow facet queries                                        -",
             "",
             " ● In Review 1",
-            "   DEMO-3  Fix tax rounding                                                    -",
+            "   DEMO-103  Fix tax rounding                                                  -",
             "",
             "",
             "",
@@ -85,7 +85,7 @@ fn at_80x24_the_list_is_key_summary_and_age_with_the_footer_on_the_last_row() {
     );
     assert_eq!(rows[4].chars().count(), 80);
 
-    app.selected_ticket_keys.insert("DEMO-2".into());
+    app.selected_ticket_keys.insert("DEMO-102".into());
     let rows = screen(&app, 80, 24);
     assert_eq!(rows[3].trim_end(), " ● ☐ In Progress 1");
     assert_eq!(rows[6].trim_end(), " ● ☒ Ready for Work 1");
@@ -110,13 +110,13 @@ fn at_60x20_nothing_overflows_and_the_footer_keeps_whole_hints_and_more() {
             &"─".repeat(60),
             "",
             " ● In Progress 1",
-            " › DEMO-1  Add saved payment methods to checkout an...     -",
+            " › DEMO-101  Add saved payment methods to checkout ...     -",
             "",
             " ● Ready for Work 1",
-            "   DEMO-2  Profile slow facet queries                      -",
+            "   DEMO-102  Profile slow facet queries                    -",
             "",
             " ● In Review 1",
-            "   DEMO-3  Fix tax rounding                                -",
+            "   DEMO-103  Fix tax rounding                              -",
             "",
             "",
             "",
@@ -129,7 +129,7 @@ fn at_60x20_nothing_overflows_and_the_footer_keeps_whole_hints_and_more() {
         ]
     );
 
-    app.selected_ticket_keys.insert("DEMO-2".into());
+    app.selected_ticket_keys.insert("DEMO-102".into());
     let rows = screen(&app, 60, 20);
     assert_eq!(
         rows[18].trim_end(),

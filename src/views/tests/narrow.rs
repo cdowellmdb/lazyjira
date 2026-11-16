@@ -1,5 +1,5 @@
 //! Narrow terminals: Epic and Labels are drawn at their full width or not at all, Labels dropped
-//! first, once Summary would keep fewer than `SUMMARY_MIN` (40) columns.
+//! first, once Summary would keep fewer than `SUMMARY_MIN` (37) columns.
 
 use super::support::*;
 use crate::app::{App, Tab};
@@ -26,18 +26,18 @@ fn trailing_columns(row: &str) -> (bool, bool) {
 }
 
 #[test]
-fn my_work_draws_epic_from_89_columns_and_labels_from_113_and_keeps_the_rest_at_summary() {
-    // Lead 3, Key 12 (`  └ DEMO-111`), Updated 4 and two gaps leave 23 columns. Summary keeps 40,
-    // so Epic (24 and a gap) needs 89 columns, Epic and Labels (22 and a gap) 113.
+fn my_work_draws_epic_from_86_columns_and_labels_from_110_and_keeps_the_rest_at_summary() {
+    // Lead 3, Key 12 (`  └ DEMO-111`), Updated 4 and two gaps leave 23 columns. Summary keeps 37,
+    // so Epic (24 and a gap) needs 86 columns, Epic and Labels (22 and a gap) 110.
     let mut app = mockup_app();
     for (width, expected) in [
         (40, (false, false)),
         (60, (false, false)),
         (80, (false, false)),
-        (88, (false, false)),
-        (89, (true, false)),
-        (112, (true, false)),
-        (113, (true, true)),
+        (85, (false, false)),
+        (86, (true, false)),
+        (109, (true, false)),
+        (110, (true, true)),
         (120, (true, true)),
         (160, (true, true)),
     ] {
@@ -52,10 +52,10 @@ fn marking_moves_each_my_work_threshold_two_columns() {
     let mut app = mockup_app();
     app.selected_ticket_keys.insert("DEMO-201".into());
     for (width, expected) in [
-        (90, (false, false)),
-        (91, (true, false)),
-        (114, (true, false)),
-        (115, (true, true)),
+        (87, (false, false)),
+        (88, (true, false)),
+        (111, (true, false)),
+        (112, (true, true)),
     ] {
         let row = my_work_row(&mut app, width);
         assert_eq!(trailing_columns(&row), expected, "{width} columns: {row}");
@@ -63,13 +63,13 @@ fn marking_moves_each_my_work_threshold_two_columns() {
 }
 
 #[test]
-fn a_column_every_row_shares_takes_no_room_so_labels_alone_come_at_87_columns() {
+fn a_column_every_row_shares_takes_no_room_so_labels_alone_come_at_84_columns() {
     let mut app = mockup_app();
     for ticket in &mut app.cache.my_tickets {
         ticket.epic_name = Some("Checkout redesign".into());
     }
     app.mark_cache_changed();
-    for (width, labels) in [(86, false), (87, true), (120, true)] {
+    for (width, labels) in [(83, false), (84, true), (120, true)] {
         let row = my_work_row(&mut app, width);
         assert_eq!(
             trailing_columns(&row),
@@ -192,17 +192,17 @@ fn team_app() -> App {
 }
 
 #[test]
-fn team_draws_epic_from_94_columns_and_labels_from_114_and_always_keeps_status_and_updated() {
+fn team_draws_epic_from_91_columns_and_labels_from_111_and_always_keeps_status_and_updated() {
     // Lead 3, Key 6, the Status dot and "In Progress" (11), Updated 4 and three gaps leave 32.
-    // Summary keeps 40, so Epic (20 and a gap) needs 94 columns, Epic and Labels (18 and a gap) 114.
+    // Summary keeps 37, so Epic (20 and a gap) needs 94 columns, Epic and Labels (18 and a gap) 114.
     let app = team_app();
     for (width, expected) in [
         (60, (false, false)),
         (80, (false, false)),
-        (93, (false, false)),
-        (94, (true, false)),
-        (113, (true, false)),
-        (114, (true, true)),
+        (90, (false, false)),
+        (91, (true, false)),
+        (110, (true, false)),
+        (111, (true, true)),
         (120, (true, true)),
     ] {
         let rows = draw(&app, Tab::Team, width);
@@ -257,5 +257,25 @@ fn rows_register_the_same_click_and_drag_cells_at_80_and_120_columns() {
         // A drag copies from the key on: the gutter is not selectable.
         let areas = &app.text_selection.borrow().areas;
         assert_eq!(areas[..], [Rect::new(3, 0, width - 3, 12)], "{width}");
+    }
+}
+
+#[test]
+fn team_keeps_epic_and_labels_at_120_columns_beside_12_wide_keys_and_14_wide_statuses() {
+    // The demo's Team: `DEMO-101 ▼` and `  └ DEMO-111` (12) and "Ready for Work" (14) leave
+    // 3 + 12 + 14 + 2 + 4 + three gaps = 41 columns, so Epic and Labels need 41 + 37 + 42 = 120.
+    let mut app = team_app();
+    let mut child = app.cache.team_tickets[0].clone();
+    child.key = "DEMO-111".into();
+    child.parent_key = Some("DEMO-101".into());
+    app.cache.team_tickets[0].key = "DEMO-101".into();
+    app.cache.team_tickets[0].status = "Ready for Work".into();
+    app.cache.team_tickets.push(child);
+    app.mark_cache_changed();
+    for (width, labels) in [(119, false), (120, true)] {
+        let rows = draw(&app, Tab::Team, width);
+        let row = &line_with(&rows, "DEMO-101").unwrap().0;
+        assert!(row.contains("Alpha epic"), "{width}: {row}");
+        assert_eq!(row.contains("alpha-label"), labels, "{width}: {row}");
     }
 }

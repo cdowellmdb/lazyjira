@@ -621,10 +621,12 @@ pub fn status_label<'a>(app: &App, status: &'a str) -> &'a str {
     }
 }
 
-/// The width Summary keeps before a list gives room to Epic or Labels: a summary of about seven
-/// words. Below it those columns are not drawn, so an 80 column terminal shows Key, Summary and
-/// Updated (and Status where a tab has it).
-pub const SUMMARY_MIN: usize = 40;
+/// The width Summary keeps before a list gives room to Epic or Labels. Below it those columns
+/// are not drawn, so an 80 column terminal shows Key, Summary and Updated (and Status where a tab
+/// has it). It is the most that still lets a 120 column Team keep Epic and Labels beside 12 wide
+/// keys and 14 wide statuses, and the least that drops My Work's Epic at 80 for keys of 7
+/// characters or more.
+pub const SUMMARY_MIN: usize = 37;
 
 /// The columns an Epic cell of `epic_w` and a Labels cell of `labels_w` take, with their gaps; a
 /// width of 0 is a column not drawn and takes none.
