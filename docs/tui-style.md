@@ -158,7 +158,7 @@ The work ships as a stack of four PRs, each based on the one below.
 
 ### Mockup differences
 
-The code draws mockups 3, 4 and 5 with these differences, kept on purpose:
+Mockups 1 and 2 are the approved sketches and show a list with no Epic or Labels columns. The code draws them with those columns wherever the width allows (86 and 110 columns on My Work with the demo's keys), marked or not, because marking never adds or drops a column. The code draws mockups 3, 4 and 5 with these differences, kept on purpose:
 
 - Group headers keep PR 2's colored `●` and its summary column is cut with `...` where the mockup shows a single `…` and drops the dots. Truncation and the headers are PR 2 and PR 4's, and the 50-cell list pane only has room for a key and a clipped summary.
 - Mockup 3 shows the detail's `Updated` and `Customers hit this...` lines as examples. The pane shows exactly what the detail showed before (status, assignee, reporter, epic, labels, the stale quip, description, comments), so there is no `Updated` row.
