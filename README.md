@@ -11,7 +11,7 @@ lazyjira reads tickets and moves them through Jira's REST API, using the [`jira`
 Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (saved JQL).
 
 **Triage fast**
-- At 120 columns or wider the detail opens beside the list, which stays in step as you step through tickets with `←`/`→`; narrower, or after `z`, it fills the screen
+- At 120 columns or wider the detail opens beside the list, which stays in step as you step through tickets with `←`/`→`; narrower, or after `z`, it covers the list (the top bar and the footer stay)
 - Fold status groups and a parent's sub-tasks; `f` focuses one status, `d` hides Done
 - Lists show what differs: each ticket's age, shared epics and labels named once, done groups folded, status columns as wide as the longest status
 - Sub-tasks nest under their parent, or lead with its key when the parent is elsewhere

@@ -71,7 +71,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
         ],
         &[
             ("Tab", "next field"),
-            ("Shift+Enter", "newline"),
+            ("Shift+Enter/Ctrl+J", "newline"),
             ("Ctrl+E", "external editor"),
         ],
     );

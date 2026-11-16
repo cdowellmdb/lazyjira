@@ -39,6 +39,9 @@ pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
             ("Cancel", KeyCode::Esc),
             ("Editor", KeyCode::F(4)),
         ],
-        &[("Shift+Enter", "newline"), ("Ctrl+E", "external editor")],
+        &[
+            ("Shift+Enter/Ctrl+J", "newline"),
+            ("Ctrl+E", "external editor"),
+        ],
     );
 }
