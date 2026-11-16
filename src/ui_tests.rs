@@ -1037,3 +1037,54 @@ async fn clicking_the_sheets_close_cell_closes_it_and_the_cell_before_it_does_no
         }
     }
 }
+
+#[tokio::test]
+async fn the_move_panel_registers_its_close_cell_each_option_row_and_its_hint_keys() {
+    let mut config = two_saved_filters();
+    for (width, height) in [(80, 24), (120, 40), (160, 45)] {
+        let mut app = app_with_a_long_list();
+        open_panel(&mut app, &mut config, "move").await;
+        let rows = screen(&app, width, height);
+        let case = format!("{width}x{height}\n{}", rows.join("\n"));
+        let title = rows
+            .iter()
+            .position(|row| row.contains("Move LAST-30"))
+            .unwrap();
+        assert!(
+            rows[title].starts_with(" Move LAST-30 from In Progress"),
+            "{case}"
+        );
+        assert_eq!(rows[title - 1], "─".repeat(width as usize), "{case}");
+        let targets = app.mouse_targets.borrow().clone();
+        assert!(
+            targets.contains(&(
+                Rect::new(width - 6, title as u16, 5, 1),
+                mouse::Target::Key(KeyCode::Esc)
+            )),
+            "{case}"
+        );
+        let options: Vec<_> = targets
+            .iter()
+            .filter_map(|(area, target)| match target {
+                mouse::Target::Choose { index, .. } => Some((*area, *index)),
+                _ => None,
+            })
+            .collect();
+        assert!(!options.is_empty(), "{case}");
+        for (i, (area, index)) in options.iter().enumerate() {
+            assert_eq!(*index, i, "{case}");
+            assert_eq!(
+                (area.x, area.y, area.width, area.height),
+                (1, title as u16 + 1 + i as u16, width - 2, 1),
+                "{case}"
+            );
+            assert!(rows[area.y as usize].len() > 3, "{case}");
+        }
+        // Esc, as the hint line's key or the close cell, cancels the picker.
+        click(&mut app, &mut config, width - 4, title as u16).await;
+        assert!(
+            !matches!(app.detail_mode, DetailMode::MovePicker(_)),
+            "{case}"
+        );
+    }
+}
