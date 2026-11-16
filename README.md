@@ -38,7 +38,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 **Little joys**
 - Confetti when Jira confirms a ticket's move to Done, and a screen-wide shower, with the epic's progress bar in rainbow colors, when that finishes an epic
 - Quitting prints a receipt of the session (shipped, moved, commented, created) that stays in your terminal
-- Active tickets nobody has touched for 3 weeks show their age as usual; after 90 days the row fades. The detail view puts the wait in perspective
+- Active tickets untouched for 90 days fade, and the detail view puts any wait of 3 weeks or more in perspective
 - An empty My Work shows a little scene instead of an empty table, picked each time you start lazyjira
 - Spooky season, October 15th to 31st: a ghost in the empty My Work, Blocked shows as Cursed, and a `spooky` theme to try
 - Set `preferences.delight = false` to turn all of these off
