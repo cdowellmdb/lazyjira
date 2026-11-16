@@ -11,6 +11,7 @@ mod detail;
 mod dock;
 mod footer;
 mod narrow;
+mod pane;
 mod sheets;
 
 /// A click target as (x, y, width, height, target).

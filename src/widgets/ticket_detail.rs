@@ -21,6 +21,9 @@ use crate::widgets::{form, markup};
 /// Width of the field names ("Assignee", ...) in the header.
 const FIELD_WIDTH: usize = 10;
 
+/// Blank cells between the pane's text and its scrollbar column.
+const SCROLLBAR_GAP: u16 = 2;
+
 /// The narrowest content area the detail sits beside the list in. Narrower, it replaces it.
 pub const SPLIT_MIN_WIDTH: u16 = 120;
 /// Cells of the list beside the detail, which shows only keys and summaries.
@@ -131,16 +134,19 @@ pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
     }
     f.render_widget(Paragraph::new(Line::from(title)), head);
     form::close_button(f, app, head, Target::CloseDetail);
-    // A drag selects the header and the text, not the scrollbar's column.
-    crate::mouse::selectable(
-        app,
+    // A drag selects the header and the text, not the gap or the scrollbar's column.
+    let history = ticket.is_some() && matches!(app.detail_mode, DetailMode::History { .. });
+    let selectable = if history {
         Rect::new(
             area.x + 1,
             area.y,
             area.width.saturating_sub(2),
             area.height,
-        ),
-    );
+        )
+    } else {
+        text_area(area)
+    };
+    crate::mouse::selectable(app, selectable);
     match (ticket, epic) {
         (Some(ticket), _) => match &app.detail_mode {
             // The move picker docks under the detail, which keeps showing the ticket.
@@ -178,21 +184,26 @@ fn render_history(f: &mut ratatui::Frame, app: &App, body: Rect, ticket: &Ticket
     );
 }
 
-/// Draws `lines` in `area`, a cell in from the left and leaving the right column for a
-/// scrollbar, at the detail's scroll position, and records the scroll limits for the scroll
-/// keys.
+/// Where a ticket's or an epic's text goes in `area`: a cell in from the left, and ending
+/// `SCROLLBAR_GAP` cells before the scrollbar's column.
+fn text_area(area: Rect) -> Rect {
+    Rect::new(
+        area.x + u16::from(area.width > 0),
+        area.y,
+        area.width.saturating_sub(2 + SCROLLBAR_GAP),
+        area.height,
+    )
+}
+
+/// Draws `lines` in `text_area(area)` at the detail's scroll position, with the scrollbar in
+/// the last column of `area`, and records the scroll limits for the scroll keys.
 fn render_scrollable(
     f: &mut ratatui::Frame,
     app: &App,
     area: Rect,
     build: impl FnOnce(usize) -> Vec<Line<'static>>,
 ) {
-    let body = Rect::new(
-        area.x + u16::from(area.width > 0),
-        area.y,
-        area.width.saturating_sub(2),
-        area.height,
-    );
+    let body = text_area(area);
     let lines = build(body.width as usize);
     let max = lines
         .len()

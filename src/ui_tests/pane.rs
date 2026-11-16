@@ -1,0 +1,336 @@
+//! The ticket pane's text: where it ends beside the scrollbar, the space under the header rule,
+//! and the look of code, headings, bullets and quotes.
+
+use super::*;
+use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
+use ratatui::style::{Color, Modifier};
+
+const FILLER: usize = 30;
+
+fn description() -> String {
+    let mut text = String::from(
+        "h2. Problem statement\n\
+         Facet queries take {{facet_counts}} over 800 ms and skip the cache \\(see DEMO-190), so \
+         they make it worse and this line has to wrap before the end of the pane.\n\
+         \n\
+         h1. Findings\n\
+         ||Query||Hits||\n\
+         |title:*|12,400|\n\
+         \n\
+         bq. Count every facet in one pass.\n\
+         \n",
+    );
+    for n in 1..=FILLER {
+        text.push_str(&format!("* Item {n}\n"));
+    }
+    text
+}
+
+fn pane_app() -> App {
+    let mut app = app_with_a_long_list();
+    let ticket = &mut app.cache.my_tickets[29];
+    ticket.detail_loaded = true;
+    ticket.description = Some(description());
+    ticket.activity = vec![cache::ActivityEntry {
+        timestamp: "2026-09-02T10:00:00.000+0000".to_string(),
+        author: "Sam Lee".to_string(),
+        author_email: None,
+        kind: cache::ActivityKind::Comment {
+            body:
+                "Agree, and {{the cache key}} is the part to test first, so this comment is long \
+                   enough to wrap before the end of the pane."
+                    .to_string(),
+        },
+    }];
+    app.mark_cache_changed();
+    app
+}
+
+/// The pane's app with the detail of `LAST-30` open, drawn at `width` x `height`.
+async fn pane(width: u16, height: u16) -> (App, Vec<String>) {
+    let mut config = sample_config();
+    let mut app = pane_app();
+    press(&mut app, &mut config, KeyCode::Enter).await;
+    assert_eq!(app.detail_ticket_key.as_deref(), Some("LAST-30"));
+    let rows = screen(&app, width, height);
+    (app, rows)
+}
+
+fn buffer(app: &App, width: u16, height: u16) -> Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| ui(f, app, &sample_config())).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+/// The first text column of the pane, and for each width it sits beside the list at, the last.
+const TEXT_FIRST: usize = 52;
+const TEXT_LAST: [(u16, usize); 2] = [(120, 116), (160, 156)];
+
+/// The `count` cells of `row` from `from`.
+fn cells(row: &str, from: usize, count: usize) -> String {
+    row.chars().skip(from).take(count).collect()
+}
+
+/// The column and row of `text`'s first cell.
+fn find_cell(rows: &[String], text: &str) -> (u16, u16) {
+    let y = rows.iter().position(|row| row.contains(text)).unwrap();
+    let byte = rows[y].find(text).unwrap();
+    (rows[y][..byte].chars().count() as u16, y as u16)
+}
+
+/// The rows under the top bar and the rule, above the hints: two hint rows at 120 columns.
+fn pane_rows(rows: &[String], width: u16) -> &[String] {
+    let hints = if width == 120 { 2 } else { 1 };
+    &rows[2..rows.len() - hints]
+}
+
+/// The row of the rule under the header fields.
+fn header_rule(rows: &[String]) -> usize {
+    let below_the_top_bar = &rows[2..];
+    2 + below_the_top_bar
+        .iter()
+        .position(|row| cells(row, TEXT_FIRST, 2) == "──")
+        .unwrap_or_else(|| panic!("no rule\n{}", rows.join("\n")))
+}
+
+#[tokio::test]
+async fn the_pane_text_ends_two_cells_before_the_scrollbar_column_at_120_and_160_columns() {
+    for (width, last) in TEXT_LAST {
+        let (_, rows) = pane(width, 40).await;
+        let case = format!("{width} columns\n{}", rows.join("\n"));
+        let rule = &rows[header_rule(&rows)];
+        // The lead cell, the text, two blank cells, then the scrollbar's column.
+        assert_eq!(cells(rule, TEXT_FIRST - 1, 1), " ", "{case}");
+        assert_eq!(
+            cells(rule, TEXT_FIRST, last - TEXT_FIRST + 1),
+            "─".repeat(last - TEXT_FIRST + 1),
+            "{case}"
+        );
+        assert_eq!(cells(rule, last + 1, 2), "  ", "{case}");
+
+        let pane = pane_rows(&rows, width);
+        for row in pane {
+            assert_eq!(cells(row, last + 1, 2), "  ", "{case}");
+            assert!(
+                matches!(cells(row, last + 3, 1).as_str(), "█" | " "),
+                "{case}"
+            );
+        }
+        assert!(
+            pane.iter()
+                .filter(|row| cells(row, last + 3, 1) == "█")
+                .count()
+                > 0,
+            "the scrollbar shows in column {}\n{case}",
+            last + 3
+        );
+    }
+}
+
+#[tokio::test]
+async fn one_blank_row_follows_the_rule_under_the_header_fields() {
+    for (width, _) in TEXT_LAST {
+        let (_, rows) = pane(width, 40).await;
+        let case = format!("{width} columns\n{}", rows.join("\n"));
+        let rule = header_rule(&rows);
+        assert!(
+            cells(&rows[rule - 2], 51, 20).contains("Assignee"),
+            "{case}"
+        );
+        assert_eq!(cells(&rows[rule - 1], 51, 60).trim(), "", "{case}");
+        assert_eq!(cells(&rows[rule + 1], 51, 60).trim(), "", "{case}");
+        assert_eq!(
+            cells(&rows[rule + 2], 51, 18),
+            " Problem statement",
+            "{case}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_escaped_paren_loses_its_backslash_and_wrapped_lines_stay_in_the_text_cells() {
+    for (width, last) in TEXT_LAST {
+        let (mut app, rows) = pane(width, 40).await;
+        let case = format!("{width} columns\n{}", rows.join("\n"));
+        assert!(
+            rows.iter().any(|row| row.contains("(see DEMO-190)")),
+            "{case}"
+        );
+        assert!(rows.iter().all(|row| !row.contains('\\')), "{case}");
+
+        app.detail_scroll = u16::MAX;
+        let rows = screen(&app, width, 40);
+        let case = format!("{width} columns\n{}", rows.join("\n"));
+        let (x, y) = find_cell(&rows, "Sam Lee  2026-09-02 10:00");
+        assert_eq!(x, 52, "{case}");
+        // The comment's body is indented two cells under its author.
+        assert_eq!(
+            cells(&rows[y as usize + 1], 52, 26),
+            "  Agree, and the cache key",
+            "{case}"
+        );
+        for row in pane_rows(&rows, width) {
+            assert_eq!(cells(row, last + 1, 2), "  ", "{case}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn code_is_a_chip_headings_are_bold_and_nothing_in_the_pane_is_red_or_cyan_text() {
+    let (app, rows) = pane(160, 40).await;
+    let buf = buffer(&app, 160, 40);
+
+    let (x, y) = find_cell(&rows, "facet_counts");
+    for i in 0..12 {
+        assert_eq!(buf[(x + i, y)].fg, Color::Reset, "x {}", x + i);
+        assert_eq!(buf[(x + i, y)].bg, Color::DarkGray, "x {}", x + i);
+    }
+    assert_eq!(buf[(x - 1, y)].bg, Color::Reset);
+    assert_eq!(buf[(x + 12, y)].bg, Color::Reset);
+
+    let (x, y) = find_cell(&rows, "Problem statement");
+    for i in 0..17 {
+        let heading = &buf[(x + i, y)];
+        assert_eq!((heading.fg, heading.bg), (Color::Reset, Color::Reset));
+        assert!(heading.modifier.contains(Modifier::BOLD));
+        assert!(!heading.modifier.contains(Modifier::UNDERLINED));
+    }
+    let (x, y) = find_cell(&rows, "Findings");
+    assert_eq!(buf[(x, y)].fg, Color::Reset);
+    assert_eq!(buf[(x, y + 1)].symbol(), "─");
+    assert_eq!(buf[(x, y + 1)].fg, Color::DarkGray);
+
+    let (x, y) = find_cell(&rows, "• Item 1");
+    assert_eq!(buf[(x, y)].fg, Color::DarkGray);
+    assert_eq!(buf[(x + 2, y)].fg, Color::Reset);
+    let (x, y) = find_cell(&rows, "▎ Count every");
+    assert_eq!(buf[(x, y)].fg, Color::DarkGray);
+
+    // Every cell of the pane below its header line: no red or cyan text.
+    for y in 3..39 {
+        for x in 51..160 {
+            let fg = buf[(x, y)].fg;
+            assert!(
+                !matches!(fg, Color::Red | Color::LightRed | Color::Cyan),
+                "({x}, {y}) {:?}",
+                buf[(x, y)]
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_theme_recolors_the_chip_to_the_selection_role_in_the_pane() {
+    let (mut app, rows) = pane(160, 40).await;
+    app.theme = theme::resolve("nord", &sample_config().themes);
+    let buf = buffer(&app, 160, 40);
+    let (x, y) = find_cell(&rows, "facet_counts");
+    let (text, selection) = (Color::Rgb(0xd8, 0xde, 0xe9), Color::Rgb(0x3b, 0x42, 0x52));
+    let background = Color::Rgb(0x2e, 0x34, 0x40);
+    assert_eq!((buf[(x, y)].fg, buf[(x, y)].bg), (text, selection));
+    assert_eq!(
+        (buf[(x + 11, y)].fg, buf[(x + 11, y)].bg),
+        (text, selection)
+    );
+    assert_eq!(buf[(x - 1, y)].bg, background);
+    assert_eq!(buf[(x + 12, y)].bg, background);
+}
+
+/// Presses at `from`, drags to `to` and releases, drawing after each event; the text copied.
+async fn drag(width: u16, from: (u16, u16), to: (u16, u16)) -> Option<String> {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut config = sample_config();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let (mut app, _) = pane(width, 40).await;
+    for (kind, (column, row)) in [
+        (MouseEventKind::Down(MouseButton::Left), from),
+        (MouseEventKind::Drag(MouseButton::Left), to),
+        (MouseEventKind::Up(MouseButton::Left), to),
+    ] {
+        let event = crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        mouse::handle(&mut app, event, &tx, &mut config).await;
+        screen(&app, width, 40);
+    }
+    mouse::selected_text(&mut app)
+}
+
+#[tokio::test]
+async fn the_drag_area_and_the_scroll_page_match_the_drawn_pane_at_120_and_160_columns() {
+    // The pane is the 40 rows less the top bar and its rule and the hints, which take two rows
+    // at 120 columns and one at 160. The scroll page is the pane less its header line.
+    for (width, last, pane_height, page) in [(120, 116, 36, 35), (160, 156, 37, 36)] {
+        let (app, rows) = pane(width, 40).await;
+        let case = format!("{width} columns\n{}", rows.join("\n"));
+        let text_width = (last - TEXT_FIRST + 1) as u16;
+        let areas = app.text_selection.borrow().areas.clone();
+        assert!(
+            areas.contains(&Rect::new(52, 2, text_width, pane_height)),
+            "{areas:?}\n{case}"
+        );
+        assert_eq!(app.detail_page_height.get(), page, "{case}");
+
+        let rule = header_rule(&rows) as u16;
+        // Dragging across the rule, the gap and the scrollbar copies the text cells only.
+        let copied = drag(width, (52, rule), (width - 1, rule)).await.unwrap();
+        assert_eq!(copied, "─".repeat(text_width as usize), "{case}");
+        let copied = drag(width, (width - 4, rule), (width - 1, rule)).await;
+        assert_eq!(copied.as_deref(), Some("─"), "{case}");
+        assert_eq!(
+            drag(width, (width - 3, rule), (width - 1, rule)).await,
+            None
+        );
+    }
+}
+
+#[tokio::test]
+async fn scrolled_to_the_bottom_the_last_comment_line_sits_on_the_last_pane_row() {
+    for (width, last) in TEXT_LAST {
+        let (mut app, _) = pane(width, 40).await;
+        app.detail_scroll = u16::MAX;
+        let rows = screen(&app, width, 40);
+        let case = format!("{width} columns\n{}", rows.join("\n"));
+        let pane = pane_rows(&rows, width);
+        let bottom = pane.last().unwrap();
+        let text = cells(bottom, TEXT_FIRST, last - TEXT_FIRST + 1);
+        assert!(text.trim_end().ends_with("pane."), "{case}");
+        assert_eq!(cells(bottom, last + 3, 1), "█", "{case}");
+    }
+}
+
+#[test]
+fn the_epic_view_ends_two_cells_before_the_scrollbar_column_too() {
+    for (width, last) in TEXT_LAST {
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.epics = vec![cache::Epic::for_test("DEMO-3228", &[("In Progress", 60)])];
+        app.detail_epic_key = Some("DEMO-3228".into());
+        let rows = screen(&app, width, 40);
+        let case = format!("{width} columns\n{}", rows.join("\n"));
+        let (x, y) = find_cell(&rows, "── Related tickets (60) ");
+        assert_eq!(x, 52, "{case}");
+        let section = &rows[y as usize];
+        assert_eq!(cells(section, last - 2, 3), "───", "{case}");
+        assert_eq!(cells(section, last + 1, 2), "  ", "{case}");
+        let (x, _) = find_cell(&rows, "Progress");
+        assert_eq!(x, 52, "{case}");
+        for row in pane_rows(&rows, width) {
+            assert_eq!(cells(row, last + 1, 2), "  ", "{case}");
+            assert!(
+                matches!(cells(row, last + 3, 1).as_str(), "█" | " "),
+                "{case}"
+            );
+        }
+        assert!(
+            pane_rows(&rows, width)
+                .iter()
+                .any(|row| cells(row, last + 3, 1) == "█"),
+            "{case}"
+        );
+    }
+}
