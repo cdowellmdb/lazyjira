@@ -157,7 +157,7 @@ mod tests {
     use crate::app::{App, Tab};
     use crate::cache::{Epic, Ticket};
     use crate::views::common::GAP;
-    use crate::views::tests::{draw, line_with};
+    use crate::views::tests::support::{draw, line_with};
     use ratatui::style::Color;
 
     /// The drawn widths of the Status, Assignee and Summary cells in `row`, the line of a ticket
