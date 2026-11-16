@@ -57,7 +57,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/bulk_actions.rs** — Bulk move/assign state, progression, and completion; returns work for `main.rs` to execute. Dismissed operations still update tickets, but their results cannot replace a newer panel.
 - **src/moves.rs** — Single-ticket move tracking: pending moves, Jira-confirmed moves (to ignore stale reads), and rejected moves awaiting dismissal
 - **src/bulk_upload.rs** — CSV parsing and validation for bulk ticket creation
-- **src/views/** — Tab renderers (`my_work.rs`, `team.rs`, `epics.rs`, `unassigned.rs`, `filters.rs`, shared helpers in `common.rs`, including `Shared::trailing_widths`, which draws Epic and Labels only where Summary keeps `SUMMARY_MIN` columns)
+- **src/views/** — Tab renderers (`my_work.rs`, `team.rs`, `epics.rs`, `unassigned.rs`, `filters.rs`, shared helpers in `common.rs`, and the column widths in `columns.rs`: `Shared::trailing` says whether Epic and Labels are drawn, only where Summary keeps `SUMMARY_MIN` columns, as a `Trailing`)
 - **src/widgets/** — Overlays: `ticket_detail.rs` (the detail pane beside or over the list), `keybindings_help.rs` (a sheet), and the forms, pickers and notices that dock as one panel (`dock.rs` says which is open and how tall, then `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `filter_edit.rs`, `move_failure.rs`, `move_status.rs`), with `activity.rs` (the pane's history view) and `form.rs` (their fields, buttons, panel and sheet frames). `markup.rs`, which renders Jira wiki markup in descriptions (emphasis, links, mentions, lists, tables, quotes, code) as styled lines wrapped to the pane's width
 
 ## Before changing behaviour

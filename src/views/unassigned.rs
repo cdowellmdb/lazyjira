@@ -3,9 +3,9 @@ use ratatui::text::Span;
 
 use crate::app::App;
 use crate::style;
+use crate::views::columns::{narrow_for_summary, status_width, Columns, Shared, Trailing};
 use crate::views::common::{
-    key_width, narrow_for_summary, status_cell, status_width, Columns, ListLines, Shared, Trailing,
-    COLUMN_GAP, STATUS_DOT_WIDTH, UPDATED_WIDTH,
+    key_width, status_cell, ListLines, COLUMN_GAP, STATUS_DOT_WIDTH, UPDATED_WIDTH,
 };
 
 const NO_EPIC_KEY: &str = "NO-EPIC";

@@ -4,9 +4,10 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::{App, FilterFocus};
 use crate::style;
+use crate::views::columns::{narrow_for_summary, status_width, Columns, Shared, Trailing};
 use crate::views::common::{
-    gutter, highlight_row, key_width, narrow_for_summary, status_cell, status_width, Columns,
-    ListLines, Shared, Trailing, COLUMN_GAP, GUTTER, STATUS_DOT_WIDTH, UPDATED_WIDTH,
+    gutter, highlight_row, key_width, status_cell, ListLines, COLUMN_GAP, GUTTER, STATUS_DOT_WIDTH,
+    UPDATED_WIDTH,
 };
 
 /// Rows a pane's title and the blank line under it take.

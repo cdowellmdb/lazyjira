@@ -4,9 +4,8 @@ use ratatui::text::{Line, Span};
 
 use crate::app::App;
 use crate::style;
-use crate::views::common::{
-    key_width, lead_width, Columns, ListLines, Shared, Trailing, COLUMN_GAP, UPDATED_WIDTH,
-};
+use crate::views::columns::{Columns, Shared, Trailing};
+use crate::views::common::{key_width, lead_width, ListLines, COLUMN_GAP, UPDATED_WIDTH};
 
 /// The least Summary keeps on a terminal too narrow for it, the row running off the edge.
 const SUMMARY_FLOOR: usize = 12;

@@ -5,7 +5,7 @@ use super::support::*;
 use crate::app::{App, Tab};
 use crate::cache::{TeamMember, Ticket};
 use crate::mouse::Target;
-use crate::views::common::{Columns, Shared, Trailing};
+use crate::views::columns::{Columns, Shared, Trailing};
 use crate::views::{my_work, my_work::my_work_column_widths};
 use ratatui::{backend::TestBackend, layout::Rect, Terminal};
 

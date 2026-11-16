@@ -3,9 +3,10 @@ use ratatui::text::Span;
 
 use crate::app::App;
 use crate::style;
+use crate::views::columns::{narrow_for_summary, status_width, Columns, Shared, Trailing};
 use crate::views::common::{
-    key_width, lead_width, muted, narrow_for_summary, status_cell, status_width, tint, Columns,
-    ListLines, Shared, Trailing, COLUMN_GAP, STATUS_DOT_WIDTH, UPDATED_WIDTH,
+    key_width, lead_width, muted, status_cell, tint, ListLines, COLUMN_GAP, STATUS_DOT_WIDTH,
+    UPDATED_WIDTH,
 };
 
 /// (status, summary, trailing) widths: Epic (20) and Labels (18) are drawn only where Summary keeps
