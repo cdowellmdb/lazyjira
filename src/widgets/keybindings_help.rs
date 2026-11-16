@@ -1,4 +1,4 @@
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
@@ -183,23 +183,28 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         (_, false) => "↑↓ ",
     };
     let scroll_label = if max > 0 { "scroll   " } else { "" };
+    // Only the close hint is a click target, as a footer hint is its own: the scroll hint names
+    // several keys, so it has none.
+    let before = (scroll_hint.width() + scroll_label.width()) as u16;
+    let [scroll_area, close] = Layout::horizontal([
+        Constraint::Length(before),
+        Constraint::Length(("Esc/?".width() + CLOSE_LABEL.width()) as u16),
+    ])
+    .flex(Flex::Start)
+    .areas(hint);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(scroll_hint, style::key_hint()),
             Span::styled(scroll_label, style::secondary()),
+        ])),
+        scroll_area,
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
             Span::styled("Esc/?", style::key_hint()),
             Span::styled(CLOSE_LABEL, style::secondary()),
         ])),
-        hint,
-    );
-    // Only the close hint is a click target, as a footer hint is its own: the scroll hint names
-    // several keys, so it has none.
-    let before = (scroll_hint.width() + scroll_label.width()) as u16;
-    let close = Rect::new(
-        hint.x.saturating_add(before).min(hint.right()),
-        hint.y,
-        (("Esc/?".width() + CLOSE_LABEL.width()) as u16).min(hint.width.saturating_sub(before)),
-        hint.height,
+        close,
     );
     app.mouse_targets.borrow_mut().push((
         close,
