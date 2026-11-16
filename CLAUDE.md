@@ -40,7 +40,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/footer.rs** — The idle footer: `Hint`s (key, label, priority) that drop as the terminal narrows, the muted segment of non-default state at the right, and the bulk bar shown above it while tickets are marked
 - **src/status.rs** — The status area under the content: a flash error, the search, a pending move or the footer, and while a detail is open its hints wrapped onto as many rows as the width needs, with a message on a row above
 - **src/mouse.rs** — Hit targets registered by renderers and mouse event handling
-- **src/setup.rs** — First-run setup screen (project key, team name); imports the legacy `team.yml` roster
+- **src/setup.rs** — First-run setup as a sheet (project key, team name, then a review), drawn from `style` roles; `press` applies its keys; imports the legacy `team.yml` roster
 - **src/jira_client.rs** — The `jira` CLI: `jira me`, creating tickets, comments, assignment and field edits
 - **src/jira_reads.rs** — What a refresh reads from Jira, all through `jira_rest`: the list search for My Work/Team/Unassigned, saved filters, epics with their children and sub-tasks, and the current user's email (`my_email`: remembered through `local_cache`, asked of `jira me` only when none is)
 - **src/jira_search.rs** — Searching Jira a few queries at a time (`search_in_order`) and reading ticket details through those searches (`fetch_ticket_detail` for one fresh read, `fetch_ticket_details` for batched prefetch)
@@ -57,7 +57,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/bulk_actions.rs** — Bulk move/assign state, progression, and completion; returns work for `main.rs` to execute. Dismissed operations still update tickets, but their results cannot replace a newer panel.
 - **src/moves.rs** — Single-ticket move tracking: pending moves, Jira-confirmed moves (to ignore stale reads), and rejected moves awaiting dismissal
 - **src/bulk_upload.rs** — CSV parsing and validation for bulk ticket creation
-- **src/views/** — Tab renderers (`my_work.rs`, `team.rs`, `epics.rs`, `unassigned.rs`, `filters.rs`, shared helpers in `common.rs`)
+- **src/views/** — Tab renderers (`my_work.rs`, `team.rs`, `epics.rs`, `unassigned.rs`, `filters.rs`, shared helpers in `common.rs`, including `Shared::trailing_widths`, which draws Epic and Labels only where Summary keeps `SUMMARY_MIN` columns)
 - **src/widgets/** — Overlays: `ticket_detail.rs` (the detail pane beside or over the list), `keybindings_help.rs` (a sheet), and the forms, pickers and notices that dock as one panel (`dock.rs` says which is open and how tall, then `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `filter_edit.rs`, `move_failure.rs`, `move_status.rs`), with `activity.rs` (the pane's history view) and `form.rs` (their fields, buttons, panel and sheet frames). `markup.rs`, which renders Jira wiki markup in descriptions (emphasis, links, mentions, lists, tables, quotes, code) as styled lines wrapped to the pane's width
 
 ## Before changing behaviour
