@@ -27,6 +27,10 @@ pub struct MoveTracker {
     confirmed: HashMap<String, (u64, String)>,
     /// Rejected moves, oldest first.
     failures: Vec<MoveFailure>,
+    /// Lines of the oldest failure's error scrolled past, and the most it can be, as last
+    /// drawn.
+    failure_scroll: u16,
+    failure_scroll_max: std::cell::Cell<u16>,
 }
 
 impl MoveTracker {
@@ -78,7 +82,28 @@ impl MoveTracker {
     pub fn dismiss_failure(&mut self) {
         if !self.failures.is_empty() {
             self.failures.remove(0);
+            self.failure_scroll = 0;
         }
+    }
+
+    /// Lines of the oldest failure's error that are scrolled past.
+    pub fn failure_scroll(&self) -> u16 {
+        self.failure_scroll.min(self.failure_scroll_max.get())
+    }
+
+    /// Records how far the oldest failure's error can scroll, as drawn.
+    pub fn set_failure_scroll_max(&self, max: u16) {
+        self.failure_scroll_max.set(max);
+    }
+
+    /// Scrolls the oldest failure's error a line down or up, no further than it goes.
+    pub fn scroll_failure(&mut self, down: bool) {
+        let at = self.failure_scroll();
+        self.failure_scroll = if down {
+            (at + 1).min(self.failure_scroll_max.get())
+        } else {
+            at.saturating_sub(1)
+        };
     }
 }
 

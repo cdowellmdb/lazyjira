@@ -833,6 +833,8 @@ fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
             app.keybindings_scroll = scroll
                 .saturating_add(1)
                 .min(app.keybindings_scroll_max.get());
+        KeyCode::Down | KeyCode::Char('j') => app.moves.scroll_failure(true),
+        KeyCode::Up | KeyCode::Char('k') => app.moves.scroll_failure(false),
         }
         KeyCode::Up | KeyCode::Char('k') => app.keybindings_scroll = scroll.saturating_sub(1),
         KeyCode::PageDown | KeyCode::Char(' ') => {

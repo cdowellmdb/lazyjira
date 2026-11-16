@@ -448,9 +448,9 @@ pub fn render_panel_frame(
     f.render_widget(Paragraph::new(title), head);
     close_button(f, app, head, Target::Key(KeyCode::Esc));
     let inner = Rect::new(
-        rest.x.saturating_add(1),
+        rest.x.saturating_add(PANEL_MARGIN / 2),
         rest.y,
-        rest.width.saturating_sub(2),
+        rest.width.saturating_sub(PANEL_MARGIN),
         rest.height,
     );
     crate::mouse::selectable(app, inner);
@@ -464,6 +464,9 @@ pub fn render_panel_frame(
 
 /// The rows of a panel's chrome: its rule and its title.
 pub const CHROME: u16 = 2;
+
+/// The cells a panel's body is narrower than its area by: one in from each side.
+pub const PANEL_MARGIN: u16 = 2;
 
 /// One row of a panel's body: the rows it wants, and the fewest it keeps when the panel is
 /// short. A field's rows are its label and its value, so a field's minimum is one row, the

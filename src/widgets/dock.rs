@@ -66,7 +66,7 @@ pub fn plan(app: &App, content: Rect) -> Option<Docked> {
     };
     let need = match (&menu, panel) {
         (Some(menu), _) => form::need(&menu.shape()),
-        (None, Panel::MoveFailure) => move_failure::need(app),
+        (None, Panel::MoveFailure) => move_failure::need(app, content.width),
         (None, Panel::FilterEdit) => filter_edit::need(app),
         (None, Panel::BulkUpload) => bulk_upload::need(app),
         (None, Panel::Create) => create_ticket::need(app),

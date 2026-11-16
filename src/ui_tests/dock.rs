@@ -267,3 +267,99 @@ async fn the_move_panel_registers_its_close_cell_each_option_row_and_its_hint_ke
         );
     }
 }
+
+/// An app with a rejected move whose error is `error`.
+fn app_with_a_failed_move(error: &str) -> App {
+    let mut app = app_with_a_long_list();
+    assert!(app.moves.start("DEMO-9", "Done"));
+    app.finish_move("DEMO-9", Err(error.to_string()));
+    app
+}
+
+#[tokio::test]
+async fn the_move_failure_panel_shows_every_wrapped_row_of_a_long_error_when_it_fits() {
+    // Four words of 57 cells: 231 cells in all, which is one row of the error each at 80
+    // columns (a 78 cell body) and two to a row at 120 (118 cells).
+    let words: Vec<String> = ["1", "2", "3", "4"].map(|n| n.repeat(57)).into();
+    let app = app_with_a_failed_move(&words.join(" "));
+    let message = " Jira did not move DEMO-9 to Done. Its status is unchanged.";
+    let pad = |text: &str, width: usize| format!("{text:<width$}");
+
+    // 80x24: the content is 21 rows and the cap 12. The panel is its rule, title, six body rows
+    // (the message, a blank row, four rows of the error) and the last row: 9 rows, from row 14.
+    let rows = screen(&app, 80, 24);
+    let case = rows.join("\n");
+    assert_eq!(rows[14], "─".repeat(80), "{case}");
+    assert!(rows[15].starts_with(" Move failed"), "{case}");
+    assert_eq!(rows[16], pad(message, 80), "{case}");
+    assert_eq!(rows[17], " ".repeat(80), "{case}");
+    for (row, word) in rows[18..22].iter().zip(&words) {
+        assert_eq!(*row, pad(&format!(" {word}"), 80), "{case}");
+    }
+    assert!(rows[22].contains("Dismiss"), "{case}");
+    assert!(!rows[22].contains("scroll"), "{case}");
+
+    // 120x40: the content is 37 rows. Two words to a row make the panel 7 rows, from row 32.
+    let rows = screen(&app, 120, 40);
+    let case = rows.join("\n");
+    assert_eq!(rows[32], "─".repeat(120), "{case}");
+    assert_eq!(rows[34], pad(message, 120), "{case}");
+    assert_eq!(
+        rows[36],
+        pad(&format!(" {} {}", words[0], words[1]), 120),
+        "{case}"
+    );
+    assert_eq!(
+        rows[37],
+        pad(&format!(" {} {}", words[2], words[3]), 120),
+        "{case}"
+    );
+    assert!(rows[38].contains("Dismiss"), "{case}");
+}
+
+#[tokio::test]
+async fn a_move_failure_error_taller_than_the_panel_scrolls_with_j_and_k() {
+    let mut config = sample_config();
+    let lines: Vec<String> = (1..=30).map(|n| format!("error line {n}")).collect();
+    let mut app = app_with_a_failed_move(&lines.join("\n"));
+    // 80x24: the content is 21 rows and the cap 12, so the panel's body is 9 rows, 13 to 21.
+    // The message and a blank row come before the 30 lines: 32 lines, so 23 scroll away at most.
+    let body = |app: &App| -> Vec<String> {
+        screen(app, 80, 24)[13..22]
+            .iter()
+            .map(|row| row.trim().to_string())
+            .collect()
+    };
+    let first = [
+        "Jira did not move DEMO-9 to Done. Its status is unchanged.",
+        "",
+        "error line 1",
+        "error line 2",
+        "error line 3",
+        "error line 4",
+        "error line 5",
+        "error line 6",
+        "error line 7",
+    ];
+    assert_eq!(body(&app), first);
+    assert!(screen(&app, 80, 24)[22].contains("j/k scroll"));
+
+    press(&mut app, &mut config, KeyCode::Char('j')).await;
+    press(&mut app, &mut config, KeyCode::Down).await;
+    assert_eq!(body(&app)[..2], ["error line 1", "error line 2"]);
+    press(&mut app, &mut config, KeyCode::Char('k')).await;
+    assert_eq!(body(&app)[..2], ["", "error line 1"]);
+    press(&mut app, &mut config, KeyCode::Up).await;
+    press(&mut app, &mut config, KeyCode::Up).await;
+    assert_eq!(body(&app), first, "back at the top, no further");
+
+    for _ in 0..100 {
+        press(&mut app, &mut config, KeyCode::Char('j')).await;
+        body(&app);
+    }
+    let last = body(&app);
+    assert_eq!(last[0], "error line 22");
+    assert_eq!(last[8], "error line 30");
+    press(&mut app, &mut config, KeyCode::Esc).await;
+    assert!(app.moves.failures().is_empty());
+}
