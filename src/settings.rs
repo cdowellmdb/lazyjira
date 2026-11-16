@@ -182,10 +182,12 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         return;
     };
     let inner = form::render_sheet(f, app, "Settings");
+    // Starting tab shows every tab under its label. Theme has more options than that and scrolls.
+    let option_rows = Tab::all().len() as u16 + 1;
     let areas = Layout::vertical([
         Constraint::Min(5),
         Constraint::Length(3),
-        Constraint::Length(6),
+        Constraint::Length(option_rows),
         Constraint::Length(4),
         Constraint::Length(1),
     ])
