@@ -429,3 +429,13 @@ async fn a_flash_or_a_pending_move_takes_a_row_above_the_detail_hints_and_hides_
         " e edit · h activity · o browser · z zoom · ? help · Esc close"
     );
 }
+
+#[tokio::test]
+async fn a_detail_draws_in_tiny_terminals_without_panicking() {
+    let (app, _) = detail_screen(80).await;
+    for width in [0, 1, 3, 8, 20, 40] {
+        for height in [0, 1, 2, 4, 6, 10] {
+            screen(&app, width, height);
+        }
+    }
+}
