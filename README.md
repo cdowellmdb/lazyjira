@@ -276,7 +276,7 @@ A bulk move loads every selected ticket's transitions, then offers the statuses 
 
 ## Bulk CSV upload
 
-Press `U` from any main view, enter the path to a CSV file, and review the preview. You can only submit once the preview shows zero invalid rows. Start from the template in [`docs/examples/bulk_create_template.csv`](docs/examples/bulk_create_template.csv).
+Press `U` from any main view, enter the path to a CSV file, and review the preview. You can only submit once the preview shows zero invalid rows. The preview lists up to 14 rows at a time; in a short terminal it drops its path line and blank lines to show more of them, and `r` reloads the CSV (the result's **Rerun CSV** button runs it again). Start from the template in [`docs/examples/bulk_create_template.csv`](docs/examples/bulk_create_template.csv).
 
 ```csv
 summary,type,assignee_email,epic_key,labels,description

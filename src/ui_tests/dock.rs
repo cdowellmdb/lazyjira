@@ -363,3 +363,75 @@ async fn a_move_failure_error_taller_than_the_panel_scrolls_with_j_and_k() {
     press(&mut app, &mut config, KeyCode::Esc).await;
     assert!(app.moves.failures().is_empty());
 }
+
+/// The (row, height) of each text field or picker the panel registers, by field number.
+fn field_rows(app: &App) -> Vec<(usize, u16, u16)> {
+    let mut fields: Vec<_> = app
+        .mouse_targets
+        .borrow()
+        .iter()
+        .filter_map(|(area, target)| match target {
+            mouse::Target::Field(field) => Some((*field, area.y, area.height)),
+            _ => None,
+        })
+        .collect();
+    fields.sort();
+    fields
+}
+
+#[tokio::test]
+async fn in_a_short_terminal_every_field_of_create_and_edit_keeps_at_least_one_row() {
+    let mut config = two_saved_filters();
+    // 80x18: the content is 15 rows and the cap 9, which is the 3 rows of chrome and the last
+    // row, and 6 for the body. The pickers keep 3 rows, the other fields 1 each.
+    let mut app = app_with_a_long_list();
+    open_panel(&mut app, &mut config, "create").await;
+    let rows = screen(&app, 80, 18);
+    let case = rows.join("\n");
+    assert_eq!(rows[8], "─".repeat(80), "{case}");
+    assert_eq!(
+        field_rows(&app),
+        [
+            (0, 10, 3),
+            (1, 13, 1),
+            (2, 10, 3),
+            (3, 10, 3),
+            (4, 14, 1),
+            (5, 15, 1)
+        ],
+        "{case}"
+    );
+    assert!(rows[13].starts_with(" Summary"), "{case}");
+    assert!(rows[14].starts_with(" Labels"), "{case}");
+    assert!(rows[15].starts_with(" Description"), "{case}");
+    assert!(rows[16].contains(" Create "), "{case}");
+
+    // 80x14: the content is 11 rows and the cap 6, below the 8 the chrome, last row and the
+    // fields' minimums need. The minimums win: the pickers keep 2 rows.
+    let mut app = app_with_a_long_list();
+    open_panel(&mut app, &mut config, "create").await;
+    let rows = screen(&app, 80, 14);
+    let case = rows.join("\n");
+    assert_eq!(rows[5], "─".repeat(80), "{case}");
+    assert_eq!(
+        field_rows(&app),
+        [
+            (0, 7, 2),
+            (1, 9, 1),
+            (2, 7, 2),
+            (3, 7, 2),
+            (4, 10, 1),
+            (5, 11, 1)
+        ],
+        "{case}"
+    );
+
+    // Edit's body wants 6 rows (its description 3 lines and a label) and fits at 80x18. At 80x14
+    // the cap is 6 rows, 3 of them the body: the description keeps its 1 row.
+    let mut app = app_with_a_long_list();
+    open_panel(&mut app, &mut config, "edit").await;
+    screen(&app, 80, 18);
+    assert_eq!(field_rows(&app), [(0, 10, 1), (1, 11, 1), (2, 12, 4)]);
+    screen(&app, 80, 14);
+    assert_eq!(field_rows(&app), [(0, 9, 1), (1, 10, 1), (2, 11, 1)]);
+}
