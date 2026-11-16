@@ -153,6 +153,6 @@ The work ships as a stack of four PRs, each based on the one below.
 PR 1 moved the selected row and secondary text in the five list views and the tab divider onto `src/style.rs`. These inline colors remain and land in PR 2 or 3:
 
 - `ui()` in `src/main.rs`: the yellow active-tab highlight, the red and yellow status line (flash, search, pending move) and the `lazyjira` title panel. PR 2 rebuilds the top bar.
-- `views/common.rs`: the `panel()` border and title, the ` │ ` column separators and the header rule, `Color::Gray` on a selected epic's counts. PR 2 rebuilds the lists.
+- `views/common.rs`: the `panel()` border and title, the ` │ ` column separators and the header rule. `epics.rs` and `unassigned.rs` keep `Color::Gray` on a selected epic's counts, five views keep their `fg(Reset)` bold header style, and `team.rs` uses `Modifier::DIM` on done rows, which the muted role should replace. PR 2 rebuilds the lists.
 - `views/filters.rs`: the yellow focused-pane border and the yellow "Loading..." and focused-filter text.
 - The overlays in `src/widgets/` (detail, help, forms, bulk, activity): their muted text and highlights. PR 3 rebuilds them.

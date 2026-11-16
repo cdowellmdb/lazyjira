@@ -249,8 +249,8 @@ mod tests {
         "j/k move",
     ];
 
-    /// Each footer `MAIN` led by the spooky season hint makes as the terminal narrows, from the full line down to
-    /// `? more`, one hint fewer each time, with the narrowest width that holds it.
+    /// The footer when spooky season puts its hint ahead of `MAIN`, from the full line down to `? more`.
+    /// Each step is the narrowest width that holds its line.
     const SPOOKY_STEPS: [(usize, &str); 10] = [
         (111, " S settings · Tab switch · j/k move · Space mark · Enter open · B bulk · / search · r refresh · q quit · ? more"),
         (99, " S settings · Tab switch · j/k move · Space mark · Enter open · B bulk · / search · q quit · ? more"),
@@ -275,8 +275,8 @@ mod tests {
         "Tab switch",
     ];
 
-    /// Each footer `MAIN` while tickets are marked makes as the terminal narrows, from the full line down to
-    /// `? more`, one hint fewer each time, with the narrowest width that holds it.
+    /// The footer while tickets are marked, from the full line down to `? more`.
+    /// Each step is the narrowest width that holds its line.
     const MARKED_STEPS: [(usize, &str); 11] = [
         (116, " Tab switch · j/k move · Space mark · u clear · A all · Enter open · B bulk · / search · r refresh · q quit · ? more"),
         (104, " Tab switch · j/k move · Space mark · u clear · A all · Enter open · B bulk · / search · q quit · ? more"),

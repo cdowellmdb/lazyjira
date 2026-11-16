@@ -70,6 +70,12 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn muted_text_and_the_selected_row_keep_their_terminal_colors() {
+        assert_eq!(secondary().fg, Some(Color::DarkGray));
+        assert_eq!(selected_row().bg, Some(Color::DarkGray));
+    }
+
+    #[test]
     fn a_dropped_status_stays_readable_on_the_selected_row() {
         // Rows draw a selected status cell on dark gray, so its text can't be dark gray too.
         let rules = StatusRules::default();

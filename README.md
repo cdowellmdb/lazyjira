@@ -200,7 +200,7 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 | `?` | Keybindings help |
 | `q` | Quit |
 
-The bottom line lists the keys that matter most, like `Tab switch · j/k move · Enter open · ? more`. As the terminal narrows it drops the least important keys from the right, never half of one, and `? more` always stays; `?` lists every key. Whatever differs from the defaults sits muted at the right edge while it fits: how many tickets are selected, hidden Done groups, the focused status, a refresh in progress, how stale the cache is, and epics syncing. The Filters tab has its own keys there.
+The bottom line lists the keys that matter most, like `Tab switch · j/k move · Enter open · ? more`. As the terminal narrows it drops the least important keys from the right, never half of one, and `? more` always stays; `?` lists every key. Whatever differs from the defaults sits muted at the right edge while it fits: how many tickets are selected, hidden Done groups, the focused status, a refresh in progress, how stale the cache is, and epics syncing. While tickets are marked, `u clear · A all` follow `Space mark`. In spooky season `S settings` leads the line until the spooky theme is chosen. The Filters tab has its own keys there.
 
 Each tab remembers its selection, search, status focus, and folded groups during the session. Folded parents are one set shared by every tab: a parent folded in My Work is folded in Epics too. A folded parent shows `▶` and how many sub-tasks are hidden, and a sub-task whose parent is in another group leads with the parent's key, muted. Done groups start folded in My Work and each time a filter runs, and list the most recently updated tickets first.
 
