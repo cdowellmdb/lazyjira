@@ -245,6 +245,8 @@ struct VisibleKeysCache {
     items: Vec<VisibleItem>,
     families: HashMap<usize, Family>,
     group_ticket_keys: HashMap<String, Vec<String>>,
+    /// While My Work is the tab: how many done tickets the search keeps and `d` hides.
+    hidden_done: usize,
 }
 
 #[derive(Default, Clone)]
@@ -876,7 +878,9 @@ impl App {
 
         let (items, families) = self.compute_visible_items_for_tab(state.active_tab);
         let group_ticket_keys = Self::build_group_ticket_keys(&items);
+        let hidden_done = self.count_hidden_done(state.active_tab);
         let mut cache = self.visible_keys_cache.borrow_mut();
+        cache.hidden_done = hidden_done;
         cache.state = Some(state);
         cache.items = items;
         cache.families = families;
@@ -1149,9 +1153,14 @@ impl App {
     }
 
     /// How many done tickets the search keeps while `d` hides them, which My Work says under its
-    /// groups.
+    /// groups. Counted when the visible rows are, not on every frame.
     pub(crate) fn hidden_done_count(&self) -> usize {
-        if self.show_done {
+        self.ensure_visible_keys_cache();
+        self.visible_keys_cache.borrow().hidden_done
+    }
+
+    fn count_hidden_done(&self, tab: Tab) -> usize {
+        if tab != Tab::MyWork || self.show_done {
             return 0;
         }
         self.my_work_by_status(|status| self.status_rules.is_done(status))
@@ -2782,6 +2791,36 @@ mod tests {
             app.group_selection_state("In Progress"),
             GroupSelectionState::Partial
         );
+    }
+
+    #[test]
+    fn the_hidden_done_count_follows_d_the_search_and_the_tickets() {
+        let done = |key: &str, summary: &str| {
+            let mut done = ticket(key, summary);
+            done.status = "Done".to_string();
+            done
+        };
+        let mut app = App::new();
+        app.active_tab = Tab::MyWork;
+        app.cache.my_tickets = vec![
+            ticket("DEMO-1", "open"),
+            done("DEMO-2", "alpha"),
+            done("DEMO-3", "beta"),
+        ];
+        app.mark_cache_changed();
+        assert_eq!(app.hidden_done_count(), 0, "done is shown");
+        app.toggle_show_done();
+        assert_eq!(app.hidden_done_count(), 2);
+        app.search = Some("alp".into());
+        assert_eq!(app.hidden_done_count(), 1);
+        app.search = Some("open".into());
+        assert_eq!(app.hidden_done_count(), 0);
+        app.search = None;
+        app.cache.my_tickets.push(done("DEMO-4", "gamma"));
+        app.mark_cache_changed();
+        assert_eq!(app.hidden_done_count(), 3);
+        app.toggle_show_done();
+        assert_eq!(app.hidden_done_count(), 0);
     }
 
     #[test]
