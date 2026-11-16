@@ -10,7 +10,7 @@ use crate::style;
 use crate::views::common::{
     column_width, epic_bar, fit, fold_indicator, group_marker, key_width, lead_width, muted,
     narrow_for_summary, status_cell, status_label, status_width, ticket_cells, ticket_marker, tint,
-    Ages, ListLines, EPIC_BAR_WIDTH, GAP, GUTTER, STATUS_DOT_WIDTH,
+    Ages, ListLines, COLUMN_GAP, EPIC_BAR_WIDTH, GUTTER, STATUS_DOT_WIDTH,
 };
 
 /// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so
@@ -24,7 +24,8 @@ fn child_column_widths(
 ) -> (usize, usize, usize) {
     let mut status_w = status_width(epics);
     let mut assignee_w = column_width(epics, "ASSIGNEE", assignee).min(24);
-    let room = (area.width as usize).saturating_sub(lead + key_w + 3 * GAP + STATUS_DOT_WIDTH);
+    let room =
+        (area.width as usize).saturating_sub(lead + key_w + 3 * COLUMN_GAP + STATUS_DOT_WIDTH);
     let columns = &mut [(&mut assignee_w, 8), (&mut status_w, 8)];
     let summary_w = narrow_for_summary(room, 18, columns);
     (status_w, assignee_w, summary_w)
@@ -156,7 +157,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 mod tests {
     use crate::app::{App, Tab};
     use crate::cache::{Epic, Ticket};
-    use crate::views::common::GAP;
+    use crate::views::common::COLUMN_GAP;
     use crate::views::tests::support::{draw, line_with};
     use ratatui::style::Color;
 
@@ -171,8 +172,8 @@ mod tests {
             .unwrap();
         let summary = row[..row.rfind("DEMO-2").unwrap()].chars().count();
         [
-            dash - GAP - (dot + 2),
-            summary - GAP - dash,
+            dash - COLUMN_GAP - (dot + 2),
+            summary - COLUMN_GAP - dash,
             width as usize - summary,
         ]
     }

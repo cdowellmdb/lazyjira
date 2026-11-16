@@ -17,7 +17,7 @@ pub const GUTTER: usize = 3;
 /// A row's checkbox and the space after it, drawn only while tickets are marked.
 pub const CHECKBOX_WIDTH: usize = 2;
 /// Blank cells between two columns.
-pub const GAP: usize = 2;
+pub const COLUMN_GAP: usize = 2;
 /// A Status cell's dot and the space after it.
 pub const STATUS_DOT_WIDTH: usize = 2;
 /// The `└ ` before a sub-task's key, and the two cells of indent before it.
@@ -407,7 +407,7 @@ impl ListLines {
 
     /// A ticket row: the gutter (`›` when selected, and the ticket's `mark` while tickets are
     /// marked), `cells` (a column each, as spans) up to Summary, then the summary's first line (from `ticket_cells`), each
-    /// a `GAP` apart. Each further summary line goes on a line of its own, blank under the
+    /// a `COLUMN_GAP` apart. Each further summary line goes on a line of its own, blank under the
     /// cells. Returns the first line, for the cells after Summary.
     pub fn ticket(
         &mut self,
@@ -424,7 +424,7 @@ impl ListLines {
         } else {
             Span::raw(" ")
         };
-        let gap = Span::raw(" ".repeat(GAP));
+        let gap = Span::raw(" ".repeat(COLUMN_GAP));
         let mut row = self.lead(glyph, mark, base);
         let lead = row.iter().map(Span::width).sum::<usize>();
         let fold = cells
@@ -433,7 +433,7 @@ impl ListLines {
             .and_then(|key| key.content.find(['▼', '▶']).map(|at| (key, at)))
             .map(|(key, at)| lead + key.content[..at].width());
         let cells_width: usize =
-            cells.iter().flatten().map(Span::width).sum::<usize>() + GAP * cells.len();
+            cells.iter().flatten().map(Span::width).sum::<usize>() + COLUMN_GAP * cells.len();
         for cell in cells {
             row.extend(cell);
             row.push(gap.clone());
@@ -582,10 +582,10 @@ impl Shared {
         [(self.epic_column, epic_w), (self.labels_column, labels_w)]
             .into_iter()
             .filter(|(shown, _)| !shown)
-            .fold(summary_w, |w, (_, hidden)| w + hidden + GAP)
+            .fold(summary_w, |w, (_, hidden)| w + hidden + COLUMN_GAP)
     }
 
-    /// Pushes a row's trailing cells, a `GAP` apart: Epic (when shown), Updated
+    /// Pushes a row's trailing cells, a `COLUMN_GAP` apart: Epic (when shown), Updated
     /// (`Ages::updated_cell`), and Labels (when shown), muted in `base`, the row's style.
     pub fn push_trailing_cells(
         &self,
@@ -596,7 +596,7 @@ impl Shared {
         epic_w: usize,
         labels_w: usize,
     ) {
-        let gap = Span::raw(" ".repeat(GAP));
+        let gap = Span::raw(" ".repeat(COLUMN_GAP));
         if self.epic_column {
             let epic = ticket.epic_name.as_deref().unwrap_or("-");
             row.push_span(gap.clone());

@@ -6,7 +6,7 @@ use crate::app::App;
 use crate::style;
 use crate::views::common::{
     fit, key_width, lead_width, status_header, ticket_cells, ticket_marker, Ages, Columns,
-    ListLines, Shared, GAP, UPDATED_WIDTH,
+    ListLines, Shared, COLUMN_GAP, UPDATED_WIDTH,
 };
 
 /// (summary, epic, labels) widths: Summary takes what the other cells leave, and gives up columns
@@ -16,7 +16,7 @@ fn my_work_column_widths(area: Rect, lead: usize, key_w: usize) -> (usize, usize
     let mut epic_w = 24usize;
     let mut labels_w = 22usize;
     let inner = area.width as usize;
-    let fixed = lead + key_w + 4 * GAP + UPDATED_WIDTH;
+    let fixed = lead + key_w + 4 * COLUMN_GAP + UPDATED_WIDTH;
     let mut overflow = fixed + summary_w + epic_w + labels_w;
 
     if overflow > inner {

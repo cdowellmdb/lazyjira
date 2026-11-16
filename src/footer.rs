@@ -56,7 +56,7 @@ const FILTERS: &[Hint] = &[
 
 const SEPARATOR: &str = " · ";
 /// Blank cells between the hints and the segment at the right.
-const GAP: usize = 2;
+const SEGMENT_GAP: usize = 2;
 
 /// The idle footer for `app` in `width` columns. In spooky season, until `theme` is the spooky
 /// one, a hint to it leads.
@@ -181,7 +181,7 @@ fn fit(hints: &[Hint], indicators: &str, width: usize) -> Line<'static> {
             .collect()
     };
     // One cell trails the segment, as one leads the hints.
-    let segment = GAP + indicators.width() + 1;
+    let segment = SEGMENT_GAP + indicators.width() + 1;
     let indicators = if !indicators.is_empty() && hints_width(&shown(&keep)) + segment <= width {
         indicators
     } else {
@@ -462,7 +462,7 @@ mod tests {
     fn the_indicators_are_dropped_before_any_hint_and_sit_flush_right() {
         let full = MAIN_STEPS[0].0;
         let indicators = "2 selected · stale 3m";
-        let needed = full + GAP + indicators.width() + 1;
+        let needed = full + SEGMENT_GAP + indicators.width() + 1;
         let line = text(&fit(MAIN, indicators, needed));
         assert_eq!(line, format!("{}{}{indicators} ", MAIN_STEPS[0].1, "  "));
         assert_eq!(line.width(), needed);

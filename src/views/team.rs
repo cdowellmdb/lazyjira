@@ -6,7 +6,7 @@ use crate::style;
 use crate::views::common::{
     fit, fold_indicator, group_marker, key_width, lead_width, muted, narrow_for_summary,
     status_cell, status_width, ticket_cells, ticket_marker, tint, Ages, Columns, ListLines, Shared,
-    GAP, GUTTER, STATUS_DOT_WIDTH, UPDATED_WIDTH,
+    COLUMN_GAP, GUTTER, STATUS_DOT_WIDTH, UPDATED_WIDTH,
 };
 
 /// Summary takes what Status, Epic, Labels and the fixed cells leave; on narrow terminals Epic,
@@ -18,7 +18,7 @@ fn team_column_widths(
     mut status_w: usize,
 ) -> (usize, usize, usize, usize) {
     let (mut epic_w, mut labels_w) = (20, 18);
-    let fixed = lead + key_w + 5 * GAP + STATUS_DOT_WIDTH + UPDATED_WIDTH;
+    let fixed = lead + key_w + 5 * COLUMN_GAP + STATUS_DOT_WIDTH + UPDATED_WIDTH;
     let room = (area.width as usize).saturating_sub(fixed);
     let columns = &mut [(&mut epic_w, 10), (&mut labels_w, 8), (&mut status_w, 8)];
     let summary_w = narrow_for_summary(room, 14, columns);
