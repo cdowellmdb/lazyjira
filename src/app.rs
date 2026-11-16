@@ -2819,6 +2819,18 @@ mod tests {
         app.cache.my_tickets.push(done("DEMO-4", "gamma"));
         app.mark_cache_changed();
         assert_eq!(app.hidden_done_count(), 3);
+        app.switch_tab(Tab::Team);
+        assert_eq!(app.hidden_done_count(), 0, "only My Work says it");
+        app.switch_tab(Tab::MyWork);
+        assert_eq!(app.hidden_done_count(), 3, "back on My Work");
+        let mut refreshed = app.cache.clone();
+        refreshed.my_tickets.push(done("DEMO-5", "delta"));
+        app.replace_cache(refreshed, app.moves.now());
+        assert_eq!(app.hidden_done_count(), 4, "a refresh brings a done ticket");
+        let mut refreshed = app.cache.clone();
+        refreshed.my_tickets.retain(|ticket| ticket.key == "DEMO-1");
+        app.replace_cache(refreshed, app.moves.now());
+        assert_eq!(app.hidden_done_count(), 0, "a refresh drops them all");
         app.toggle_show_done();
         assert_eq!(app.hidden_done_count(), 0);
     }
