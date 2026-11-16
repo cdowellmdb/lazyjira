@@ -4,7 +4,7 @@ A fast terminal UI for Jira, with keyboard and mouse controls for daily triage a
 
 lazyjira reads tickets and moves them through Jira's REST API, using the [`jira` CLI](https://github.com/ankitpokhrel/jira-cli)'s config and your `JIRA_API_TOKEN`; creating tickets, commenting, assigning and editing fields go through the `jira` CLI itself. It opens instantly from a local cache, and refreshes in the background. See [Limitations](#limitations) for workflow and platform requirements.
 
-![lazyjira showing ticket detail with a close control, live settings, searchable ticket creation, and the five workspace tabs](docs/images/demo.gif)
+![lazyjira's My Work list with a tinted selected row, a ticket detail, live settings, a ticket created in the panel docked under the list, and the five workspace tabs](docs/images/demo.gif)
 
 ## Features
 
