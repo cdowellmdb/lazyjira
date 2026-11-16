@@ -228,6 +228,23 @@ fn tables_align_columns() {
     );
 }
 
+#[test]
+fn an_aligned_table_has_a_bold_header_a_muted_rule_and_muted_separators() {
+    let lines = render("||Name||Owner||\n|PAY|[~arivera]|\n|x|y|", 40);
+    let header = style::primary().add_modifier(ratatui::style::Modifier::BOLD);
+    assert_eq!(lines[0].spans[0], Span::styled("Name", header));
+    assert_eq!(lines[0].spans.last(), Some(&Span::styled("Owner", header)));
+    assert_eq!(
+        lines[1].spans,
+        vec![Span::styled("─────┼─────────", style::secondary())]
+    );
+    assert_eq!(lines[2].spans[0], Span::styled("PAY", style::primary()));
+    for at in [0, 2, 3] {
+        let separator = lines[at].spans.iter().find(|s| s.content == " │ ");
+        assert_eq!(separator.map(|s| s.style), Some(style::secondary()), "{at}");
+    }
+}
+
 fn cell(text: &str) -> table::Cell {
     table::Cell {
         header: false,
