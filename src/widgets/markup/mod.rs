@@ -2,8 +2,10 @@
 //! lines, word-wrapped to a width so list items, quotes and code blocks keep their indent and
 //! gutter on wrapped lines.
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
+
+use crate::style;
 
 mod inline;
 mod table;
@@ -11,26 +13,6 @@ mod wrap;
 
 pub use inline::inline;
 pub use wrap::wrap;
-
-// Plain text uses the terminal's own foreground, so it reads in light and
-// dark themes alike.
-fn text_style() -> Style {
-    Style::default().fg(Color::Reset)
-}
-
-fn bold() -> Style {
-    text_style().add_modifier(Modifier::BOLD)
-}
-
-fn muted() -> Style {
-    Style::default().fg(Color::DarkGray)
-}
-
-fn link_style() -> Style {
-    Style::default()
-        .fg(Color::LightBlue)
-        .add_modifier(Modifier::UNDERLINED)
-}
 
 /// Renders `text` as lines no wider than `width` columns.
 pub fn render(text: &str, width: u16) -> Vec<Line<'static>> {
@@ -100,7 +82,7 @@ impl Renderer {
                     i += 1;
                 }
                 self.list_counters.clear();
-                self.table(&rows);
+                self.lines.extend(table::lines(&rows, self.width));
                 continue;
             }
 
@@ -132,7 +114,7 @@ impl Renderer {
         if body.starts_with("{panel") {
             if let Some(title) = panel_title(body) {
                 self.blank();
-                self.push_wrapped(vec![], vec![], inline(title, bold()));
+                self.push_wrapped(vec![], vec![], inline(title, style::heading()));
             }
             return;
         }
@@ -158,7 +140,7 @@ impl Renderer {
             let indent = raw.len() - raw.trim_start().len();
             let text = format!("{}{}", " ".repeat(indent), body);
             for segment in split_breaks(&text) {
-                self.push_wrapped(vec![], vec![], inline(segment, text_style()));
+                self.push_wrapped(vec![], vec![], inline(segment, style::primary()));
             }
         }
 
@@ -169,7 +151,7 @@ impl Renderer {
 
     fn heading(&mut self, level: u8, text: &str) {
         self.blank();
-        self.push_wrapped(vec![], vec![], inline(text, bold()));
+        self.push_wrapped(vec![], vec![], inline(text, style::heading()));
         if level == 1 {
             self.rule();
         }
@@ -188,36 +170,38 @@ impl Renderer {
         };
 
         let indent = "  ".repeat(depth - 1);
-        let first = vec![Span::styled(format!("{}{} ", indent, marker), muted())];
+        let first = vec![Span::styled(
+            format!("{}{} ", indent, marker),
+            style::secondary(),
+        )];
         let hang = vec![Span::raw(
             " ".repeat(indent.len() + marker.chars().count() + 1),
         )];
         for (n, segment) in split_breaks(item).into_iter().enumerate() {
             let prefix = if n == 0 { first.clone() } else { hang.clone() };
-            self.push_wrapped(prefix, hang.clone(), inline(segment, text_style()));
+            self.push_wrapped(prefix, hang.clone(), inline(segment, style::primary()));
         }
     }
 
     fn quote(&mut self, text: &str) {
-        let gutter = vec![Span::styled("▎ ", muted())];
-        let style = text_style().add_modifier(Modifier::ITALIC);
+        let gutter = vec![Span::styled("▎ ", style::secondary())];
+        let quoted = style::primary().add_modifier(Modifier::ITALIC);
         for segment in split_breaks(text) {
-            self.push_wrapped(gutter.clone(), gutter.clone(), inline(segment, style));
+            self.push_wrapped(gutter.clone(), gutter.clone(), inline(segment, quoted));
         }
     }
 
     fn code_line(&mut self, text: &str) {
-        let gutter = vec![Span::styled("│ ", muted())];
-        let content = vec![Span::styled(
-            text.to_string(),
-            Style::default().fg(Color::Reset),
-        )];
+        let gutter = vec![Span::styled("│ ", style::secondary())];
+        let content = vec![Span::styled(text.to_string(), style::primary())];
         self.push_wrapped(gutter.clone(), gutter, content);
     }
 
     fn rule(&mut self) {
-        self.lines
-            .push(Line::from(Span::styled("─".repeat(self.width), muted())));
+        self.lines.push(Line::from(Span::styled(
+            "─".repeat(self.width),
+            style::secondary(),
+        )));
     }
 
     fn blank(&mut self) {
@@ -305,10 +289,6 @@ fn parse_list_item(line: &str) -> Option<(&str, &str)> {
 /// Splits on Jira's forced line break, `\\`.
 fn split_breaks(text: &str) -> Vec<&str> {
     text.split("\\\\").collect()
-}
-
-pub fn spans_width(spans: &[Span]) -> usize {
-    spans.iter().map(|s| s.width()).sum()
 }
 
 #[cfg(test)]

@@ -3,7 +3,6 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
-use super::{link_style, muted};
 use crate::style;
 
 /// The characters a backslash escapes. `\\` is a forced line break, and a backslash before any
@@ -140,10 +139,7 @@ impl Inline<'_> {
                 return None;
             }
             let name = name.rsplit('/').next().unwrap_or(name);
-            self.emit(
-                format!("[image: {}]", name),
-                muted().add_modifier(Modifier::ITALIC),
-            );
+            self.emit(format!("[image: {}]", name), style::aside());
             return Some(end + 1);
         }
 
@@ -175,7 +171,7 @@ impl Inline<'_> {
                 end -= 1;
             }
             let url: String = self.chars[i..end].iter().collect();
-            self.emit(url, link_style());
+            self.emit(url, style::link());
             return Some(end);
         }
 
@@ -240,22 +236,22 @@ impl Inline<'_> {
             self.flush();
             let text = text.trim();
             if text.is_empty() {
-                self.emit(url.to_string(), link_style());
+                self.emit(url.to_string(), style::link());
             } else {
-                self.out.extend(inline(text, link_style()));
+                self.out.extend(inline(text, style::link()));
                 if !url.is_empty() && url != text {
-                    self.emit(format!(" ({})", url), muted());
+                    self.emit(format!(" ({})", url), style::secondary());
                 }
             }
             return true;
         }
         let target = inner.trim();
         if target.contains("://") || target.starts_with("mailto:") {
-            self.emit(target.to_string(), link_style());
+            self.emit(target.to_string(), style::link());
             return true;
         }
         if let Some(attachment) = target.strip_prefix('^') {
-            self.emit(attachment.to_string(), link_style());
+            self.emit(attachment.to_string(), style::link());
             return true;
         }
         false

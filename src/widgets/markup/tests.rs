@@ -1,4 +1,6 @@
 use super::*;
+use crate::style;
+use ratatui::style::{Color, Style};
 
 fn text(lines: &[Line]) -> Vec<String> {
     lines
@@ -16,7 +18,7 @@ fn span<'a>(spans: &'a [Span<'static>], content: &str) -> &'a Span<'static> {
 
 #[test]
 fn inline_emphasis() {
-    let spans = inline("*Stakeholders:* a _b_ -c- +d+ {{e}}", text_style());
+    let spans = inline("*Stakeholders:* a _b_ -c- +d+ {{e}}", style::primary());
     assert!(span(&spans, "Stakeholders:")
         .style
         .add_modifier
@@ -43,13 +45,16 @@ fn inline_emphasis() {
 fn inline_code_is_a_chip_in_the_text_color_on_the_selection_background() {
     let chip = Style::default().fg(Color::Reset).bg(Color::DarkGray);
     for source in ["{{x}}", "`x`"] {
-        assert_eq!(inline(source, text_style()), vec![Span::styled("x", chip)]);
+        assert_eq!(
+            inline(source, style::primary()),
+            vec![Span::styled("x", chip)]
+        );
     }
-    let spans = inline("*bold {{x}}*", text_style());
+    let spans = inline("*bold {{x}}*", style::primary());
     assert_eq!(span(&spans, "x").style, chip.add_modifier(Modifier::BOLD));
-    let spans = inline("{color:red}{{x}}{color}", text_style());
+    let spans = inline("{color:red}{{x}}{color}", style::primary());
     assert_eq!(span(&spans, "x").style, chip);
-    let spans = inline("{{two words}}", text_style());
+    let spans = inline("{{two words}}", style::primary());
     assert_eq!(spans, vec![Span::styled("two words", chip)]);
 }
 
@@ -57,7 +62,7 @@ fn inline_code_is_a_chip_in_the_text_color_on_the_selection_background() {
 fn a_theme_recolors_the_chip_to_its_text_on_its_selection_color() {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    let line = Line::from(inline("ab {{cd}}", text_style()));
+    let line = Line::from(inline("ab {{cd}}", style::primary()));
     let mut buffer = Buffer::empty(Rect::new(0, 0, 9, 1));
     buffer.set_line(0, 0, &line, 9);
     crate::theme::resolve("nord", &Default::default()).apply(&mut buffer);
@@ -77,15 +82,19 @@ fn markers_inside_words_stay_plain() {
         "a * b * c",
         "C++ and x+y+z",
     ] {
-        let spans = inline(s, text_style());
+        let spans = inline(s, style::primary());
         assert_eq!(text(&[Line::from(spans.clone())]), vec![s.to_string()]);
-        assert!(spans.iter().all(|s| s.style == text_style()), "{:?}", spans);
+        assert!(
+            spans.iter().all(|s| s.style == style::primary()),
+            "{:?}",
+            spans
+        );
     }
 }
 
 #[test]
 fn nested_emphasis() {
-    let spans = inline("*bold _both_*", text_style());
+    let spans = inline("*bold _both_*", style::primary());
     let both = span(&spans, "both").style.add_modifier;
     assert!(both.contains(Modifier::BOLD | Modifier::ITALIC));
 }
@@ -94,20 +103,20 @@ fn nested_emphasis() {
 fn links_and_mentions() {
     let spans = inline(
         "at [10gen/mage|https://github.com/10gen/mage] by [~jdoe], see https://x.io/a.",
-        text_style(),
+        style::primary(),
     );
     assert_eq!(
         text(&[Line::from(spans.clone())]),
         vec!["at 10gen/mage (https://github.com/10gen/mage) by @jdoe, see https://x.io/a."]
     );
-    assert_eq!(span(&spans, "10gen/mage").style, link_style());
-    assert_eq!(span(&spans, "https://x.io/a").style, link_style());
+    assert_eq!(span(&spans, "10gen/mage").style, style::link());
+    assert_eq!(span(&spans, "https://x.io/a").style, style::link());
     assert_eq!(span(&spans, "@jdoe").style.fg, Some(Color::Cyan));
 }
 
 #[test]
 fn brackets_that_are_not_links_stay() {
-    let spans = inline("[WIP] thing", text_style());
+    let spans = inline("[WIP] thing", style::primary());
     assert_eq!(text(&[Line::from(spans)]), vec!["[WIP] thing"]);
 }
 
@@ -115,7 +124,7 @@ fn brackets_that_are_not_links_stay() {
 fn colors_icons_images_dashes() {
     let spans = inline(
         "{color:red}hot{color} (/) !shot.png|thumbnail! a -- b --- c",
-        text_style(),
+        style::primary(),
     );
     assert_eq!(span(&spans, "hot").style.fg, Some(Color::Red));
     assert_eq!(span(&spans, "✓").style.fg, Some(Color::Green));
@@ -150,9 +159,7 @@ fn headings_lists_and_rules() {
 
 #[test]
 fn headings_are_bold_in_the_text_color_and_only_level_one_gets_a_muted_rule() {
-    let bold = Style::default()
-        .fg(Color::Reset)
-        .add_modifier(Modifier::BOLD);
+    let bold = style::heading();
     let lines = render("h1. One\nh2. Two\nh3. Three\nh6. Six", 12);
     assert_eq!(
         text(&lines),
@@ -164,16 +171,16 @@ fn headings_are_bold_in_the_text_color_and_only_level_one_gets_a_muted_rule() {
             vec![Span::styled(text(&lines)[at].clone(), bold)]
         );
     }
-    assert_eq!(lines[1].spans[0].style, muted());
+    assert_eq!(lines[1].spans[0].style, style::secondary());
 }
 
 #[test]
 fn bullets_numbers_and_the_quote_bar_are_muted() {
     let lines = render("* dot\n# one\nbq. said", 20);
     assert_eq!(text(&lines), vec!["• dot", "1. one", "▎ said"]);
-    assert_eq!(lines[0].spans[0], Span::styled("• ", muted()));
-    assert_eq!(lines[1].spans[0], Span::styled("1. ", muted()));
-    assert_eq!(lines[2].spans[0], Span::styled("▎ ", muted()));
+    assert_eq!(lines[0].spans[0], Span::styled("• ", style::secondary()));
+    assert_eq!(lines[1].spans[0], Span::styled("1. ", style::secondary()));
+    assert_eq!(lines[2].spans[0], Span::styled("▎ ", style::secondary()));
 }
 
 #[test]
@@ -220,16 +227,17 @@ fn tables_align_columns() {
     );
 }
 
+fn cell(text: &str) -> table::Cell {
+    table::Cell {
+        header: false,
+        text: text.to_string(),
+    }
+}
+
 #[test]
 fn table_cells_keep_link_pipes() {
     let cells = table::parse_table_row("|[a|http://b]|c|");
-    assert_eq!(
-        cells,
-        vec![
-            (false, "[a|http://b]".to_string()),
-            (false, "c".to_string())
-        ]
-    );
+    assert_eq!(cells, vec![cell("[a|http://b]"), cell("c")]);
 }
 
 #[test]
@@ -245,8 +253,11 @@ fn forced_line_breaks() {
 }
 
 fn plain(source: &str) -> String {
-    let spans = inline(source, text_style());
-    assert!(spans.iter().all(|s| s.style == text_style()), "{spans:?}");
+    let spans = inline(source, style::primary());
+    assert!(
+        spans.iter().all(|s| s.style == style::primary()),
+        "{spans:?}"
+    );
     text(&[Line::from(spans)]).remove(0)
 }
 
@@ -296,10 +307,13 @@ fn an_escaped_marker_does_not_start_emphasis_a_link_or_code() {
     assert_eq!(plain("\\[a|not a url\\]"), "[a|not a url]");
     assert_eq!(plain("\\{{not code}}"), "{{not code}}");
     assert_eq!(plain("\\{color:red}x"), "{color:red}x");
-    let spans = inline("*a \\* b*", text_style());
+    let spans = inline("*a \\* b*", style::primary());
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].content, "a * b");
-    assert_eq!(spans[0].style, text_style().add_modifier(Modifier::BOLD));
+    assert_eq!(
+        spans[0].style,
+        style::primary().add_modifier(Modifier::BOLD)
+    );
 }
 
 #[test]
@@ -312,10 +326,7 @@ fn escapes_hold_in_paragraphs_and_list_items_but_not_in_code() {
 fn an_escaped_pipe_stays_in_its_table_cell() {
     assert_eq!(
         table::parse_table_row("|a\\|b|c \\[d\\|e\\] f|"),
-        vec![
-            (false, "a\\|b".to_string()),
-            (false, "c \\[d\\|e\\] f".to_string())
-        ]
+        vec![cell("a\\|b"), cell("c \\[d\\|e\\] f")]
     );
     let lines = render("||H||\n|a\\|b|", 40);
     assert_eq!(text(&lines), vec!["H", "───", "a|b"]);
@@ -323,8 +334,8 @@ fn an_escaped_pipe_stays_in_its_table_cell() {
 
 #[test]
 fn a_bare_link_ends_where_an_escape_begins() {
-    let spans = inline("see http://b.io\\) now", text_style());
-    assert_eq!(span(&spans, "http://b.io").style, link_style());
+    let spans = inline("see http://b.io\\) now", style::primary());
+    assert_eq!(span(&spans, "http://b.io").style, style::link());
     assert_eq!(text(&[Line::from(spans)]), vec!["see http://b.io) now"]);
 }
 
@@ -362,11 +373,14 @@ fn a_table_too_wide_to_align_is_one_record_per_row_with_the_header_as_labels() {
         .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
     assert_eq!(lines[0].spans, vec![Span::styled("title:* red", bold)]);
-    assert_eq!(lines[1].spans[0], Span::styled("  Cause  ", muted()));
+    assert_eq!(
+        lines[1].spans[0],
+        Span::styled("  Cause  ", style::secondary())
+    );
     assert_eq!(lines[2].spans[0], Span::raw("         "));
     assert_eq!(
         lines[3].spans[1],
-        Span::styled("12,400 hits in 1.9 s, no cache", text_style())
+        Span::styled("12,400 hits in 1.9 s, no cache", style::primary())
     );
 }
 
@@ -447,7 +461,7 @@ fn record_cells_keep_their_inline_markup() {
     );
     let chip = Style::default().fg(Color::Reset).bg(Color::DarkGray);
     assert_eq!(span(&lines[1].spans, "make test").style, chip);
-    assert_eq!(span(&lines[3].spans, "http://b.io").style, link_style());
+    assert_eq!(span(&lines[3].spans, "http://b.io").style, style::link());
     assert!(span(&lines[3].spans, "now")
         .style
         .add_modifier
@@ -485,4 +499,49 @@ fn a_header_only_table_and_empty_cells_draw_what_they_have() {
         text(&render("||H||A||B||\n|first| |third|", 14)),
         vec!["first", "  B  third"]
     );
+}
+
+#[test]
+fn a_table_fits_by_the_columns_wrap_counts_per_character() {
+    // A sun with an emoji selector is 1 column per character and 2 as a string, and wrap places
+    // text by the character, so the table must be measured that way too.
+    let sun = "\u{2600}\u{FE0F}".repeat(3);
+    let table = format!("||A||B||\n|{sun}|bbbbbb|");
+    let lines = text(&render(&table, 12));
+    assert_eq!(
+        lines,
+        vec![
+            "A   │ B".to_string(),
+            "────┼───────".to_string(),
+            format!("{sun} │ bbbbbb")
+        ]
+    );
+    assert_eq!(text(&render(&table, 11))[0], sun);
+}
+
+#[test]
+fn a_heading_is_drawn_in_the_text_color_every_theme_gives_plain_text() {
+    // `heading()` sets no color where plain text sets `Reset`. A cell nothing colored is `Reset`
+    // too, so a theme must paint both the same, in every preset.
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use std::collections::BTreeMap;
+    let lines = render("h1. Head {{x}}\nplain {{x}}", 20);
+    for name in crate::theme::names(&BTreeMap::new()) {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 20, 4));
+        for (y, line) in lines.iter().enumerate() {
+            buffer.set_line(0, y as u16, line, 20);
+        }
+        crate::theme::resolve(&name, &BTreeMap::new()).apply(&mut buffer);
+        let (head, plain) = (&buffer[(0, 0)], &buffer[(0, 2)]);
+        assert_eq!((head.fg, head.bg), (plain.fg, plain.bg), "{name}");
+        assert!(head.modifier.contains(Modifier::BOLD), "{name}");
+        let (head_chip, plain_chip) = (&buffer[(5, 0)], &buffer[(6, 2)]);
+        assert_eq!(head_chip.symbol(), "x");
+        assert_eq!(
+            (head_chip.fg, head_chip.bg),
+            (plain_chip.fg, plain_chip.bg),
+            "{name}"
+        );
+    }
 }

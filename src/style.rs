@@ -66,6 +66,13 @@ pub fn code() -> Style {
     primary().bg(Color::DarkGray)
 }
 
+/// A link in a description or comment: light blue and underlined. A theme recolors it as `info`.
+pub fn link() -> Style {
+    Style::default()
+        .fg(Color::LightBlue)
+        .add_modifier(Modifier::UNDERLINED)
+}
+
 /// An option in a menu, in `base`: the chosen one is bold on the selected row's background.
 pub fn option(base: Style, chosen: bool) -> Style {
     if chosen {
@@ -185,6 +192,7 @@ mod tests {
             heading(),
             selected_row(),
             code(),
+            link(),
             status("In Progress", &rules),
             status("Done", &rules),
             status("Blocked", &rules),

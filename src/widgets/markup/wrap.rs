@@ -4,7 +4,15 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
-use super::spans_width;
+/// The columns `text` takes, counted per character as `wrap` places them.
+pub(super) fn text_width(text: &str) -> usize {
+    text.chars().map(|c| c.width().unwrap_or(0)).sum()
+}
+
+/// The columns `spans` take, counted per character as `wrap` places them.
+pub(super) fn spans_width(spans: &[Span]) -> usize {
+    spans.iter().map(|s| text_width(&s.content)).sum()
+}
 
 /// Word-wraps `content` to `width`, starting the first line with `first` and
 /// later lines with `rest`. Words too long for a line are broken. Lines break
