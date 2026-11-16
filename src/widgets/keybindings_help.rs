@@ -9,7 +9,7 @@ use crate::views::common::panel;
 use crate::widgets::{form, markup};
 
 // An empty key marks a section heading.
-pub(crate) const MAIN: &[(&str, &str)] = &[
+const MAIN: &[(&str, &str)] = &[
     ("", "Navigation"),
     ("Tab", "Next tab"),
     ("Shift+Tab", "Previous tab / filter sidebar"),
@@ -38,7 +38,7 @@ pub(crate) const MAIN: &[(&str, &str)] = &[
     ("r", "Refresh tickets"),
 ];
 
-pub(crate) const DETAIL: &[(&str, &str)] = &[
+const DETAIL: &[(&str, &str)] = &[
     ("", "Detail navigation"),
     ("j/k · ↑/↓", "Scroll"),
     ("PgUp/PgDn", "Scroll a page (Space: next)"),
@@ -71,6 +71,12 @@ pub(crate) const DETAIL: &[(&str, &str)] = &[
     ("U", "Upload tickets from CSV"),
     ("n / e / x", "New / edit / delete filter"),
 ];
+
+/// Every key column of the help, for the footer's test that each hint is documented.
+#[cfg(test)]
+pub(crate) fn keys() -> impl Iterator<Item = &'static str> {
+    MAIN.iter().chain(DETAIL).map(|(keys, _)| *keys)
+}
 
 fn rows(bindings: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
