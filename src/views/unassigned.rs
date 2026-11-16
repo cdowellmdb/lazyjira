@@ -24,11 +24,12 @@ fn ticket_column_widths(
     (status_w, summary_w)
 }
 
-pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
+/// `compact` is the list's width beside the detail pane, which shows only keys and summaries.
+pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, compact: Option<u16>) {
     let grouped = app.unassigned_visible_by_epic();
     let shared = Shared::of(&grouped, Columns::GroupedByEpic);
     let key_w = key_width(&grouped);
-    let mut lines = ListLines::new(app);
+    let mut lines = ListLines::new(app).compact(compact);
     let ages = lines.ages();
     let (status_w, summary_w) =
         ticket_column_widths(area, lines.lead_width(), key_w, status_width(&grouped));

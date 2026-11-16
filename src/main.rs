@@ -23,6 +23,7 @@ mod move_picker;
 mod moves;
 mod settings;
 mod setup;
+mod status;
 mod style;
 mod subtasks;
 mod theme;
@@ -734,96 +735,52 @@ fn edit_externally(
 
 fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     use ratatui::layout::{Constraint, Direction, Layout};
-    use ratatui::text::{Line, Span};
 
+    let status = status::status(app, config, f.area().width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(top_bar::HEIGHT),
             Constraint::Min(0),                          // Content
             Constraint::Length(app.is_marking() as u16), // Bulk bar
-            Constraint::Length(1),                       // Status bar
+            Constraint::Length(status.height()),         // Status area
         ])
         .split(f.area());
+    // A panel docks at the bottom of the content, which shrinks to make room.
+    let panel = widgets::dock::plan(app, chunks[1]);
+    let [content, dock] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(panel.as_ref().map_or(0, |panel| panel.height)),
+    ])
+    .areas(chunks[1]);
 
+    // The detail sits beside the list or replaces it; either way it covers the top bar's controls.
+    let detail = app.is_detail_open();
+    let panes = detail.then(|| widgets::ticket_detail::panes(app, content));
+    let list = panes.as_ref().map_or(Some(content), |panes| panes.list);
     mouse::begin_layer(app);
     top_bar::render(f, app, chunks[0]);
-
-    // Content area
-    if app.loading
-        && app.cache.my_tickets.is_empty()
-        && app.cache.team_tickets.is_empty()
-        && app.cache.epics.is_empty()
-        && app.filter_results.is_empty()
-    {
-        let mut loading = views::common::ListLines::new(app);
-        loading.glyph_line(
-            Span::raw(" "),
-            vec![Span::styled("Loading...", style::warning())],
-        );
-        loading.render(f, chunks[1]);
-    } else {
-        match app.active_tab {
-            Tab::MyWork => views::my_work::render(f, chunks[1], app),
-            Tab::Team => views::team::render(f, chunks[1], app),
-            Tab::Epics => views::epics::render(f, chunks[1], app),
-            Tab::Unassigned => views::unassigned::render(f, chunks[1], app),
-            Tab::Filters => views::filters::render(f, chunks[1], app, config),
-        }
+    if detail {
+        mouse::begin_layer(app);
     }
 
-    // Status bar
-    let status_line = if let Some(ref flash) = app.flash {
-        // One line: the terminal drops a line break, which would run Jira's messages together.
-        Line::from(Span::styled(
-            flash.lines().collect::<Vec<_>>().join("; "),
-            style::error(),
-        ))
-    } else if let Some(ref search) = app.search {
-        Line::from(Span::styled(format!("/{}", search), style::warning()))
-    } else if let Some(pending) = app.moves.pending_message() {
-        Line::from(Span::styled(pending, style::warning()))
-    } else {
-        footer::line(app, &config.preferences.theme, chunks[3].width)
-    };
-    f.render_widget(ratatui::widgets::Paragraph::new(status_line), chunks[3]);
+    if let Some(list) = list {
+        // Beside the detail pane the list is compact: its own width, keys and summaries only.
+        let compact = panes.as_ref().map(|_| list.width);
+        views::render_active(f, list, app, config, compact);
+    }
+    if let Some(panes) = &panes {
+        if let Some(divider) = panes.divider {
+            widgets::ticket_detail::render_divider(f, divider);
+        }
+        widgets::ticket_detail::render(f, app, panes.detail);
+    }
+
+    status.render(f, app, chunks[3]);
     if let Some(bar) = footer::bulk_bar(app, chunks[2].width) {
         f.render_widget(ratatui::widgets::Paragraph::new(bar), chunks[2]);
     }
 
-    // Detail overlay
-    if app.is_detail_open() {
-        mouse::begin_layer(app);
-        widgets::ticket_detail::render(f, app);
-    }
-    if app.is_create_ticket_open() {
-        mouse::begin_layer(app);
-        widgets::create_ticket::render(f, app);
-    }
-    if app.is_comment_open() {
-        mouse::begin_layer(app);
-        widgets::comment::render(f, app);
-    }
-    if app.is_assign_open() {
-        mouse::begin_layer(app);
-        widgets::assign::render(f, app);
-    }
-    if app.is_edit_open() {
-        mouse::begin_layer(app);
-        widgets::edit_fields::render(f, app);
-    }
-    if app.is_filter_edit_open() {
-        mouse::begin_layer(app);
-        render_filter_edit_modal(f, app);
-    }
-    if app.is_bulk_open() {
-        mouse::begin_layer(app);
-        widgets::bulk_actions::render(f, app);
-    }
-    if app.is_bulk_upload_open() {
-        mouse::begin_layer(app);
-        widgets::bulk_upload::render(f, app);
-    }
     if app.show_keybindings {
         mouse::begin_layer(app);
         widgets::keybindings_help::render(f, app);
@@ -832,22 +789,10 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         mouse::begin_layer(app);
         settings::render(f, app);
     }
-    if !app.moves.failures().is_empty() {
+    if let Some(panel) = panel {
         mouse::begin_layer(app);
-        let area = f.area();
-        widgets::form::buttons(
-            f,
-            app,
-            ratatui::layout::Rect::new(
-                area.x + 2,
-                area.bottom().saturating_sub(2),
-                area.width.saturating_sub(4),
-                1,
-            ),
-            &[("Dismiss", KeyCode::Enter), ("Browser", KeyCode::Char('o'))],
-        );
+        widgets::dock::render(f, app, panel, dock);
     }
-    widgets::move_failure::render(f, app, app.moves.failures());
     mouse::render_selection(f, app);
     let area = f.area();
     app.delight
@@ -858,54 +803,6 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
             theme::resolve(&state.themes[state.theme], &config.themes)
         })
         .apply(f.buffer_mut());
-}
-
-fn render_filter_edit_modal(f: &mut ratatui::Frame, app: &App) {
-    use ratatui::layout::{Constraint, Layout};
-    use widgets::form;
-    let Some(state) = &app.filter_edit else {
-        return;
-    };
-    let title = if state.editing_idx.is_some() {
-        "Edit Filter"
-    } else {
-        "New Filter"
-    };
-    let inner = form::render_modal_frame(f, app, title, 80, 50);
-    let areas = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(3),
-        Constraint::Length(1),
-    ])
-    .split(inner);
-    form::render_editor(
-        f,
-        app,
-        areas[0],
-        "Name",
-        &state.name,
-        state.focused_field == 0,
-        0,
-    );
-    form::render_editor(
-        f,
-        app,
-        areas[1],
-        "JQL",
-        &state.jql,
-        state.focused_field == 1,
-        1,
-    );
-    form::buttons(
-        f,
-        app,
-        areas[2],
-        &[
-            ("Save", KeyCode::Enter),
-            ("Cancel", KeyCode::Esc),
-            ("Editor", KeyCode::F(4)),
-        ],
-    );
 }
 
 fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
@@ -936,6 +833,8 @@ fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
 fn handle_move_failure_keys(app: &mut App, key: KeyCode) {
     match key {
         KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.moves.dismiss_failure(),
+        KeyCode::Down | KeyCode::Char('j') => app.moves.scroll_failure(true),
+        KeyCode::Up | KeyCode::Char('k') => app.moves.scroll_failure(false),
         KeyCode::Char('o') => {
             if let Some(failure) = app.moves.failures().first() {
                 let key = failure.key.clone();
@@ -971,6 +870,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backg
                 KeyCode::Home | KeyCode::Char('g') => app.scroll_detail_to(false),
                 KeyCode::End | KeyCode::Char('G') => app.scroll_detail_to(true),
                 KeyCode::Char('z') => app.detail_fullscreen = !app.detail_fullscreen,
+                KeyCode::Char('?') => app.toggle_keybindings(),
                 KeyCode::Left | KeyCode::Right => {
                     if let Some(key) = app.step_detail(key == KeyCode::Right) {
                         spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());
@@ -1808,7 +1708,7 @@ mod tests {
 
         handle_comment_keys(&mut app, KeyCode::Enter, KeyModifiers::SHIFT, &tx);
 
-        let state = app.comment_state.expect("comment modal should remain open");
+        let state = app.comment_state.expect("comment panel should remain open");
         assert_eq!(state.body.lines().join("\n"), "hello\n");
     }
 
@@ -1838,7 +1738,7 @@ mod tests {
 
         handle_comment_keys(&mut app, KeyCode::Char('j'), KeyModifiers::CONTROL, &tx);
 
-        let state = app.comment_state.expect("comment modal should remain open");
+        let state = app.comment_state.expect("comment panel should remain open");
         assert_eq!(state.body.lines().join("\n"), "hello\n");
     }
 
@@ -2327,7 +2227,7 @@ mod tests {
             handle_key(&mut app, KeyEvent::from(code), &tx, &mut config).await;
             assert_eq!(app.moves.failures().len(), 1);
         }
-        // The popup swallowed those keys instead of the detail view underneath.
+        // The panel swallowed those keys instead of the detail view underneath.
         assert!(matches!(app.detail_mode, DetailMode::View));
         assert_eq!(app.detail_scroll, 0);
 

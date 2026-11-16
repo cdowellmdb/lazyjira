@@ -4,10 +4,13 @@
 
 use std::cmp::Reverse;
 
+use crossterm::event::KeyCode;
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, FilterFocus, Tab};
+use crate::mouse::Target;
 use crate::style;
 
 #[derive(Debug, Clone, Copy)]
@@ -150,6 +153,82 @@ pub fn bulk_bar(app: &App, width: u16) -> Option<Line<'static>> {
     Some(Line::from(spans))
 }
 
+/// A panel's or the detail's hints, `(key, label)`: `Esc` is never dropped and the others go
+/// from the right, so their order is the drop order.
+pub type Pairs<'a> = &'a [(&'static str, &'static str)];
+
+fn pair_hints(pairs: Pairs) -> Vec<Hint> {
+    pairs
+        .iter()
+        .enumerate()
+        .map(|(at, &(key, label))| hint(key, label, if key == "Esc" { 0 } else { 1 + at as u8 }))
+        .collect()
+}
+
+/// Draws `pairs` in `area`'s first row like the footer's hints, dropping whole hints from the
+/// right to fit, and makes each kept key that is one key press (`Esc`, `Enter` or a character)
+/// a click target, and each arrow of `←→`.
+pub fn render_pairs(f: &mut ratatui::Frame, app: &App, area: Rect, pairs: Pairs) {
+    if area.is_empty() {
+        return;
+    }
+    let row = Rect::new(area.x, area.y, area.width, 1);
+    let hints = pair_hints(pairs);
+    let kept = choose(&hints, "", row.width as usize).kept;
+    f.render_widget(ratatui::widgets::Paragraph::new(hints_line(&kept)), row);
+    let mut x = row.x.saturating_add(1);
+    let mut targets = app.mouse_targets.borrow_mut();
+    for hint in kept {
+        let width = hint.key.width() as u16;
+        let key = match hint.key {
+            "Esc" => Some(KeyCode::Esc),
+            "Enter" => Some(KeyCode::Enter),
+            key if key.chars().count() == 1 => key.chars().next().map(KeyCode::Char),
+            _ => None,
+        };
+        if let Some(key) = key {
+            let room = row.right().saturating_sub(x);
+            targets.push((Rect::new(x, row.y, width.min(room), 1), Target::Key(key)));
+        }
+        if hint.key == "←→" {
+            targets.push((Rect::new(x, row.y, 1, 1), Target::Key(KeyCode::Left)));
+            targets.push((Rect::new(x + 1, row.y, 1, 1), Target::Key(KeyCode::Right)));
+        }
+        x = x.saturating_add(width + 1 + hint.label.width() as u16 + SEPARATOR.width() as u16);
+    }
+}
+
+/// `pairs` split into as few rows of at most `width` columns as hold them, in order, each hint
+/// whole on one row, and the rows as even as the hints allow. A hint wider than `width` has a
+/// row to itself.
+pub fn wrap_pairs(pairs: Pairs, width: u16) -> Vec<Pairs> {
+    let rows = fill_rows(pairs, width as usize);
+    let total = pair_hints(pairs);
+    let least = hints_width(&total.iter().collect::<Vec<_>>()).div_ceil(rows.len().max(1));
+    // The narrowest limit that still takes the same number of rows.
+    (least..=width as usize)
+        .map(|limit| fill_rows(pairs, limit))
+        .find(|even| even.len() == rows.len())
+        .unwrap_or(rows)
+}
+
+/// `pairs` in rows filled in order up to `limit` columns each.
+fn fill_rows(pairs: Pairs, limit: usize) -> Vec<Pairs> {
+    let mut rows = Vec::new();
+    let mut start = 0;
+    for end in 1..pairs.len() {
+        let row = pair_hints(&pairs[start..=end]);
+        if hints_width(&row.iter().collect::<Vec<_>>()) > limit {
+            rows.push(&pairs[start..end]);
+            start = end;
+        }
+    }
+    if start < pairs.len() {
+        rows.push(&pairs[start..]);
+    }
+    rows
+}
+
 fn age_in_minutes(age_secs: u64) -> String {
     match age_secs / 60 {
         0 => "<1m".to_string(),
@@ -178,10 +257,16 @@ fn hint_spans(hints: &[&Hint]) -> Vec<Span<'static>> {
     spans
 }
 
-/// `hints` and `indicators` in `width` columns. The indicators go first when they don't fit
-/// beside the hints, then hints from the highest priority number, rightmost first, so a hint
-/// is whole or gone. A priority of zero stays even when nothing fits.
-fn fit(hints: &[Hint], indicators: &str, width: usize) -> Line<'static> {
+/// What `choose` kept: the hints that fit, and the indicators if they fit beside them.
+struct Fitted<'a> {
+    kept: Vec<&'a Hint>,
+    indicators: &'a str,
+}
+
+/// Which of `hints` and `indicators` fit in `width` columns. The indicators go first when they
+/// don't fit beside the hints, then hints from the highest priority number, rightmost first, so
+/// a hint is whole or gone. A priority of zero stays even when nothing fits.
+fn choose<'a>(hints: &'a [Hint], indicators: &'a str, width: usize) -> Fitted<'a> {
     let mut keep = vec![true; hints.len()];
     let shown = |keep: &[bool]| -> Vec<&Hint> {
         hints
@@ -207,15 +292,30 @@ fn fit(hints: &[Hint], indicators: &str, width: usize) -> Line<'static> {
         }
         keep[at] = false;
     }
-    let kept = shown(&keep);
+    Fitted {
+        kept: shown(&keep),
+        indicators,
+    }
+}
+
+/// `kept` as a line: a cell, then each hint.
+fn hints_line(kept: &[&Hint]) -> Line<'static> {
     let mut spans = vec![Span::raw(" ")];
-    spans.extend(hint_spans(&kept));
+    spans.extend(hint_spans(kept));
+    Line::from(spans)
+}
+
+/// `hints` and `indicators` in `width` columns, the indicators right-aligned.
+fn fit(hints: &[Hint], indicators: &str, width: usize) -> Line<'static> {
+    let Fitted { kept, indicators } = choose(hints, indicators, width);
+    let mut line = hints_line(&kept);
     if !indicators.is_empty() {
         let pad = width.saturating_sub(hints_width(&kept) + indicators.width() + 1);
-        spans.push(Span::raw(" ".repeat(pad)));
-        spans.push(Span::styled(format!("{indicators} "), style::secondary()));
+        line.spans.push(Span::raw(" ".repeat(pad)));
+        line.spans
+            .push(Span::styled(format!("{indicators} "), style::secondary()));
     }
-    Line::from(spans)
+    line
 }
 
 #[cfg(test)]
@@ -365,6 +465,52 @@ mod tests {
     #[test]
     fn the_spooky_hint_drops_after_the_priority_two_hints_to_its_right() {
         assert_steps(&spooky(), &SPOOKY_STEPS, &SPOOKY_DROPPED);
+    }
+
+    #[test]
+    fn overlay_hints_drop_from_the_right_but_esc_stays_and_each_key_is_clickable() {
+        let pairs = [
+            ("↑↓", "scroll"),
+            ("←→", "prev/next"),
+            ("m", "move"),
+            ("Esc", "close"),
+        ];
+        for (width, expected) in [
+            (50, " ↑↓ scroll · ←→ prev/next · m move · Esc close"),
+            (46, " ↑↓ scroll · ←→ prev/next · m move · Esc close"),
+            (45, " ↑↓ scroll · ←→ prev/next · Esc close"),
+            (37, " ↑↓ scroll · ←→ prev/next · Esc close"),
+            (36, " ↑↓ scroll · Esc close"),
+            (22, " ↑↓ scroll · Esc close"),
+            (21, " Esc close"),
+            (10, " Esc close"),
+        ] {
+            let app = app();
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 8)).unwrap();
+            terminal
+                .draw(|f| render_pairs(f, &app, Rect::new(0, 0, width, 1), &pairs))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let row: String = (0..width).map(|x| buffer[(x, 0)].symbol()).collect();
+            assert_eq!(row.trim_end(), expected, "{width}");
+        }
+        let app = app();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 8)).unwrap();
+        terminal
+            .draw(|f| render_pairs(f, &app, Rect::new(10, 7, 50, 1), &pairs))
+            .unwrap();
+        let targets: Vec<(Rect, Target)> = app.mouse_targets.borrow().clone();
+        assert_eq!(
+            targets,
+            [
+                (Rect::new(23, 7, 1, 1), Target::Key(KeyCode::Left)),
+                (Rect::new(24, 7, 1, 1), Target::Key(KeyCode::Right)),
+                (Rect::new(38, 7, 1, 1), Target::Key(KeyCode::Char('m'))),
+                (Rect::new(47, 7, 3, 1), Target::Key(KeyCode::Esc)),
+            ]
+        );
     }
 
     #[test]
@@ -588,5 +734,35 @@ mod tests {
         for key in keys {
             assert!(help.contains(key), "{key} is not in the help");
         }
+    }
+
+    #[test]
+    fn wrapped_pairs_fill_the_fewest_rows_whole_and_as_even_as_they_allow() {
+        // Three hints of 6 cells and `Esc close` of 9: 37 columns with the leading cell and the
+        // 3 cell separators.
+        let pairs: Pairs = &[
+            ("a", "aaaa"),
+            ("b", "bbbb"),
+            ("c", "cccc"),
+            ("Esc", "close"),
+        ];
+        let keys = |width| -> Vec<Vec<&str>> {
+            wrap_pairs(pairs, width)
+                .iter()
+                .map(|row| row.iter().map(|(key, _)| *key).collect())
+                .collect()
+        };
+        assert_eq!(keys(40), [["a", "b", "c", "Esc"]]);
+        assert_eq!(keys(37), [["a", "b", "c", "Esc"]]);
+        // 36 columns need two rows. Filling in order would leave `Esc` alone, so they even out.
+        assert_eq!(keys(36), [vec!["a", "b"], vec!["c", "Esc"]]);
+        assert_eq!(keys(19), [vec!["a", "b"], vec!["c", "Esc"]]);
+        // `c` and `Esc close` need 19 columns together.
+        assert_eq!(keys(18), [vec!["a", "b"], vec!["c"], vec!["Esc"]]);
+        assert_eq!(keys(16), [vec!["a", "b"], vec!["c"], vec!["Esc"]]);
+        assert_eq!(keys(15), [vec!["a"], vec!["b"], vec!["c"], vec!["Esc"]]);
+        // A hint wider than the width has its row to itself, whole.
+        assert_eq!(keys(5), [vec!["a"], vec!["b"], vec!["c"], vec!["Esc"]]);
+        assert!(wrap_pairs(&[], 80).is_empty());
     }
 }

@@ -24,11 +24,12 @@ fn team_column_widths(
     (status_w, summary_w, epic_w, labels_w)
 }
 
-pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
+/// `compact` is the list's width beside the detail pane, which shows only keys and summaries.
+pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, compact: Option<u16>) {
     let members = app.team_visible_tickets_by_member();
     let shared = Shared::of(&members, Columns::EpicAndLabels);
     let key_w = key_width(&members);
-    let mut lines = ListLines::new(app);
+    let mut lines = ListLines::new(app).compact(compact);
     let ages = lines.ages();
     let (status_w, summary_w, epic_w, labels_w) =
         team_column_widths(area, lines.lead_width(), key_w, status_width(&members));

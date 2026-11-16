@@ -1,10 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
-use ratatui::{
-    buffer::Buffer,
-    style::{Color, Style},
-    widgets::Paragraph,
-};
+use ratatui::{buffer::Buffer, widgets::Paragraph};
 use tokio::sync::mpsc::UnboundedSender;
 use tui_textarea::CursorMove;
 
@@ -19,6 +15,8 @@ use crate::{
 pub enum Target {
     Tab(Tab),
     Row(usize),
+    /// A row of the list beside the detail pane: a click shows its ticket.
+    ShowRow(usize),
     Mark(usize),
     Fold(usize),
     Filter(usize),
@@ -167,7 +165,7 @@ pub fn render_selection(f: &mut ratatui::Frame, app: &App) {
     selection.screen = screen;
     for row in selection.rows() {
         f.buffer_mut()
-            .set_style(row, Style::default().fg(Color::Black).bg(Color::LightBlue));
+            .set_style(row, crate::style::text_selection());
     }
     if selection.range.is_some_and(|(start, end)| start != end) || selection.editor_selected {
         let footer = Rect::new(
@@ -182,7 +180,7 @@ pub fn render_selection(f: &mut ratatui::Frame, app: &App) {
                 "[Copy]  {}",
                 app.flash.as_deref().unwrap_or("Ctrl+C copy · Esc clear")
             ))
-            .style(Style::default().fg(Color::Cyan)),
+            .style(crate::style::accent()),
             footer,
         );
         app.mouse_targets.borrow_mut().push((
@@ -360,13 +358,23 @@ pub struct Item {
     /// The column of its fold arrow or dot in its first line: a group header's dot or arrow, a
     /// parent's arrow.
     pub fold: Option<u16>,
+    /// Whether a click beside the detail pane shows it: a ticket, or an epic's header.
+    pub shows: bool,
 }
 
 /// Registers each item's targets. Every drawn line of an item selects it; its first line also
 /// holds its mark, over the `lead` cells before its content (the gutter, and the checkbox while
-/// tickets are marked), and its fold cell.
-pub fn register_rows(app: &App, inner: Rect, items: &[Item], scroll: u16, lead: usize) {
-    for item in items {
+/// tickets are marked), and its fold cell. Beside the detail pane (`compact`) a line only shows
+/// its item, and only the items that `shows` have a target at all: the selection stays on the
+/// ticket the pane shows.
+pub fn register_rows(
+    app: &App,
+    inner: Rect,
+    items: &[Item],
+    scroll: u16,
+    (lead, compact): (usize, bool),
+) {
+    for item in items.iter().filter(|item| item.shows || !compact) {
         let index = item.index;
         for line in item.lines.clone() {
             let Some(y) = line
@@ -377,6 +385,10 @@ pub fn register_rows(app: &App, inner: Rect, items: &[Item], scroll: u16, lead: 
             };
             let rect = Rect::new(inner.x, inner.y + y as u16, inner.width, 1);
             let mut targets = app.mouse_targets.borrow_mut();
+            if compact {
+                targets.push((rect, Target::ShowRow(index)));
+                continue;
+            }
             targets.push((rect, Target::Row(index)));
             if line != item.lines.start {
                 continue;
@@ -470,13 +482,19 @@ pub async fn handle(
             let Some((_, target)) = target else {
                 return;
             };
-            if matches!(target, Target::Row(_) | Target::Mark(_) | Target::Fold(_))
-                && app.active_tab == Tab::Filters
+            if matches!(
+                target,
+                Target::Row(_) | Target::ShowRow(_) | Target::Mark(_) | Target::Fold(_)
+            ) && app.active_tab == Tab::Filters
             {
                 app.filter_focus = FilterFocus::Results;
             }
             match target {
                 Target::Tab(tab) => app.switch_tab(tab),
+                Target::ShowRow(index) => {
+                    app.selected_index = index;
+                    crate::open_selected_row(app, tx);
+                }
                 Target::Row(index) => {
                     if app.selected_index == index {
                         crate::handle_key(
@@ -569,10 +587,8 @@ fn menu_choice(app: &App) -> Option<usize> {
             _,
         ) => Some(*selected),
         (Some(_), _) => None,
-        (None, DetailMode::MovePicker(picker)) if app.is_detail_open() => Some(picker.selected),
-        (None, DetailMode::ResolutionPicker { selected, .. }) if app.is_detail_open() => {
-            Some(*selected)
-        }
+        (None, DetailMode::MovePicker(picker)) => Some(picker.selected),
+        (None, DetailMode::ResolutionPicker { selected, .. }) => Some(*selected),
         _ => None,
     }
 }
@@ -627,6 +643,7 @@ mod tests {
         cache::{TeamMember, Ticket},
         widgets::form,
     };
+    use ratatui::style::Color;
     use ratatui::{backend::TestBackend, Terminal};
 
     fn draw(app: &App, config: &AppConfig) -> Buffer {
@@ -889,7 +906,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dragging_selects_visible_text_without_opening_rows_or_clicking_through_modals() {
+    async fn dragging_selects_visible_text_without_opening_rows_or_clicking_through_panels() {
         let mut config: AppConfig =
             toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -935,7 +952,7 @@ mod tests {
         let end = Position::new(alpha.x + 6, alpha.y);
         drag_between(&mut app, &mut config, &tx, start, end).await;
         assert_eq!(selected_text(&mut app).as_deref(), Some("🙂"));
-        // Covered list checkboxes never become active while selecting popup text.
+        // Covered list checkboxes never become active while selecting panel text.
         assert_eq!(app.selected_ticket_count(), 0);
         let second = locate(&app, "second");
         let end = Position::new(second.x + 6, second.y);
@@ -1186,7 +1203,7 @@ mod tests {
     fn draw_my_work(app: &App) {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal
-            .draw(|f| crate::views::my_work::render(f, f.area(), app))
+            .draw(|f| crate::views::my_work::render(f, f.area(), app, None))
             .unwrap();
     }
 
@@ -1364,7 +1381,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mouse_uses_rendered_rows_and_keeps_modal_actions_separate() {
+    async fn mouse_uses_rendered_rows_and_keeps_panel_actions_separate() {
         let mut config: AppConfig =
             toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();

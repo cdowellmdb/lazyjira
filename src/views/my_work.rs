@@ -74,11 +74,12 @@ fn empty_scene(app: &App) -> Option<Vec<Line<'static>>> {
     Some(lines)
 }
 
-pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
+/// `compact` is the list's width beside the detail pane, which shows only keys and summaries.
+pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, compact: Option<u16>) {
     let grouped = app.my_work_visible_by_status();
     let shared = Shared::of(&grouped, Columns::EpicAndLabels);
     let key_w = key_width(&grouped);
-    let mut lines = ListLines::new(app);
+    let mut lines = ListLines::new(app).compact(compact);
     let ages = lines.ages();
     let (summary_w, epic_w, labels_w) = my_work_column_widths(area, lines.lead_width(), key_w);
     let summary_w = shared.summary_width(summary_w, epic_w, labels_w);

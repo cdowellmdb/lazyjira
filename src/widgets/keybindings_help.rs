@@ -1,11 +1,9 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Padding, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::style;
-use crate::views::common::panel;
 use crate::widgets::{form, markup};
 
 // An empty key marks a section heading.
@@ -44,8 +42,9 @@ const DETAIL: &[(&str, &str)] = &[
     ("PgUp/PgDn", "Scroll a page (Space: next)"),
     ("g/G · Home/End", "Jump to top / bottom"),
     ("←/→", "Previous / next ticket"),
-    ("z", "Toggle full screen"),
+    ("z", "Zoom the detail over the list (toggle)"),
     ("o", "Open in browser"),
+    ("?", "Keyboard shortcuts"),
     ("Esc", "Close detail / go back"),
     ("", "Ticket actions"),
     ("m", "Move ticket"),
@@ -54,7 +53,7 @@ const DETAIL: &[(&str, &str)] = &[
     ("e", "Edit summary, labels & description"),
     ("h", "Activity: comments, newest first"),
     ("Ctrl+E / F4", "External editor (text fields)"),
-    ("Shift+Enter", "Newline (comments & descriptions)"),
+    ("Shift+Enter · Ctrl+J", "Newline (comments & descriptions)"),
     ("", "Move picker"),
     ("j/k · ↑/↓", "Choose transition"),
     (crate::cache::MOVE_SHORTCUTS, "Pick destination by status"),
@@ -93,12 +92,7 @@ fn rows(bindings: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
                 width as usize,
             ));
         } else {
-            let key = Span::styled(
-                format!("{key:<key_width$}"),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            );
+            let key = Span::styled(format!("{key:<key_width$}"), style::key_hint());
             if key_width == 0 {
                 lines.extend(markup::wrap(
                     vec![],
@@ -110,10 +104,7 @@ fn rows(bindings: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
             lines.extend(markup::wrap(
                 if key_width > 0 { vec![key] } else { vec![] },
                 vec![Span::raw(" ".repeat(key_width))],
-                vec![Span::styled(
-                    label.to_string(),
-                    Style::default().fg(Color::Reset),
-                )],
+                vec![Span::styled(label.to_string(), style::primary())],
                 width as usize,
             ));
         }
@@ -121,15 +112,14 @@ fn rows(bindings: &[(&str, &str)], width: u16) -> Vec<Line<'static>> {
     lines
 }
 
+/// The help as a sheet over the whole frame: two columns when the width allows, one below.
 pub fn render(f: &mut ratatui::Frame, app: &App) {
-    let available = form::centered_rect(92, 90, f.area());
-    let width = available.width.min(128);
-    let inner_width = width.saturating_sub(6);
-    let wide = inner_width >= 110;
+    let inner = form::render_sheet(f, app, "Keyboard shortcuts");
+    let wide = inner.width >= 110;
     let column_width = if wide {
-        (inner_width - 4) / 2
+        (inner.width - 4) / 2
     } else {
-        inner_width
+        inner.width
     };
     let mut left = rows(MAIN, column_width);
     let right = rows(DETAIL, column_width);
@@ -141,93 +131,64 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         vec![left]
     };
     let count = columns.iter().map(Vec::len).max().unwrap_or(0);
-    let height = available.height.min(count as u16 + 6);
-    let area = Rect {
-        x: f.area().x + (f.area().width - width) / 2,
-        y: f.area().y + (f.area().height - height) / 2,
-        width,
-        height,
-    };
-    f.render_widget(Clear, area);
-    let mut block = panel()
-        .padding(Padding::new(2, 2, 1, 0))
-        .title(Span::styled(
-            " Keyboard shortcuts ",
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
-    let inner = block.inner(area);
-    app.text_selection.borrow_mut().areas = vec![inner];
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(3)])
-        .split(inner);
-    let max = count.saturating_sub(chunks[0].height as usize) as u16;
+    let [body, hint] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(u16::from(!inner.is_empty())),
+    ])
+    .areas(inner);
+    let max = count.saturating_sub(body.height as usize) as u16;
     let scroll = app.keybindings_scroll.min(max);
     app.keybindings_scroll_max.set(max);
-    app.keybindings_page_height.set(chunks[0].height.max(1));
+    app.keybindings_page_height.set(body.height.max(1));
     if max > 0 {
-        block = block.title(
-            Line::from(Span::styled(
+        // Where the view is, ending before the `[×]`.
+        let head = Rect::new(inner.x, 0, inner.width.saturating_sub(7), 1);
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
                 format!(
-                    " {}–{} / {} ",
+                    "{}–{} / {}",
                     scroll + 1,
-                    (scroll + chunks[0].height).min(count as u16),
+                    (scroll + body.height).min(count as u16),
                     count
                 ),
-                Style::default().fg(Color::DarkGray),
-            ))
+                style::secondary(),
+            )))
             .right_aligned(),
+            head,
         );
     }
-    f.render_widget(block, area);
-    let column_areas = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(if wide {
-            vec![
-                Constraint::Length(column_width),
-                Constraint::Length(4),
-                Constraint::Min(0),
-            ]
-        } else {
-            vec![Constraint::Min(0)]
-        })
-        .split(chunks[0]);
+    let column_areas = Layout::horizontal(if wide {
+        vec![
+            Constraint::Length(column_width),
+            Constraint::Length(4),
+            Constraint::Min(0),
+        ]
+    } else {
+        vec![Constraint::Min(0)]
+    })
+    .split(body);
     for (i, lines) in columns.into_iter().enumerate() {
         f.render_widget(
             Paragraph::new(lines).scroll((scroll, 0)),
             column_areas[i * 2],
         );
     }
-    let mut footer = vec![Line::from(Span::styled(
-        "─".repeat(inner.width as usize),
-        Style::default().fg(Color::DarkGray),
-    ))];
-    footer.extend(markup::wrap(
-        vec![],
-        vec![],
-        vec![
-            Span::styled(
-                if max == 0 {
-                    ""
-                } else if inner.width >= 60 {
-                    "↑↓/j/k · PgUp/PgDn "
-                } else {
-                    "↑↓ "
-                },
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::styled(
-                if max > 0 { "scroll   " } else { "" },
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled("Esc/?", Style::default().fg(Color::Cyan)),
-            Span::styled(" close", Style::default().fg(Color::DarkGray)),
-        ],
-        inner.width as usize,
-    ));
-    f.render_widget(Paragraph::new(footer), chunks[1]);
+    let scroll_hint = match (max, inner.width >= 60) {
+        (0, _) => "",
+        (_, true) => "↑↓/j/k · PgUp/PgDn ",
+        (_, false) => "↑↓ ",
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(scroll_hint, style::key_hint()),
+            Span::styled(if max > 0 { "scroll   " } else { "" }, style::secondary()),
+            Span::styled("Esc/?", style::key_hint()),
+            Span::styled(" close", style::secondary()),
+        ])),
+        hint,
+    );
     app.mouse_targets.borrow_mut().push((
-        chunks[1],
+        hint,
         crate::mouse::Target::Key(crossterm::event::KeyCode::Esc),
     ));
 }

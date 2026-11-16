@@ -1,21 +1,35 @@
 use crossterm::event::KeyCode;
-use ratatui::layout::{Constraint, Layout};
-use ratatui::widgets::Paragraph;
+use ratatui::layout::Rect;
 
-use super::form;
+use super::form::{self, Row};
 use crate::app::App;
 
-pub fn render(f: &mut ratatui::Frame, app: &App) {
+/// Most options the picker shows at once.
+const MAX_OPTIONS: usize = 8;
+
+/// The panel's body: the label, then the options, down to the label and the chosen one.
+fn rows(app: &App) -> [Row; 1] {
+    [Row::flex(
+        1 + app.cache.team_members.len().clamp(1, MAX_OPTIONS) as u16,
+        2,
+    )]
+}
+
+pub fn need(app: &App) -> form::Need {
+    form::need(&rows(app))
+}
+
+pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let Some(state) = &app.assign_state else {
         return;
     };
-    let inner = form::render_modal_frame(f, app, &format!("Assign {}", state.ticket_key), 70, 60);
-    let areas = Layout::vertical([
-        Constraint::Min(3),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .split(inner);
+    let (body, footer) = form::render_panel_frame(
+        f,
+        app,
+        area,
+        form::title(format!("Assign {}", state.ticket_key), ""),
+    );
+    let [body] = form::split(rows(app), body);
     let options = app
         .cache
         .team_members
@@ -25,20 +39,17 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     form::render_choices(
         f,
         app,
-        areas[0],
+        body,
         (0, "Assignee"),
         &options,
         state.selected,
         &state.search,
     );
-    f.render_widget(
-        Paragraph::new("Type to filter · ↑↓: choose · Backspace: clear search"),
-        areas[1],
-    );
-    form::buttons(
+    form::button_row(
         f,
         app,
-        areas[2],
+        footer,
         &[("Assign", KeyCode::Enter), ("Cancel", KeyCode::Esc)],
+        &[("type", "to filter"), ("↑↓", "choose")],
     );
 }

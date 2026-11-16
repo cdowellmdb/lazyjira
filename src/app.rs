@@ -182,7 +182,7 @@ pub enum FilterFocus {
     Results,
 }
 
-/// State for the filter create/edit modal.
+/// State for the filter create/edit panel.
 #[derive(Debug, Clone)]
 pub struct FilterEditState {
     pub focused_field: usize, // 0=name, 1=jql
@@ -192,7 +192,7 @@ pub struct FilterEditState {
     pub editing_idx: Option<usize>,
 }
 
-/// What the detail overlay is showing.
+/// What the detail pane is showing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DetailMode {
     /// Showing ticket info.
@@ -265,9 +265,9 @@ pub struct App {
     /// Index of the selected item in the current tab's list.
     pub selected_index: usize,
     tab_positions: [ViewPosition; 5],
-    /// If Some, the detail overlay is open for this ticket key.
+    /// If Some, the detail pane is open for this ticket key.
     pub detail_ticket_key: Option<String>,
-    /// If Some, the detail overlay is open for this epic key.
+    /// If Some, the detail pane is open for this epic key.
     pub detail_epic_key: Option<String>,
     pub detail_mode: DetailMode,
     /// Vertical scroll offset for the ticket detail body.
@@ -275,7 +275,7 @@ pub struct App {
     /// Largest useful `detail_scroll` and the body's height, as last rendered.
     pub detail_scroll_max: Cell<u16>,
     pub detail_page_height: Cell<u16>,
-    /// Whether the detail overlay fills the screen (`z`).
+    /// Whether the detail fills the content area, over the list (`z`).
     pub detail_fullscreen: bool,
     /// True while data is being fetched.
     pub loading: bool,
@@ -304,7 +304,7 @@ pub struct App {
     pub ticket_sync_stage: Option<TicketSyncStage>,
     /// Age of the cache snapshot loaded at startup, in seconds.
     pub cache_stale_age_secs: Option<u64>,
-    /// Whether the keybindings overlay is visible.
+    /// Whether the keybindings sheet is visible.
     pub show_keybindings: bool,
     pub keybindings_scroll: u16,
     pub keybindings_scroll_max: Cell<u16>,
@@ -328,19 +328,19 @@ pub struct App {
     pub external_editor_requested: bool,
     pub mouse_targets: RefCell<Vec<(ratatui::layout::Rect, crate::mouse::Target)>>,
     pub text_selection: RefCell<crate::mouse::TextSelection>,
-    /// State for the create ticket modal overlay.
+    /// State for the create ticket panel.
     pub create_ticket: Option<CreateTicketState>,
     /// Selected ticket keys in the current visible list context.
     pub selected_ticket_keys: HashSet<String>,
-    /// State for the bulk actions modal flow.
+    /// State for the bulk actions panel flow.
     pub bulk_state: Option<BulkState>,
     /// State for bulk CSV upload and ticket creation flow.
     pub bulk_upload_state: Option<BulkUploadState>,
-    /// State for the comment modal overlay.
+    /// State for the comment panel.
     pub comment_state: Option<CommentState>,
-    /// State for the assign/reassign modal overlay.
+    /// State for the assign/reassign panel.
     pub assign_state: Option<AssignState>,
-    /// State for the edit fields modal overlay.
+    /// State for the edit fields panel.
     pub edit_state: Option<EditFieldsState>,
     /// Which pane is focused in the Filters tab.
     pub filter_focus: FilterFocus,
@@ -352,7 +352,7 @@ pub struct App {
     pub filter_loading: bool,
     /// The latest filter run's request id; only its answer is shown.
     pub filter_request: u64,
-    /// State for filter create/edit modal.
+    /// State for filter create/edit panel.
     pub filter_edit: Option<FilterEditState>,
     /// The ids of each tab's folded groups, by `Tab::index`.
     collapsed_groups: [HashSet<String>; 5],
@@ -1695,7 +1695,7 @@ impl App {
         };
     }
 
-    /// The detail overlay's position among the items `step_detail` moves
+    /// The detail pane's position among the items `step_detail` moves
     /// through, as (1-based index, count).
     pub fn detail_position(&self) -> Option<(usize, usize)> {
         let keys = self.detail_step_keys();
@@ -1707,7 +1707,7 @@ impl App {
         Some((index + 1, keys.len()))
     }
 
-    /// The list rows the detail overlay steps through, with their indexes:
+    /// The list rows the detail pane steps through, with their indexes:
     /// tickets for a ticket detail, epic headers for an epic detail.
     fn detail_step_keys(&self) -> Vec<(usize, String)> {
         let epics = self.detail_epic_key.is_some();

@@ -100,7 +100,7 @@ pub enum BulkCall {
 }
 
 /// Apply successful ticket changes even after dismissal, but show results only for the
-/// operation still displayed. Esc dismisses a modal without cancelling its Jira work.
+/// operation still displayed. Esc dismisses the panel without cancelling its Jira work.
 pub fn complete(app: &mut App, request: u64, summary: BulkSummary) {
     let celebrations = apply_bulk_successes(app, &summary);
     let action = match summary.action {
@@ -201,7 +201,7 @@ pub fn open(app: &mut App) {
     });
 }
 
-/// Offers the bulk move's destinations, unless the user has since closed the bulk modal or
+/// Offers the bulk move's destinations, unless the user has since closed the bulk panel or
 /// started another bulk action.
 pub fn receive_transitions(app: &mut App, request: u64, fetched: FetchedTransitions) {
     if let Some(BulkState::MoveLoading {
@@ -579,7 +579,7 @@ mod tests {
             Some(BulkState::MoveStatusPicker { .. })
         ));
 
-        // Closed the modal while Jira was answering.
+        // Closed the panel while Jira was answering.
         app.bulk_state = None;
         receive_transitions(&mut app, 2, fetched());
         assert!(app.bulk_state.is_none());

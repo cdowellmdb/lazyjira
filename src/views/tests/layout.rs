@@ -126,8 +126,8 @@ fn sub_tasks_sit_under_their_parent_or_name_it() {
             .draw(|frame| {
                 let area = frame.area();
                 match tab {
-                    Tab::MyWork => my_work::render(frame, area, app),
-                    _ => epics::render(frame, area, app),
+                    Tab::MyWork => my_work::render(frame, area, app, None),
+                    _ => epics::render(frame, area, app, None),
                 }
             })
             .unwrap();
@@ -266,7 +266,7 @@ fn a_sub_tasks_parent_key_prefix_is_muted_and_readable_when_selected() {
     let colors = |app: &App| {
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
         terminal
-            .draw(|frame| my_work::render(frame, frame.area(), app))
+            .draw(|frame| my_work::render(frame, frame.area(), app, None))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let rows: Vec<String> = (0..30)

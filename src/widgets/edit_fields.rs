@@ -1,27 +1,42 @@
 use crossterm::event::KeyCode;
-use ratatui::layout::{Constraint, Layout};
-use ratatui::widgets::Paragraph;
+use ratatui::layout::Rect;
 
-use super::form;
+use super::form::{self, Row};
 use crate::app::App;
 
-pub fn render(f: &mut ratatui::Frame, app: &App) {
+/// The panel's body: the summary and labels, and the description (its label and from 3 to 12
+/// lines).
+fn rows(app: &App) -> [Row; 3] {
+    let lines = app
+        .edit_state
+        .as_ref()
+        .map_or(0, |s| s.description.lines().len());
+    [
+        Row::fixed(1),
+        Row::fixed(1),
+        Row::flex(1 + lines.clamp(3, 12) as u16, 1),
+    ]
+}
+
+pub fn need(app: &App) -> form::Need {
+    form::need(&rows(app))
+}
+
+pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let Some(state) = &app.edit_state else {
         return;
     };
-    let inner = form::render_modal_frame(f, app, &format!("Edit {}", state.ticket_key), 85, 85);
-    let areas = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Length(3),
-        Constraint::Min(3),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .split(inner);
+    let (body, footer) = form::render_panel_frame(
+        f,
+        app,
+        area,
+        form::title(format!("Edit {}", state.ticket_key), ""),
+    );
+    let [summary, labels, description] = form::split(rows(app), body);
     form::render_editor(
         f,
         app,
-        areas[0],
+        summary,
         "Summary",
         &state.summary,
         state.focused_field == 0,
@@ -30,7 +45,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     form::render_editor(
         f,
         app,
-        areas[1],
+        labels,
         "Labels · comma-separated",
         &state.labels,
         state.focused_field == 1,
@@ -39,24 +54,25 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
     form::render_editor(
         f,
         app,
-        areas[2],
+        description,
         "Description",
         &state.description,
         state.focused_field == 2,
         2,
     );
-    f.render_widget(
-        Paragraph::new("Tab: next field · Shift+Enter: newline · Ctrl+E/F4: external editor"),
-        areas[3],
-    );
-    form::buttons(
+    form::button_row(
         f,
         app,
-        areas[4],
+        footer,
         &[
             ("Save", KeyCode::Enter),
             ("Cancel", KeyCode::Esc),
             ("Editor", KeyCode::F(4)),
+        ],
+        &[
+            ("Tab", "next field"),
+            ("Shift+Enter/Ctrl+J", "newline"),
+            ("Ctrl+E", "external editor"),
         ],
     );
 }

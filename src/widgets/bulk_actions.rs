@@ -1,25 +1,19 @@
-use crossterm::event::KeyCode;
-use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 use crate::app::App;
 use crate::bulk_actions::{BulkAction, BulkState, BulkSummary, BulkTarget};
 use crate::cache::{Status, MOVE_SHORTCUTS};
-use crate::mouse::Target;
-use crate::style::status_color;
-use crate::views::common::panel;
+use crate::style;
 
-use super::form;
-use super::ticket_detail::{option_style, render_footer, render_menu};
+use super::form::{self, Menu};
 
-/// An option drawn like the detail overlay's menus: the selected one on a highlight bar.
-fn render_option(lines: &mut Vec<Line<'static>>, label: &str, selected: bool, color: Color) {
+/// An option drawn like the move picker's: the selected one on a highlight bar.
+fn render_option(lines: &mut Vec<Line<'static>>, label: &str, selected: bool, base: Style) {
     let prefix = if selected { "› " } else { "  " };
     lines.push(Line::from(Span::styled(
         format!("{}{}", prefix, label),
-        option_style(color, selected),
+        style::option(base, selected),
     )));
 }
 
@@ -61,7 +55,7 @@ fn sample_keys(targets: &[String]) -> String {
 fn push_ticket_reasons(
     lines: &mut Vec<Line<'static>>,
     title: &'static str,
-    color: Color,
+    style: Style,
     reasons: &[(String, String)],
 ) {
     if reasons.is_empty() {
@@ -70,16 +64,16 @@ fn push_ticket_reasons(
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         title,
-        Style::default().fg(color).add_modifier(Modifier::BOLD),
+        style.patch(style::heading()),
     )));
     for (key, reason) in reasons {
-        let text = Text::styled(format!("  {}: {}", key, reason), Style::default().fg(color));
+        let text = Text::styled(format!("  {}: {}", key, reason), style);
         lines.extend(text.lines);
     }
 }
 
 fn hint(text: &'static str) -> Line<'static> {
-    Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
+    Line::from(Span::styled(text, style::secondary()))
 }
 
 fn render_result(lines: &mut Vec<Line<'static>>, summary: &BulkSummary) {
@@ -89,9 +83,7 @@ fn render_result(lines: &mut Vec<Line<'static>>, summary: &BulkSummary) {
     };
     lines.push(Line::from(Span::styled(
         format!("{} complete", action),
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
+        style::success().patch(style::heading()),
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(format!(
@@ -104,51 +96,27 @@ fn render_result(lines: &mut Vec<Line<'static>>, summary: &BulkSummary) {
     lines.push(Line::from(format!("Skipped: {}", summary.skipped.len())));
     lines.push(Line::from(format!("Failed: {}", summary.failed)));
 
-    push_ticket_reasons(lines, "Failures:", Color::Red, &summary.failed_details);
-    push_ticket_reasons(lines, "Skipped:", Color::Yellow, &summary.skipped);
+    push_ticket_reasons(lines, "Failures:", style::error(), &summary.failed_details);
+    push_ticket_reasons(lines, "Skipped:", style::warning(), &summary.skipped);
 }
 
-pub fn render(f: &mut ratatui::Frame, app: &App) {
-    let Some(state) = app.bulk_state.as_ref() else {
-        return;
-    };
+/// The panel's menu for the open bulk state, if there is one.
+pub fn menu(app: &App) -> Option<Menu> {
+    app.bulk_state.as_ref().map(|state| menu_of(app, state))
+}
 
-    let (title, percent_x, percent_y) = match state {
-        BulkState::Result { .. } => ("Bulk Results", 72, 62),
-        BulkState::Confirm { .. } => ("Confirm Bulk Action", 72, 58),
-        BulkState::Running { .. } => ("Bulk Action Running", 60, 34),
-        _ => ("Bulk Actions", 58, 54),
+fn menu_of(app: &App, state: &BulkState) -> Menu {
+    let title = match state {
+        BulkState::Result { .. } => "Bulk Results",
+        BulkState::Confirm { .. } => "Confirm Bulk Action",
+        BulkState::Running { .. } => "Bulk Action Running",
+        _ => "Bulk Actions",
     };
-    // Framed like the ticket detail: a [×] that closes it, then the title.
-    let area = form::centered_rect(percent_x, percent_y, f.area());
-    f.render_widget(Clear, area);
-    let block = panel().title(Line::from(vec![
-        Span::styled(
-            " [×] ",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {} ", title),
-            Style::default()
-                .fg(Color::Reset)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
-    let inner = block.inner(area);
-    app.text_selection.borrow_mut().areas = vec![inner];
-    f.render_widget(block, area);
-    if area.width > 2 {
-        app.mouse_targets.borrow_mut().push((
-            Rect::new(area.x + 1, area.y, 5.min(area.width - 2), 1),
-            Target::Key(KeyCode::Esc),
-        ));
-    }
-
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut scroll = 0;
     let mut choices = Vec::new();
-    let choose = [("j/k", "choose"), ("Enter", "next"), ("Esc", "cancel")];
-    let hints: &[(&str, &str)] = match state {
+    const CHOOSE: &[(&str, &str)] = &[("j/k", "choose"), ("Enter", "next"), ("Esc", "cancel")];
+    let hints: &'static [(&'static str, &'static str)] = match state {
         BulkState::AssignPicker { .. } => &[
             ("type", "filter"),
             ("↑↓", "choose"),
@@ -165,7 +133,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         BulkState::Confirm { .. } => &[("Enter", "run"), ("y", "run"), ("Esc", "cancel")],
         BulkState::Running { .. } => &[("Esc", "close")],
         BulkState::Result { .. } => &[("j/k", "scroll"), ("Enter", "close"), ("Esc", "close")],
-        _ => &choose,
+        _ => CHOOSE,
     };
 
     match state {
@@ -174,9 +142,14 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             lines.push(Line::from(format!("Keys: {}", sample_keys(targets))));
             lines.push(Line::from(""));
             choices.push((lines.len(), 0));
-            render_option(&mut lines, "Move tickets", *selected == 0, Color::Reset);
+            render_option(&mut lines, "Move tickets", *selected == 0, style::primary());
             choices.push((lines.len(), 1));
-            render_option(&mut lines, "Assign tickets", *selected == 1, Color::Reset);
+            render_option(
+                &mut lines,
+                "Assign tickets",
+                *selected == 1,
+                style::primary(),
+            );
         }
         BulkState::MoveLoading { targets, .. } => {
             lines.push(Line::from(format!(
@@ -207,7 +180,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                     &mut lines,
                     &label,
                     i == *selected,
-                    status_color(destination, app.status_rules()),
+                    style::status(destination, app.status_rules()),
                 );
             }
             let failed: Vec<(&String, &String)> = fetched
@@ -222,7 +195,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                     key,
                     error
                 );
-                lines.extend(Text::styled(text, Style::default().fg(Color::Red)).lines);
+                lines.extend(Text::styled(text, style::error()).lines);
             }
         }
         BulkState::MoveResolutionPicker {
@@ -237,7 +210,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
             for (i, choice) in plan.resolution_choices().iter().enumerate() {
                 let name = choice.as_ref().map_or("No resolution", |r| r.name.as_str());
                 choices.push((lines.len(), i));
-                render_option(&mut lines, name, i == *selected, Color::Reset);
+                render_option(&mut lines, name, i == *selected, style::primary());
             }
             lines.push(Line::from(""));
             lines.push(hint(
@@ -268,14 +241,11 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
                     &mut lines,
                     &format!("{} ({})", member.name, member.email),
                     i == *selected,
-                    Color::Reset,
+                    style::primary(),
                 );
             }
             if app.cache.team_members.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "No team members configured",
-                    Style::default().fg(Color::DarkGray),
-                )));
+                lines.push(hint("No team members configured"));
             }
         }
         BulkState::Confirm {
@@ -285,9 +255,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         } => {
             lines.push(Line::from(Span::styled(
                 "Please confirm",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                style::warning().patch(style::heading()),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(format!("Action: {}", target_label(target))));
@@ -304,9 +272,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         } => {
             lines.push(Line::from(Span::styled(
                 "Executing bulk action...",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                style::warning().patch(style::heading()),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(format!("Action: {}", target_label(target))));
@@ -332,16 +298,12 @@ pub fn render(f: &mut ratatui::Frame, app: &App) {
         | BulkState::AssignPicker { selected, .. } => Some(*selected),
         _ => None,
     };
-    match selected {
-        Some(selected) => render_menu(f, app, inner, lines, (&choices, selected), hints),
-        None => {
-            let body = render_footer(f, inner, hints, app);
-            f.render_widget(
-                Paragraph::new(lines)
-                    .wrap(Wrap { trim: false })
-                    .scroll((scroll, 0)),
-                body,
-            );
-        }
+    Menu {
+        title: form::title(title, ""),
+        lines,
+        choices,
+        selected,
+        scroll,
+        hints,
     }
 }

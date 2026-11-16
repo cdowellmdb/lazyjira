@@ -22,7 +22,7 @@ Preconditions:
 - Fresh run, on My Work.
 
 - **Match by key.** `$V <run> keys /`, `$V <run> type DEMO-201`, `$V <run> wait '● Ready for Work 1'`. Only DEMO-201 shows, and the muted line above the list reads `all rows · epic Search performance · search, perf`. `$V <run> snap search-match`.
-- **Open a result.** `$V <run> keys Down`, `$V <run> keys Enter`, `$V <run> wait '\[×\]  DEMO-201'`. Close with `$V <run> keys Escape`.
+- **Open a result.** `$V <run> keys Down`, `$V <run> keys Enter`, `$V <run> wait 'DEMO-201  1 of 1 .*\[×\]'`. Close with `$V <run> keys Escape`.
 - **Empty state.** `$V <run> type zzz`, `$V <run> wait 'No tickets found'`. `$V <run> snap search-empty`.
 - **Exit** (*not yet driven*). `$V <run> keys Escape`, `$V <run> wait 'DEMO-101'`. The full list shows again.
 

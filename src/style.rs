@@ -30,6 +30,11 @@ pub fn warning() -> Style {
     Style::default().fg(Color::Yellow)
 }
 
+/// Done and success: a finished bulk action, an epic's percentage.
+pub fn success() -> Style {
+    Style::default().fg(Color::Green)
+}
+
 /// Focus, links, the active tab.
 pub fn accent() -> Style {
     Style::default().fg(Color::Cyan)
@@ -45,9 +50,46 @@ pub fn heading() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
 }
 
+/// An aside: what is missing or unset ("No description.", "Unassigned"), muted and italic.
+pub fn aside() -> Style {
+    secondary().add_modifier(Modifier::ITALIC)
+}
+
 /// Behind the selected row.
 pub fn selected_row() -> Style {
     Style::default().bg(Color::DarkGray)
+}
+
+/// An option in a menu, in `base`: the chosen one is bold on the selected row's background.
+pub fn option(base: Style, chosen: bool) -> Style {
+    if chosen {
+        base.patch(heading()).patch(selected_row())
+    } else {
+        base
+    }
+}
+
+/// A button: dark text on a filled block.
+pub fn button() -> Style {
+    Style::default()
+        .fg(Color::Black)
+        .bg(Color::Gray)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// The letter in a button's label that its key presses.
+pub fn button_letter() -> Style {
+    button().add_modifier(Modifier::UNDERLINED)
+}
+
+/// The cursor in a text field.
+pub fn cursor() -> Style {
+    Style::default().fg(Color::Black).bg(Color::Cyan)
+}
+
+/// Text the mouse has selected.
+pub fn text_selection() -> Style {
+    Style::default().fg(Color::Black).bg(Color::LightBlue)
 }
 
 /// The status's color on the dot and the text beside it.
@@ -125,8 +167,15 @@ mod tests {
             subtle(),
             error(),
             warning(),
+            success(),
+            aside(),
             accent(),
             key_hint(),
+            option(primary(), true),
+            button(),
+            button_letter(),
+            cursor(),
+            text_selection(),
             heading(),
             selected_row(),
             status("In Progress", &rules),

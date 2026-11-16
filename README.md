@@ -11,7 +11,7 @@ lazyjira reads tickets and moves them through Jira's REST API, using the [`jira`
 Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (saved JQL).
 
 **Triage fast**
-- Step through tickets in the detail view with `←`/`→`, and press `z` for full screen
+- At 120 columns or wider the detail opens beside the list, which stays in step as you step through tickets with `←`/`→`; narrower, or after `z`, it covers the list (the top bar and the footer stay)
 - Fold status groups and a parent's sub-tasks; `f` focuses one status, `d` hides Done
 - Lists show what differs: each ticket's age, shared epics and labels named once, done groups folded, status columns as wide as the longest status
 - Sub-tasks nest under their parent, or lead with its key when the parent is elsewhere
@@ -210,9 +210,9 @@ Refresh keeps the loaded list visible and follows the selected ticket even when 
 
 ### Mouse
 
-Click a tab or row to select it; click the selected row again to open it. Menus (bulk actions, and the move and resolution pickers in ticket detail) work the same way: click an option to choose it, and click it again to take it. Click the left edge of a row or group to mark it, and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
+Click a tab or row to select it; click the selected row again to open it. Menus (bulk actions, and the move and resolution pickers) work the same way: click an option to choose it, and click it again to take it. Click the left edge of a row or group to mark it, and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
 
-Click the red **[×]** in the top-left of ticket or epic detail to close the popup, including from its activity and move menus.
+With a detail open beside the list, click a row of the list to show that ticket. Click **[×]** at the right end of the detail's first line to close it. Forms, pickers and notices open as one panel under the list with their own **[×]**, and Help and Settings are sheets over the whole screen with one at the right end of their title line.
 
 Forms support clicking fields, positioning the text cursor, choosing picker options, and clicking their action buttons. Type to filter assignee and epic pickers; use arrow keys or the wheel to choose. Bulk actions still require the separate confirmation step.
 
@@ -226,7 +226,9 @@ Create tickets with a type (Task, Bug, or Story), summary, assignee, epic, label
 
 ### Detail view
 
-![A ticket detail with a top-left close control and formatted Jira headings, a numbered list, a table, and code](docs/images/ticket-detail.png)
+![A ticket detail with a close control and formatted Jira headings, a numbered list, a table, and code](docs/images/ticket-detail.png)
+
+At 120 columns or wider the list stays on the left, 50 cells wide with each ticket's key and summary, and the detail fills the rest beside a dim divider. Below 120 columns, or after `z`, the detail covers the list; the top bar and the footer stay. The key hints for the detail replace the footer while it is open, wrapped onto a second row when they don't fit one, so every key stays clickable at any width. A message (an error, or a move waiting on Jira) takes a row above them.
 
 Descriptions and comments render Jira's wiki markup: headings, bold/italic/strikethrough, links, mentions, lists, tables, quotes, code blocks and icons like `(/)`.
 
@@ -237,13 +239,14 @@ Descriptions and comments render Jira's wiki markup: headings, bold/italic/strik
 | `PgUp/PgDn`, `Space` | Scroll a page |
 | `g/G`, `Home/End` | Jump to top / bottom |
 | `Left/Right` | Previous / next ticket in the list (previous / next epic in an epic's detail) |
-| `z` | Zoom to full screen (toggle) |
+| `z` | Zoom over the list (toggle) |
 | `o` | Open in browser |
 | `m` | Move status |
 | `C` | Comment |
 | `a` | Assign/reassign |
 | `e` | Edit summary, labels, and description |
 | `h` | Activity: comments, newest first |
+| `?` | Keybindings help |
 
 The move picker lists the transitions Jira offers for the ticket, as "transition → status" when the two names differ (for example `Resume Progress → In Progress`) and by name alone when they don't, so it only offers moves the ticket's workflow allows. Choose one with `j/k` and `Enter`, then press `Enter` or `y` to confirm.
 
@@ -251,7 +254,7 @@ The move picker lists the transitions Jira offers for the ticket, as "transition
 
 A resolution is asked for only when the chosen transition has a resolution field, and the picker offers the values Jira allows for it, plus "No resolution" when the field is optional.
 
-The ticket keeps its status until Jira confirms the move; the status bar shows the move as pending in the meantime. A confirmed move from an active status to a done one throws confetti; when it finishes an epic, the confetti fills the screen, the epic's progress bar turns rainbow, and the status bar names the epic. If Jira rejects the move, its error stays on screen until you press `Enter` or `Esc`, and `o` opens the ticket in your browser. A ticket can have only one move running at a time.
+The ticket keeps its status until Jira confirms the move; the status bar shows the move as pending in the meantime. A confirmed move from an active status to a done one throws confetti; when it finishes an epic, the confetti fills the screen, the epic's progress bar turns rainbow, and the status bar names the epic. If Jira rejects the move, its full error stays on screen until you press `Enter` or `Esc` (`j/k` scroll it when it is longer than the panel), and `o` opens the ticket in your browser. A ticket can have only one move running at a time.
 
 A bulk move loads every selected ticket's transitions, then offers the statuses they can reach, with how many tickets can reach each. The same `p/w/n/t/v/b/c` keys pick a status: one match goes straight to the resolution or confirmation step, and when several statuses match, the picker lists just those. Uppercase letters work like lowercase here: a bulk move always asks for confirmation. Each ticket uses its own transition to the chosen status. Tickets without one, with several different ones, or already in that status are skipped, and the summary lists each with the reason. If any of the transitions has a resolution field, you pick one resolution for all of them: tickets whose transition allows it get it, tickets where it's optional are moved without it, and tickets that require a different one are skipped.
 
@@ -273,7 +276,7 @@ A bulk move loads every selected ticket's transitions, then offers the statuses 
 
 ## Bulk CSV upload
 
-Press `U` from any main view, enter the path to a CSV file, and review the preview. You can only submit once the preview shows zero invalid rows. Start from the template in [`docs/examples/bulk_create_template.csv`](docs/examples/bulk_create_template.csv).
+Press `U` from any main view, enter the path to a CSV file, and review the preview. You can only submit once the preview shows zero invalid rows. The preview lists up to 14 rows at a time; in a short terminal it drops its path line and blank lines to show more of them, and `r` reloads the CSV, also from the result (its **Reload** button). Start from the template in [`docs/examples/bulk_create_template.csv`](docs/examples/bulk_create_template.csv).
 
 ```csv
 summary,type,assignee_email,epic_key,labels,description

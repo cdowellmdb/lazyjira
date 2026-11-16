@@ -3,9 +3,9 @@ use std::ops::Range;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
+use ratatui::widgets::Paragraph;
 
-use crate::app::{App, GroupSelectionState, VisibleGroup};
+use crate::app::{App, GroupSelectionState, Tab, VisibleGroup};
 use crate::cache::{Epic, Status, StatusKind, StatusRules, Ticket};
 use crate::delight::Delight;
 use crate::style;
@@ -24,15 +24,6 @@ pub const COLUMN_GAP: usize = 2;
 pub const STATUS_DOT_WIDTH: usize = 2;
 /// The `└ ` before a sub-task's key, and the two cells of indent before it.
 const CHILD_PREFIX: &str = "  └ ";
-
-pub fn panel() -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(style::secondary())
-        .title_style(style::primary())
-        .padding(Padding::horizontal(1))
-}
 
 /// The arrow of a folded group or parent, and of an open one.
 const FOLDED: &str = "▶";
@@ -375,6 +366,8 @@ pub struct ListLines<'a> {
     selected_lines: Option<Range<usize>>,
     /// Whether the list has the selection: a pane without focus draws none.
     focused: bool,
+    /// The list's width beside the detail pane, which shows only keys and summaries.
+    compact: Option<u16>,
 }
 
 impl<'a> ListLines<'a> {
@@ -386,7 +379,15 @@ impl<'a> ListLines<'a> {
             items: Vec::new(),
             selected_lines: None,
             focused: true,
+            compact: None,
         }
+    }
+
+    /// The list is `width` cells wide beside the detail pane, and draws only keys and
+    /// summaries: no extra cells on a row, no meta line, and a click on a row shows its ticket.
+    pub fn compact(mut self, width: Option<u16>) -> Self {
+        self.compact = width;
+        self
     }
 
     pub fn focused(mut self, focused: bool) -> Self {
@@ -424,6 +425,13 @@ impl<'a> ListLines<'a> {
             Span::raw(" "),
             vec![Span::styled(text.into(), style::secondary())],
         );
+    }
+
+    /// A line under a header that only a full-width list draws.
+    pub fn meta_line(&mut self, glyph: Span<'static>, rest: impl FnOnce() -> Vec<Span<'static>>) {
+        if self.compact.is_none() {
+            self.glyph_line(glyph, rest());
+        }
     }
 
     /// A line among the rows with `glyph` in the gutter, then `rest` after the checkbox's cells.
@@ -466,7 +474,9 @@ impl<'a> ListLines<'a> {
         let mut spans = self.lead(glyph, Some(mark));
         spans.extend(rest);
         self.lines.push(Line::from(spans));
-        self.item(start, group.index, Some(GLYPH_COLUMN));
+        // An epic's header shows the epic; any other group's has nothing to show.
+        let shows = self.app.active_tab == Tab::Epics;
+        self.item(start, group.index, Some(GLYPH_COLUMN), shows);
     }
 
     /// The header of a group of one member, epic or epic key: its fold arrow in the gutter, then
@@ -511,9 +521,16 @@ impl<'a> ListLines<'a> {
         let selected = self.is_selected(index);
         let (base, primary) = self.ages.row_styles(ticket, selected, faded);
         let family = group.family.get(&index).copied();
+        // Beside the detail pane the summary takes the width the key leaves, and no other cell
+        // is drawn: what the views push after it is cut off by the pane's edge.
+        let summary_w = self.compact.map_or(summary_w, |width| {
+            (width as usize).saturating_sub(self.lead_width() + key_w + COLUMN_GAP)
+        });
         let (key, summary) = ticket_cells(self.app, family, ticket, summary_w, primary);
         let mut cells = vec![vec![Span::styled(fit(&key.text, key_w), primary)]];
-        cells.extend(extra(base));
+        if self.compact.is_none() {
+            cells.extend(extra(base));
+        }
 
         let glyph = if selected {
             Span::styled("›", style::accent().patch(style::heading()))
@@ -540,16 +557,21 @@ impl<'a> ListLines<'a> {
             line.spans.extend(more);
             self.lines.push(line);
         }
-        self.item(start, index, fold);
+        self.item(start, index, fold, true);
         (&mut self.lines[start], base)
     }
 
-    fn item(&mut self, start: usize, index: usize, fold: Option<u16>) {
+    fn item(&mut self, start: usize, index: usize, fold: Option<u16>, shows: bool) {
         let lines = start..self.lines.len();
         if self.is_selected(index) {
             self.selected_lines = Some(lines.clone());
         }
-        self.items.push(crate::mouse::Item { lines, index, fold });
+        self.items.push(crate::mouse::Item {
+            lines,
+            index,
+            fold,
+            shows,
+        });
     }
 
     /// Highlights the selected item, scrolls so the selected item's last line is on screen (its
@@ -563,7 +585,13 @@ impl<'a> ListLines<'a> {
                 .min(item.start)
         }) as u16;
         let lead = self.lead_width();
-        crate::mouse::register_rows(self.app, area, &self.items, scroll, lead);
+        crate::mouse::register_rows(
+            self.app,
+            area,
+            &self.items,
+            scroll,
+            (lead, self.compact.is_some()),
+        );
         // A drag copies a row's text, not its marker or checkbox.
         let lead = (lead as u16).min(area.width);
         crate::mouse::selectable(

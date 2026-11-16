@@ -51,7 +51,7 @@ where
     Ok(try_in_order(SEARCHES_AT_ONCE, jqls, search).await?.concat())
 }
 
-/// What a detail adds to a list row's fields: what the detail overlay shows. `enrich_ticket`
+/// What a detail adds to a list row's fields: what the detail shows. `enrich_ticket`
 /// copies the rest over the row.
 const DETAIL_ONLY_FIELDS: &[&str] = &["reporter", "description", "comment"];
 

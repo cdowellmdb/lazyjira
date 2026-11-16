@@ -4,7 +4,7 @@ With `preferences.wrap_summaries` on, a ticket row's summary word-wraps onto fur
 
 ## Sub-features
 
-- `wrap-setting` turns wrapping on in Settings (`S`), in the "Wrap summaries" box, and saves it to `config.toml`.
+- `wrap-setting` turns wrapping on in Settings (`S`), in the "Wrap summaries" field, and saves it to `config.toml`.
 - `wrap-rows` wraps ticket summaries in My Work, Team, Epics, Unassigned and Filters results.
 - `wrap-epic-header` keeps an Epics header's summary on one line.
 - `wrap-highlight` highlights all of a selected ticket's lines and nothing else.
