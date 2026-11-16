@@ -109,8 +109,15 @@ fn indicators(app: &App) -> String {
     parts.join(SEPARATOR)
 }
 
-/// What the bulk bar offers, in the order it drops them from the right.
-const BULK_HINTS: [(&str, &str); 3] = [("B", "move or assign"), ("u", "clear"), ("A", "all")];
+/// What the bulk bar offers. Its priorities are the order it drops them in, from the right.
+const BULK: &[Hint] = &[
+    hint("B", "move or assign", 1),
+    hint("u", "clear", 2),
+    hint("A", "all", 3),
+];
+
+/// Cells between the count and the hints in the bulk bar.
+const COUNT_GAP: usize = 3;
 
 /// The bar above the footer while tickets are marked: `2 selected   B move or assign · u clear ·
 /// A all`, with whole hints dropped from the right in `width` columns. `None` when nothing is
@@ -121,16 +128,10 @@ pub fn bulk_bar(app: &App, width: u16) -> Option<Line<'static>> {
     }
     let selected = app.selected_ticket_count();
     let count = format!("{selected} selected");
-    let width_of = |hints: &[(&str, &str)]| {
-        let text: usize = hints
-            .iter()
-            .map(|(key, label)| key.width() + 1 + label.width())
-            .sum();
-        1 + count.width() + 3 + text + SEPARATOR.width() * hints.len().saturating_sub(1)
-    };
-    let mut hints = &BULK_HINTS[..];
-    while !hints.is_empty() && width_of(hints) > width as usize {
-        hints = &hints[..hints.len() - 1];
+    let mut hints: Vec<&Hint> = BULK.iter().collect();
+    let room = (width as usize).saturating_sub(1 + count.width() + COUNT_GAP);
+    while hints_width(&hints) - 1 > room {
+        hints.pop();
     }
     let mut spans = vec![
         Span::raw(" "),
@@ -141,14 +142,8 @@ pub fn bulk_bar(app: &App, width: u16) -> Option<Line<'static>> {
         Span::styled(" selected", style::secondary()),
     ];
     if !hints.is_empty() {
-        spans.push(Span::raw("   "));
-    }
-    for (at, (key, label)) in hints.iter().enumerate() {
-        if at > 0 {
-            spans.push(Span::styled(SEPARATOR, style::secondary()));
-        }
-        spans.push(Span::styled(*key, style::key_hint()));
-        spans.push(Span::styled(format!(" {label}"), style::secondary()));
+        spans.push(Span::raw(" ".repeat(COUNT_GAP)));
+        spans.extend(hint_spans(&hints));
     }
     Some(Line::from(spans))
 }
@@ -166,6 +161,19 @@ fn hints_width(hints: &[&Hint]) -> usize {
         .map(|hint| hint.key.width() + 1 + hint.label.width())
         .sum();
     1 + text + SEPARATOR.width() * hints.len().saturating_sub(1)
+}
+
+/// `hints` as spans: each key bold and its label muted, a separator between.
+fn hint_spans(hints: &[&Hint]) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (at, hint) in hints.iter().enumerate() {
+        if at > 0 {
+            spans.push(Span::styled(SEPARATOR, style::secondary()));
+        }
+        spans.push(Span::styled(hint.key, style::key_hint()));
+        spans.push(Span::styled(format!(" {}", hint.label), style::secondary()));
+    }
+    spans
 }
 
 /// `hints` and `indicators` in `width` columns. The indicators go first when they don't fit
@@ -199,13 +207,7 @@ fn fit(hints: &[Hint], indicators: &str, width: usize) -> Line<'static> {
     }
     let kept = shown(&keep);
     let mut spans = vec![Span::raw(" ")];
-    for (at, hint) in kept.iter().enumerate() {
-        if at > 0 {
-            spans.push(Span::styled(SEPARATOR, style::secondary()));
-        }
-        spans.push(Span::styled(hint.key, style::key_hint()));
-        spans.push(Span::styled(format!(" {}", hint.label), style::secondary()));
-    }
+    spans.extend(hint_spans(&kept));
     if !indicators.is_empty() {
         let pad = width.saturating_sub(hints_width(&kept) + indicators.width() + 1);
         spans.push(Span::raw(" ".repeat(pad)));
@@ -579,7 +581,7 @@ mod tests {
             .collect();
         assert!(help.contains("/"), "the search row lists /");
         let mut keys: Vec<&str> = MAIN.iter().chain(FILTERS).map(|hint| hint.key).collect();
-        keys.extend(BULK_HINTS.iter().map(|(key, _)| *key));
+        keys.extend(BULK.iter().map(|hint| hint.key));
         keys.push("S");
         for key in keys {
             assert!(help.contains(key), "{key} is not in the help");
