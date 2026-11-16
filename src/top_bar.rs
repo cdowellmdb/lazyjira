@@ -1,8 +1,8 @@
 //! The top bar: `lazyjira`, the tabs and the Settings button on one line, a muted rule under it.
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Tab};
@@ -12,20 +12,24 @@ use crate::style;
 /// Rows the bar takes: the line and its rule.
 pub const HEIGHT: u16 = 2;
 /// Blank cells between the name and the first tab, and between tabs.
-const GAP: u16 = 3;
+const TAB_GAP: u16 = 3;
 /// A tab's click target is its title and the cell either side.
 const TAB_PAD: u16 = 1;
-/// The Settings button is its label with a cell either side, and ends two cells from the edge.
-const SETTINGS_WIDTH: u16 = 10;
+const SETTINGS_LABEL: &str = "Settings";
+/// A button's label has this many cells either side.
+const BUTTON_PAD: u16 = 1;
+/// The Settings button is its label with its padding, and ends two cells from the edge.
+const SETTINGS_WIDTH: u16 = SETTINGS_LABEL.len() as u16 + 2 * BUTTON_PAD;
 const SETTINGS_EDGE: u16 = 2;
 
 pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
+    let [line, rule] = Layout::vertical([Constraint::Length(1); 2]).areas(area);
     let mut spans = vec![Span::raw(" "), Span::styled("lazyjira", style::secondary())];
     let mut x = area.x + 1 + "lazyjira".width() as u16;
     for tab in Tab::all() {
         let title = tab.title();
         let width = title.width() as u16;
-        x += GAP;
+        x += TAB_GAP;
         let rect = Rect::new(
             x - TAB_PAD,
             area.y,
@@ -35,7 +39,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
         app.mouse_targets
             .borrow_mut()
             .push((rect, Target::Tab(*tab)));
-        spans.push(Span::raw(" ".repeat(GAP as usize)));
+        spans.push(Span::raw(" ".repeat(TAB_GAP as usize)));
         spans.push(Span::styled(
             title,
             if *tab == app.active_tab {
@@ -48,7 +52,7 @@ pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
     }
     f.render_widget(
         Paragraph::new(Line::from(spans)).style(style::primary()),
-        Rect::new(area.x, area.y, area.width, 1),
+        line,
     );
     if area.right().saturating_sub(x) >= SETTINGS_WIDTH + SETTINGS_EDGE {
         crate::widgets::form::buttons(
@@ -60,18 +64,15 @@ pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
                 SETTINGS_WIDTH,
                 1,
             ),
-            &[("Settings", crossterm::event::KeyCode::Char('S'))],
+            &[(SETTINGS_LABEL, crossterm::event::KeyCode::Char('S'))],
         );
     }
-    if area.height >= HEIGHT {
-        f.render_widget(
-            Paragraph::new(Span::styled(
-                "─".repeat(area.width as usize),
-                style::secondary(),
-            )),
-            Rect::new(area.x, area.y + 1, area.width, 1),
-        );
-    }
+    f.render_widget(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(style::secondary()),
+        rule,
+    );
 }
 
 #[cfg(test)]
@@ -177,5 +178,35 @@ mod tests {
             targets.last().copied(),
             Some((Rect::new(49, 0, 3, 1), Target::Tab(Tab::Filters)))
         );
+    }
+
+    #[test]
+    fn at_80_columns_everything_fits_and_settings_ends_two_cells_from_the_edge() {
+        let app = App::new();
+        let buffer = draw(&app, 80);
+        let line = row(&buffer, 0);
+        assert_eq!(
+            line.trim_end(),
+            format!(
+                " lazyjira   My Work   Team   Epics   Unassigned   Filters{}Settings",
+                " ".repeat(12)
+            )
+        );
+        assert_eq!(line.find("Settings"), Some(69));
+        assert_eq!(line.trim_end().len(), 77);
+        assert_eq!(row(&buffer, 1), "─".repeat(80));
+        assert_eq!(app.mouse_targets.borrow().len(), 6);
+    }
+
+    #[test]
+    fn a_one_row_bar_draws_no_rule() {
+        let app = App::new();
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).unwrap();
+        terminal
+            .draw(|f| render(f, &app, Rect::new(0, 0, 80, 1)))
+            .unwrap();
+        let line = row(terminal.backend().buffer(), 0);
+        assert!(!line.contains('─'), "{line}");
+        assert!(line.starts_with(" lazyjira   My Work"));
     }
 }
