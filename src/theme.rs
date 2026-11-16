@@ -232,6 +232,7 @@ mod tests {
             );
             for (role, fg) in [
                 ("muted", theme.muted),
+                ("subtle", theme.subtle),
                 ("accent", theme.accent),
                 ("highlight", theme.highlight),
                 ("info", theme.info),
