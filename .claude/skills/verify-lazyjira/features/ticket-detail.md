@@ -4,12 +4,12 @@ A user opens a ticket from any list and reads its fields, its description render
 
 ## Sub-features
 
-- `detail-open` opens the popup titled `[×]  <KEY>` with `N of M` in the corner.
+- `detail-open` opens the detail: its first line is `<KEY>  N of M` with `[×]` at the right end. At 120 columns or wider it sits beside the list, which stays on the left (50 cells, keys and summaries, one `│` divider between). Below 120 columns it replaces the list. The key hints are the bottom line while it is open.
 - `detail-fields` shows Status, Assignee, Reporter, Epic and Labels.
 - `detail-markup` renders headings, numbered lists, tables, links and mentions in the description.
 - `detail-scroll` scrolls with `j/k`, `Space`, `g/G`.
 - `detail-step` moves to the previous / next ticket with `Left/Right`.
-- `detail-zoom` toggles full screen with `z`.
+- `detail-zoom` toggles the detail over the whole content area with `z`.
 - `detail-close` closes with `Esc`.
 
 ## How to get to it (user POV)
@@ -23,11 +23,11 @@ Preconditions:
 
 - Fresh run.
 
-- **Open by search.** `$V <run> keys /`, `$V <run> type DEMO-201`, `$V <run> wait '● Ready for Work 1'`, `$V <run> keys Down`, `$V <run> keys Enter`, `$V <run> wait '\[×\]  DEMO-201'`.
+- **Open by search.** `$V <run> keys /`, `$V <run> type DEMO-201`, `$V <run> wait '● Ready for Work 1'`, `$V <run> keys Down`, `$V <run> keys Enter`, `$V <run> wait 'DEMO-201  1 of 1 .*\[×\]'`.
 - **Fields and markup.** `$V <run> snap detail-open`. The screen shows `Status    ● Ready for Work`, `Assignee  Alex Rivera`, `Reporter  Priya Shah`, `Epic      DEMO-200 · Search performance`, the `Acceptance criteria` numbered list and the `Rollout` table (`Stage │ Traffic │ Owner`).
 - **Scroll** (*not yet driven*). `$V <run> keys G`, then snap. The end of the description and comments shows.
 - **Step** (*not yet driven*). Open from the unfiltered list instead (`Escape` the search first, `keys Down Enter`), then `$V <run> keys Right`. The key in the title changes and `N of M` counts up.
-- **Zoom** (*not yet driven*). `$V <run> keys z`. The popup fills the terminal and the top bar is hidden. `z` again restores it.
+- **Layouts.** Resize with `tmux -L lazyjira-verify-<run> resize-window -x 160 -y 45`. At 160 and 120 columns `snap` shows the list left of a `│` column and the detail right of it. At 119 and 80 the detail fills the area and no list shows. `$V <run> keys z` at 160 gives the full-area detail (the top bar stays), `z` again the split.
 - **Close.** `$V <run> keys Escape`. The list shows again.
 
 ## Gotchas

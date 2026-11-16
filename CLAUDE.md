@@ -57,7 +57,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/moves.rs** — Single-ticket move tracking: pending moves, Jira-confirmed moves (to ignore stale reads), and rejected moves awaiting dismissal
 - **src/bulk_upload.rs** — CSV parsing and validation for bulk ticket creation
 - **src/views/** — Tab renderers (`my_work.rs`, `team.rs`, `epics.rs`, `unassigned.rs`, `filters.rs`, shared helpers in `common.rs`)
-- **src/widgets/** — Overlays (`ticket_detail.rs`, `keybindings_help.rs`, `activity.rs`, `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `form.rs`, `move_failure.rs`), and `markup.rs`, which renders Jira wiki markup in descriptions (emphasis, links, mentions, lists, tables, quotes, code) as styled lines wrapped to the popup width
+- **src/widgets/** — Overlays: `ticket_detail.rs` (the detail pane beside or over the list), `keybindings_help.rs` (a sheet), and the forms, pickers and notices that dock as one panel (`dock.rs` says which is open and how tall, then `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `filter_edit.rs`, `move_failure.rs`, `move_status.rs`), with `activity.rs` (the pane's history view) and `form.rs` (their fields, buttons, panel and sheet frames). `markup.rs`, which renders Jira wiki markup in descriptions (emphasis, links, mentions, lists, tables, quotes, code) as styled lines wrapped to the popup width
 
 ## Before changing behaviour
 

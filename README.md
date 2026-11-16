@@ -11,7 +11,7 @@ lazyjira reads tickets and moves them through Jira's REST API, using the [`jira`
 Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (saved JQL).
 
 **Triage fast**
-- Step through tickets in the detail view with `←`/`→`, and press `z` for full screen
+- At 120 columns or wider the detail opens beside the list, which stays in step as you step through tickets with `←`/`→`; narrower, or after `z`, it fills the screen
 - Fold status groups and a parent's sub-tasks; `f` focuses one status, `d` hides Done
 - Lists show what differs: each ticket's age, shared epics and labels named once, done groups folded, status columns as wide as the longest status
 - Sub-tasks nest under their parent, or lead with its key when the parent is elsewhere
@@ -210,9 +210,9 @@ Refresh keeps the loaded list visible and follows the selected ticket even when 
 
 ### Mouse
 
-Click a tab or row to select it; click the selected row again to open it. Menus (bulk actions, and the move and resolution pickers in ticket detail) work the same way: click an option to choose it, and click it again to take it. Click the left edge of a row or group to mark it, and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
+Click a tab or row to select it; click the selected row again to open it. Menus (bulk actions, and the move and resolution pickers) work the same way: click an option to choose it, and click it again to take it. Click the left edge of a row or group to mark it, and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
 
-Click the red **[×]** in the top-left of ticket or epic detail to close the popup, including from its activity and move menus.
+With a detail open beside the list, click a row of the list to show that ticket. Click **[×]** at the right end of the detail's first line to close it. Forms, pickers and notices open as one panel under the list with their own **[×]**, and Help and Settings are sheets over the whole screen with one at the right end of their title line.
 
 Forms support clicking fields, positioning the text cursor, choosing picker options, and clicking their action buttons. Type to filter assignee and epic pickers; use arrow keys or the wheel to choose. Bulk actions still require the separate confirmation step.
 
@@ -226,7 +226,9 @@ Create tickets with a type (Task, Bug, or Story), summary, assignee, epic, label
 
 ### Detail view
 
-![A ticket detail with a top-left close control and formatted Jira headings, a numbered list, a table, and code](docs/images/ticket-detail.png)
+![A ticket detail with a close control and formatted Jira headings, a numbered list, a table, and code](docs/images/ticket-detail.png)
+
+At 120 columns or wider the list stays on the left, 50 cells wide with each ticket's key and summary, and the detail fills the rest beside a dim divider. Below 120 columns, or after `z`, the detail takes the whole area. The key hints for the detail replace the footer while it is open.
 
 Descriptions and comments render Jira's wiki markup: headings, bold/italic/strikethrough, links, mentions, lists, tables, quotes, code blocks and icons like `(/)`.
 
@@ -237,7 +239,7 @@ Descriptions and comments render Jira's wiki markup: headings, bold/italic/strik
 | `PgUp/PgDn`, `Space` | Scroll a page |
 | `g/G`, `Home/End` | Jump to top / bottom |
 | `Left/Right` | Previous / next ticket in the list (previous / next epic in an epic's detail) |
-| `z` | Zoom to full screen (toggle) |
+| `z` | Zoom over the list (toggle) |
 | `o` | Open in browser |
 | `m` | Move status |
 | `C` | Comment |

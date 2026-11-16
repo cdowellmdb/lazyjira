@@ -4,7 +4,7 @@ How lazyjira looks, and the rules behind it. Read this before changing colors, b
 
 ## Principles
 
-Each principle and each mockup names the PR in the build order below that lands it. PR 1 (the foundation) and PR 2 (the top bar, lists and marking mode) are in the code. The others are the target.
+Each principle and each mockup names the PR in the build order below that lands it. PR 1 (the foundation), PR 2 (the top bar, lists and marking mode) and PR 3 (overlays) are in the code. PR 4 is the target.
 
 1. **Weight and dimness carry hierarchy, color does not.** (PR 1: the roles. PR 2: the lists.) Primary text uses the default foreground. Headers, group names, the active tab and the selected key are bold. Secondary text (epic, age, labels, assignee, footer descriptions, counts) is dim. In this guide, dim means the muted role, which is ANSI DarkGray that `theme.rs` recolors. It never means `Modifier::DIM`, which a theme can't reach.
 2. **One accent.** (PR 2) Cyan marks keys, focus and the active tab, and nothing else. Yellow headers and blue info text are gone.
@@ -14,7 +14,7 @@ Each principle and each mockup names the PR in the build order below that lands 
 6. **Marking is a mode.** (PR 2) The `☐` column appears only after `Space` or `A`, with a bulk bar (`2 selected   B move or assign · u clear · A all`) in place of the old `sel:0` footer item.
 7. **No emoji.** (PR 1) Every glyph is single width, so columns and overlays never misalign. Stale tickets show their age in dim text with no icon.
 8. **Footers degrade, they never cut.** (PR 1) Hints read `key action · key action`, with bold keys and dim words. Each hint has a priority. As the terminal narrows, hints are dropped by priority, lowest importance first, then from the right within a priority, and never half a hint. `? more` always stays.
-9. **Overlays do not leak.** (PR 3) An overlay clears everything behind it. Forms, pickers and bulk actions dock as one panel under the list with a single rule above it. Detail sits beside the list at 120 columns or wider and replaces it below that. Help and Settings are full-width sheets.
+9. **Overlays do not leak.** (PR 3, in the code) An overlay clears everything behind it. Forms, pickers, bulk actions and notices dock as one panel under the list with a single rule above it and no box, taking the rows they need up to 60% of the content area. Detail sits beside the list at 120 columns or wider (the list 50 cells, one dim `│` between) and replaces it below that or after `z`. Help and Settings are full-width sheets: a bold title with a close cell, the content, and a dim `Esc/? close` hint line. While a detail is open its hints are the footer line. `ui_tests` check that no list text shows through and no border glyph is drawn.
 10. **Narrow terminals drop columns, not hints.** (PR 4) At 80 columns the epic and labels columns go first. Key, summary and age stay.
 
 Two decisions of PR 2:
@@ -84,7 +84,7 @@ These screens are the agreed mockup, built from the demo's fake data. Bold, dim,
 
  2 selected   B move or assign · u clear · A all
 
-3. Enter on a ticket (120+ columns): list and detail side by side (PR 3)
+3. Enter on a ticket (120+ columns): list and detail side by side (PR 3, in the code; the drawn screen differs from this mockup in the ways listed under "Mockup differences")
  lazyjira   My Work   Team   Epics   Unassigned   Filters                                                      Settings 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  In Progress 2                                    │ DEMO-101  1 of 7
@@ -105,7 +105,7 @@ These screens are the agreed mockup, built from the demo's fake data. Bold, dim,
 
  ↑↓ scroll · ←→ prev/next · m move · C comment · a assign · e edit · Esc close
 
-4. Pressing m in ticket detail: the move panel docks under the list instead of a popup (PR 3)
+4. Pressing m in ticket detail: the move panel docks under the list instead of a popup (PR 3, in the code; see "Mockup differences")
  lazyjira   My Work   Team   Epics   Unassigned   Filters                                            Settings 
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -143,7 +143,7 @@ The work ships as a stack of four PRs, each based on the one below.
 
 1. **Foundation.** This guide, a shared style module for the roles above, the graceful footer, emoji removal, and `TestBackend` snapshot and contrast tests.
 2. **Chrome and lists.** The one-line top bar, no column bars, marking mode, airy groups and the `›` selection on all five tabs.
-3. **Overlays.** The docked panel, the side-by-side detail view, and full-width help and settings.
+3. **Overlays (landed).** The docked panel, the side-by-side detail view, and full-width help and settings.
 4. **Narrow widths and docs.** The 80-column layout, README and keybinding docs, and re-recorded demo GIFs once at the end.
 
 ## Rules for new UI
@@ -153,10 +153,22 @@ The work ships as a stack of four PRs, each based on the one below.
 - Test wide characters with `unicode-width`, not `str::len`.
 - Update this guide when a rule changes.
 
+### Mockup differences
+
+The code draws mockups 3 and 4 with these differences, kept on purpose:
+
+- Group headers keep PR 2's colored `●` and its summary column is cut with `...` where the mockup shows a single `…` and drops the dots. Truncation and the headers are PR 2 and PR 4's, and the 50-cell list pane only has room for a key and a clipped summary.
+- Mockup 3 shows the detail's `Updated` and `Customers hit this...` lines as examples. The pane shows exactly what the detail showed before (status, assignee, reporter, epic, labels, the stale quip, description, comments), so there is no `Updated` row.
+- The detail's `[×]` close cell ends the header line, and the activity view has a `Back` button. The mockup has neither.
+- The mockup's move panel has `›  p  ● In Progress` rows. The panel shows the same lines the picker always showed (`[p] Start Progress → In Progress`), because the picker's text is unchanged, and its title reads `Move DEMO-101 from In Progress` with the status muted.
+- The panel has a `[×]` on its title line and its keys in the hint line are clickable. A form's buttons (`Submit`, `Cancel`, `Editor`) share the last row with its hints.
+- The detail pane's last column is a scrollbar thumb when the text is longer than the pane, with no track drawn, so `│` stays the divider's alone.
+
 ### Inline colors still in the code
 
-PR 1 moved the selected row and secondary text onto `src/style.rs`. PR 2 moved the top bar, the status line (`style::error` and `style::warning`), the list views and Filters' panes, so `views/` and `ui()` no longer name a color inline except these:
+PR 1 moved the selected row and secondary text onto `src/style.rs`. PR 2 moved the top bar, the status line (`style::error` and `style::warning`), the list views and Filters' panes. PR 3 moved the overlays: the detail, the activity view, the forms, the panel and sheet frames, help, settings and the text selection and Copy button in `mouse.rs`. What still names a color or modifier inline:
 
+- `widgets/markup.rs`: the colors Jira wiki markup asks for in a description or comment (headings, links, code, mentions, table rules, panels). They follow the content, not a role, so they stay inline. Keep them to ANSI colors so a theme still recolors them.
 - `views/common.rs` and `views/my_work.rs`: `Modifier::BOLD` added to a style from `style.rs` (`muted` removes it, the empty-scene text adds it).
-- `mouse.rs`: the text selection highlight (`LightBlue`) and the Copy button text (`Cyan`).
-- The overlays in `src/widgets/` (detail, help, forms, bulk, activity): their muted text and highlights. PR 3 rebuilds them.
+- `delight.rs`: confetti, the rainbow bar and the quit receipt, which are decoration.
+- `setup.rs`: the first-run setup screen, which runs before a theme exists.
