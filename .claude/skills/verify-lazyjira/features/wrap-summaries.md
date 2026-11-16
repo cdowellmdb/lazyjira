@@ -22,7 +22,7 @@ Preconditions:
 - Fresh run, on My Work.
 
 - **Turn it on.** `$V <run> keys S`, `$V <run> wait 'Wrap summaries'`, `$V <run> keys BTab Down`, `$V <run> snap wrap-setting`, `$V <run> keys Enter`, `$V <run> wait 'DEMO-101'`. Copy `target/verify/<run>/home/.config/lazyjira/config.toml` to `evidence/`; it holds `wrap_summaries = true`.
-- **Make summaries wrap.** At 160 columns the demo summaries fit. Narrow the window: `tmux -L lazyjira-verify-<run> resize-window -t "$(tmux -L lazyjira-verify-<run> ls -F '#S' | head -1)" -x 80 -y 30`. My Work then shows DEMO-101's summary as `Add saved` / `payment methods` / `to checkout`. `$V <run> snap wrap-rows`.
+- **Make summaries wrap.** At 160 columns the demo summaries fit. Narrow the window (the demo summaries still fit My Work at 80 columns, where Epic and Labels are dropped): `tmux -L lazyjira-verify-<run> resize-window -t "$(tmux -L lazyjira-verify-<run> ls -F '#S' | head -1)" -x 39 -y 30`. My Work then shows DEMO-101's summary as `Add saved` / `payment methods` / `to checkout`. `$V <run> snap wrap-rows`.
 - **Highlight.** `$V <run> keys j`, `$V <run> snap wrap-highlight`. In `evidence/wrap-highlight.ansi`, DEMO-101's three lines carry the dark gray background and DEMO-111's don't.
 - **Other tabs.** `$V <run> keys Tab` for each tab and snap it. On Filters, `Enter` runs "My bugs" and the results wrap. On Epics, the `DEMO-100  Checkout redesign` header stays one line.
 - **Scroll.** Resize to `-y 16`, go back to My Work, and press `j` until the last ticket is selected. Its last summary line shows above the footer.
@@ -30,5 +30,5 @@ Preconditions:
 ## Gotchas
 
 - `BTab` once from the first field lands on "Wrap summaries" (the sixth field). Theme is two `BTab`s. `S-Tab` does not reach the app as BackTab here, so the toggle silently stays Off.
-- At 80 columns, Team's Summary column is 14 wide (measured with the demo data, `Add saved p...`), so only a word longer than 14 characters breaks mid-word. Filters' results keep about 24.
+- At 55 columns, Team's Summary column is 14 wide (measured with the demo data), so only a word longer than 14 characters breaks mid-word. At 80 it is 38 wide and the demo summaries fit. Filters' results keep about 24.
 - `down` deletes `home/`, so copy `config.toml` first.
