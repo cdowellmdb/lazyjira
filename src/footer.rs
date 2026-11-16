@@ -155,7 +155,7 @@ pub fn bulk_bar(app: &App, width: u16) -> Option<Line<'static>> {
 
 /// A panel's or the detail's hints, `(key, label)`: `Esc` is never dropped and the others go
 /// from the right, so their order is the drop order.
-type Pairs<'a> = &'a [(&'static str, &'static str)];
+pub type Pairs<'a> = &'a [(&'static str, &'static str)];
 
 fn pair_hints(pairs: Pairs) -> Vec<Hint> {
     pairs
@@ -196,6 +196,37 @@ pub fn render_pairs(f: &mut ratatui::Frame, app: &App, area: Rect, pairs: Pairs)
         }
         x = x.saturating_add(width + 1 + hint.label.width() as u16 + SEPARATOR.width() as u16);
     }
+}
+
+/// `pairs` split into as few rows of at most `width` columns as hold them, in order, each hint
+/// whole on one row, and the rows as even as the hints allow. A hint wider than `width` has a
+/// row to itself.
+pub fn wrap_pairs(pairs: Pairs, width: u16) -> Vec<Pairs> {
+    let rows = fill_rows(pairs, width as usize);
+    let total = pair_hints(pairs);
+    let least = hints_width(&total.iter().collect::<Vec<_>>()).div_ceil(rows.len().max(1));
+    // The narrowest limit that still takes the same number of rows.
+    (least..=width as usize)
+        .map(|limit| fill_rows(pairs, limit))
+        .find(|even| even.len() == rows.len())
+        .unwrap_or(rows)
+}
+
+/// `pairs` in rows filled in order up to `limit` columns each.
+fn fill_rows(pairs: Pairs, limit: usize) -> Vec<Pairs> {
+    let mut rows = Vec::new();
+    let mut start = 0;
+    for end in 1..pairs.len() {
+        let row = pair_hints(&pairs[start..=end]);
+        if hints_width(&row.iter().collect::<Vec<_>>()) > limit {
+            rows.push(&pairs[start..end]);
+            start = end;
+        }
+    }
+    if start < pairs.len() {
+        rows.push(&pairs[start..]);
+    }
+    rows
 }
 
 fn age_in_minutes(age_secs: u64) -> String {
@@ -703,5 +734,35 @@ mod tests {
         for key in keys {
             assert!(help.contains(key), "{key} is not in the help");
         }
+    }
+
+    #[test]
+    fn wrapped_pairs_fill_the_fewest_rows_whole_and_as_even_as_they_allow() {
+        // Three hints of 6 cells and `Esc close` of 9: 37 columns with the leading cell and the
+        // 3 cell separators.
+        let pairs: Pairs = &[
+            ("a", "aaaa"),
+            ("b", "bbbb"),
+            ("c", "cccc"),
+            ("Esc", "close"),
+        ];
+        let keys = |width| -> Vec<Vec<&str>> {
+            wrap_pairs(pairs, width)
+                .iter()
+                .map(|row| row.iter().map(|(key, _)| *key).collect())
+                .collect()
+        };
+        assert_eq!(keys(40), [["a", "b", "c", "Esc"]]);
+        assert_eq!(keys(37), [["a", "b", "c", "Esc"]]);
+        // 36 columns need two rows. Filling in order would leave `Esc` alone, so they even out.
+        assert_eq!(keys(36), [vec!["a", "b"], vec!["c", "Esc"]]);
+        assert_eq!(keys(19), [vec!["a", "b"], vec!["c", "Esc"]]);
+        // `c` and `Esc close` need 19 columns together.
+        assert_eq!(keys(18), [vec!["a", "b"], vec!["c"], vec!["Esc"]]);
+        assert_eq!(keys(16), [vec!["a", "b"], vec!["c"], vec!["Esc"]]);
+        assert_eq!(keys(15), [vec!["a"], vec!["b"], vec!["c"], vec!["Esc"]]);
+        // A hint wider than the width has its row to itself, whole.
+        assert_eq!(keys(5), [vec!["a"], vec!["b"], vec!["c"], vec!["Esc"]]);
+        assert!(wrap_pairs(&[], 80).is_empty());
     }
 }

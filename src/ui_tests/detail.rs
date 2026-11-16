@@ -58,9 +58,16 @@ async fn at_120_columns_detail_has_the_list_on_the_left_and_at_119_it_replaces_i
     for width in [120, 160] {
         let (_, rows) = detail_screen(width).await;
         let case = format!("{width} columns\n{}", rows.join("\n"));
-        assert_eq!(column(&rows, 50), "│".repeat(27), "{case}");
+        // The 11 detail hints fit one row at 160 columns and take two at 120.
+        let pane_rows = if width == 120 { 26 } else { 27 };
+        // `column` stops above the last row, so the 120 column screen's first hint row is in it.
+        assert_eq!(
+            column(&rows, 50),
+            format!("{}{}", "│".repeat(pane_rows), " ".repeat(27 - pane_rows)),
+            "{case}"
+        );
         // Only the list is left of the divider, and only the pane right of it.
-        for row in &rows[2..29] {
+        for row in &rows[2..2 + pane_rows] {
             let (list, pane) = row.split_at(row.char_indices().nth(50).unwrap().0);
             assert!(!pane.contains("LEAK"), "{case}");
             assert!(list.chars().count() == 50, "{case}");
@@ -82,7 +89,9 @@ async fn at_120_columns_detail_has_the_list_on_the_left_and_at_119_it_replaces_i
             "no other column: {case}"
         );
         assert!(
-            rows[2..29].iter().any(|row| row.starts_with("   LEAK-")),
+            rows[2..2 + pane_rows]
+                .iter()
+                .any(|row| row.starts_with("   LEAK-")),
             "{case}"
         );
     }
@@ -276,4 +285,147 @@ async fn beside_the_detail_an_epics_header_shows_the_epic() {
     click(&mut app, &mut config, 20, header).await;
     assert_eq!(app.detail_epic_key.as_deref(), Some("DEMO-100"));
     assert_eq!(app.selected_index, 0);
+}
+
+/// The cells of every key hint on the rows from `from` down, as (x, y, width) and the key.
+fn hint_cells(app: &App, from: u16) -> Vec<(u16, u16, u16, KeyCode)> {
+    app.mouse_targets
+        .borrow()
+        .iter()
+        .filter(|(area, _)| area.y >= from)
+        .filter_map(|(area, target)| match target {
+            mouse::Target::Key(key) => Some((area.x, area.y, area.width, *key)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn every_detail_hint_keeps_its_click_cell_at_80_120_and_160_columns() {
+    // 11 hints take 122 columns, so below that they wrap onto a second row. The two rows are as
+    // even as whole hints allow, so 80 and 120 columns wrap alike.
+    let wrapped = [
+        (13, 28, 1, KeyCode::Left),
+        (14, 28, 1, KeyCode::Right),
+        (28, 28, 1, KeyCode::Char('m')),
+        (37, 28, 1, KeyCode::Char('C')),
+        (49, 28, 1, KeyCode::Char('a')),
+        (1, 29, 1, KeyCode::Char('e')),
+        (10, 29, 1, KeyCode::Char('h')),
+        (23, 29, 1, KeyCode::Char('o')),
+        (35, 29, 1, KeyCode::Char('z')),
+        (44, 29, 1, KeyCode::Char('?')),
+        (53, 29, 3, KeyCode::Esc),
+    ];
+    let one_row = [
+        (13, 29, 1, KeyCode::Left),
+        (14, 29, 1, KeyCode::Right),
+        (28, 29, 1, KeyCode::Char('m')),
+        (37, 29, 1, KeyCode::Char('C')),
+        (49, 29, 1, KeyCode::Char('a')),
+        (60, 29, 1, KeyCode::Char('e')),
+        (69, 29, 1, KeyCode::Char('h')),
+        (82, 29, 1, KeyCode::Char('o')),
+        (94, 29, 1, KeyCode::Char('z')),
+        (103, 29, 1, KeyCode::Char('?')),
+        (112, 29, 3, KeyCode::Esc),
+    ];
+    for (width, cells) in [(80, &wrapped), (120, &wrapped), (160, &one_row)] {
+        let (app, rows) = detail_screen(width).await;
+        assert_eq!(
+            hint_cells(&app, 27),
+            *cells,
+            "{width} columns\n{}",
+            rows.join("\n")
+        );
+    }
+    let (_, rows) = detail_screen(80).await;
+    assert_eq!(
+        rows[28].trim_end(),
+        " ↑↓ scroll · ←→ prev/next · m move · C comment · a assign"
+    );
+    assert_eq!(
+        rows[29].trim_end(),
+        " e edit · h activity · o browser · z zoom · ? help · Esc close"
+    );
+}
+
+#[tokio::test]
+async fn clicking_the_hints_the_narrow_layout_wrapped_acts_on_them() {
+    let mut config = sample_config();
+    let (mut app, _) = detail_screen(80).await;
+    // `z` is the fourth hint of the second row, `h` the second, `?` the fifth.
+    click(&mut app, &mut config, 35, 29).await;
+    assert!(app.detail_fullscreen, "z");
+    click(&mut app, &mut config, 35, 29).await;
+    assert!(!app.detail_fullscreen, "z again");
+    click(&mut app, &mut config, 44, 29).await;
+    assert!(app.show_keybindings, "?");
+    press(&mut app, &mut config, KeyCode::Esc).await;
+    screen(&app, 80, 30);
+    click(&mut app, &mut config, 10, 29).await;
+    assert!(matches!(app.detail_mode, DetailMode::History { .. }), "h");
+}
+
+#[tokio::test]
+async fn the_detail_hints_show_while_a_search_is_still_set_after_enter() {
+    let mut config = sample_config();
+    let mut app = app_with_a_long_list();
+    app.cache.my_tickets[29].detail_loaded = true;
+    press(&mut app, &mut config, KeyCode::Char('/')).await;
+    for c in "LAST".chars() {
+        press(&mut app, &mut config, KeyCode::Char(c)).await;
+    }
+    press(&mut app, &mut config, KeyCode::Enter).await;
+    assert!(app.search.is_some(), "the search stays after Enter");
+    assert_eq!(app.detail_ticket_key.as_deref(), Some("LAST-30"));
+    let rows = screen(&app, 80, 30);
+    assert_eq!(
+        rows[29].trim_end(),
+        " e edit · h activity · o browser · z zoom · ? help · Esc close"
+    );
+    assert!(rows[28].starts_with(" ↑↓ scroll"), "{}", rows[28]);
+    assert!(
+        rows.iter().all(|row| !row.starts_with("/LAST")),
+        "{}",
+        rows.join("\n")
+    );
+    let keys: Vec<KeyCode> = hint_cells(&app, 28)
+        .into_iter()
+        .map(|cell| cell.3)
+        .collect();
+    assert_eq!(keys.len(), 11);
+    assert!(keys.contains(&KeyCode::Esc));
+    // Esc closes the detail and the search shows again.
+    press(&mut app, &mut config, KeyCode::Esc).await;
+    let rows = screen(&app, 80, 30);
+    assert_eq!(rows[29].trim_end(), "/LAST");
+}
+
+#[tokio::test]
+async fn a_flash_or_a_pending_move_takes_a_row_above_the_detail_hints_and_hides_none() {
+    let (mut app, _) = detail_screen(80).await;
+    app.flash = Some("Couldn't open browser".to_string());
+    let rows = screen(&app, 80, 30);
+    assert_eq!(
+        rows[27].trim_end(),
+        "Couldn't open browser",
+        "{}",
+        rows.join("\n")
+    );
+    assert_eq!(
+        rows[28].trim_end(),
+        " ↑↓ scroll · ←→ prev/next · m move · C comment · a assign"
+    );
+    assert_eq!(hint_cells(&app, 28).len(), 11);
+    app.flash = None;
+    assert!(app.moves.start("LAST-30", "Done"));
+    let rows = screen(&app, 80, 30);
+    let pending = app.moves.pending_message().unwrap();
+    assert_eq!(rows[27].trim_end(), pending, "{}", rows.join("\n"));
+    assert_eq!(hint_cells(&app, 28).len(), 11);
+    assert_eq!(
+        rows[29].trim_end(),
+        " e edit · h activity · o browser · z zoom · ? help · Esc close"
+    );
 }

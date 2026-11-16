@@ -228,7 +228,7 @@ Create tickets with a type (Task, Bug, or Story), summary, assignee, epic, label
 
 ![A ticket detail with a close control and formatted Jira headings, a numbered list, a table, and code](docs/images/ticket-detail.png)
 
-At 120 columns or wider the list stays on the left, 50 cells wide with each ticket's key and summary, and the detail fills the rest beside a dim divider. Below 120 columns, or after `z`, the detail takes the whole area. The key hints for the detail replace the footer while it is open.
+At 120 columns or wider the list stays on the left, 50 cells wide with each ticket's key and summary, and the detail fills the rest beside a dim divider. Below 120 columns, or after `z`, the detail covers the list; the top bar and the footer stay. The key hints for the detail replace the footer while it is open, wrapped onto a second row when they don't fit one, so every key stays clickable at any width. A message (an error, or a move waiting on Jira) takes a row above them.
 
 Descriptions and comments render Jira's wiki markup: headings, bold/italic/strikethrough, links, mentions, lists, tables, quotes, code blocks and icons like `(/)`.
 
@@ -246,6 +246,7 @@ Descriptions and comments render Jira's wiki markup: headings, bold/italic/strik
 | `a` | Assign/reassign |
 | `e` | Edit summary, labels, and description |
 | `h` | Activity: comments, newest first |
+| `?` | Keybindings help |
 
 The move picker lists the transitions Jira offers for the ticket, as "transition → status" when the two names differ (for example `Resume Progress → In Progress`) and by name alone when they don't, so it only offers moves the ticket's workflow allows. Choose one with `j/k` and `Enter`, then press `Enter` or `y` to confirm.
 

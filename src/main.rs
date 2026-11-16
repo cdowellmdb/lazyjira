@@ -23,6 +23,7 @@ mod move_picker;
 mod moves;
 mod settings;
 mod setup;
+mod status;
 mod style;
 mod subtasks;
 mod theme;
@@ -734,15 +735,15 @@ fn edit_externally(
 
 fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     use ratatui::layout::{Constraint, Direction, Layout};
-    use ratatui::text::{Line, Span};
 
+    let status = status::status(app, config, f.area().width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(top_bar::HEIGHT),
             Constraint::Min(0),                          // Content
             Constraint::Length(app.is_marking() as u16), // Bulk bar
-            Constraint::Length(1),                       // Status bar
+            Constraint::Length(status.height()),         // Status area
         ])
         .split(f.area());
     // A panel docks at the bottom of the content, which shrinks to make room.
@@ -775,27 +776,7 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         widgets::ticket_detail::render(f, app, panes.detail);
     }
 
-    // Status bar
-    let status_line = if let Some(ref flash) = app.flash {
-        // One line: the terminal drops a line break, which would run Jira's messages together.
-        Line::from(Span::styled(
-            flash.lines().collect::<Vec<_>>().join("; "),
-            style::error(),
-        ))
-    } else if let Some(ref search) = app.search {
-        Line::from(Span::styled(format!("/{}", search), style::warning()))
-    } else if let Some(pending) = app.moves.pending_message() {
-        Line::from(Span::styled(pending, style::warning()))
-    } else if panel.is_some() {
-        // The panel has its own hints.
-        Line::default()
-    } else if detail {
-        footer::render_pairs(f, app, chunks[3], widgets::ticket_detail::hints(app));
-        Line::default()
-    } else {
-        footer::line(app, &config.preferences.theme, chunks[3].width)
-    };
-    f.render_widget(ratatui::widgets::Paragraph::new(status_line), chunks[3]);
+    status.render(f, app, chunks[3]);
     if let Some(bar) = footer::bulk_bar(app, chunks[2].width) {
         f.render_widget(ratatui::widgets::Paragraph::new(bar), chunks[2]);
     }
@@ -833,8 +814,6 @@ fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
             app.keybindings_scroll = scroll
                 .saturating_add(1)
                 .min(app.keybindings_scroll_max.get());
-        KeyCode::Down | KeyCode::Char('j') => app.moves.scroll_failure(true),
-        KeyCode::Up | KeyCode::Char('k') => app.moves.scroll_failure(false),
         }
         KeyCode::Up | KeyCode::Char('k') => app.keybindings_scroll = scroll.saturating_sub(1),
         KeyCode::PageDown | KeyCode::Char(' ') => {
@@ -854,6 +833,8 @@ fn handle_keybindings_keys(app: &mut App, key: KeyCode) {
 fn handle_move_failure_keys(app: &mut App, key: KeyCode) {
     match key {
         KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.moves.dismiss_failure(),
+        KeyCode::Down | KeyCode::Char('j') => app.moves.scroll_failure(true),
+        KeyCode::Up | KeyCode::Char('k') => app.moves.scroll_failure(false),
         KeyCode::Char('o') => {
             if let Some(failure) = app.moves.failures().first() {
                 let key = failure.key.clone();
@@ -889,6 +870,7 @@ fn handle_detail_keys(app: &mut App, key: KeyCode, bg_tx: &UnboundedSender<Backg
                 KeyCode::Home | KeyCode::Char('g') => app.scroll_detail_to(false),
                 KeyCode::End | KeyCode::Char('G') => app.scroll_detail_to(true),
                 KeyCode::Char('z') => app.detail_fullscreen = !app.detail_fullscreen,
+                KeyCode::Char('?') => app.toggle_keybindings(),
                 KeyCode::Left | KeyCode::Right => {
                     if let Some(key) = app.step_detail(key == KeyCode::Right) {
                         spawn_ticket_detail_fetch(bg_tx, key, app.moves.now());

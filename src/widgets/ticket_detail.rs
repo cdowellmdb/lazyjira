@@ -37,6 +37,7 @@ const VIEW_HINTS: &[(&str, &str)] = &[
     ("h", "activity"),
     ("o", "browser"),
     ("z", "zoom"),
+    ("?", "help"),
     ("Esc", "close"),
 ];
 
@@ -45,6 +46,7 @@ const EPIC_HINTS: &[(&str, &str)] = &[
     ("←→", "prev/next"),
     ("o", "browser"),
     ("z", "zoom"),
+    ("?", "help"),
     ("Esc", "close"),
 ];
 
