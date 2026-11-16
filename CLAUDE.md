@@ -92,6 +92,7 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 - `futures-core` — the `Stream` trait that stream implements
 - `tui-textarea` — text input in forms
 - `unicode-width` — column widths when wrapping rendered markup
+- `unicode-segmentation` — grapheme clusters, so wrapping, tables and truncation measure text the way ratatui draws it (already in the tree through ratatui)
 - `tokio` — async runtime for parallel CLI calls
 - `reqwest` (rustls, no OpenSSL, gzip) — Jira REST calls for list and detail reads and moves
 - `serde` + `serde_json` + `serde_yaml` + `toml` — JSON/YAML/TOML parsing
