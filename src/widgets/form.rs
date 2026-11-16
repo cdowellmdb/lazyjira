@@ -397,34 +397,27 @@ pub fn close_button(f: &mut ratatui::Frame, app: &crate::app::App, row: Rect, ta
     app.mouse_targets.borrow_mut().push((rect, target));
 }
 
-pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(r);
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(popup_layout[1])[1]
-}
-
-pub fn render_popup_frame(
-    f: &mut ratatui::Frame,
-    app: &crate::app::App,
-    title: &str,
-    percent_x: u16,
-    percent_y: u16,
-) -> Rect {
-    let area = centered_rect(percent_x, percent_y, f.area());
+/// Draws a sheet over the whole frame, which it clears: `title` in bold on the first row with
+/// a `[×]` that closes it, a blank row, then the body. Returns the body, two cells in from
+/// each side, and makes it selectable.
+pub fn render_sheet(f: &mut ratatui::Frame, app: &crate::app::App, title: &str) -> Rect {
+    let area = f.area();
     f.render_widget(Clear, area);
-    let block = crate::views::common::panel().title(format!(" {} ", title));
-    let inner = block.inner(area);
+    let [head, _, rest] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+    f.render_widget(Paragraph::new(self::title(title, "")), head);
+    close_button(f, app, head, Target::Key(KeyCode::Esc));
+    let inner = Rect::new(
+        rest.x.saturating_add(2),
+        rest.y,
+        rest.width.saturating_sub(4),
+        rest.height,
+    );
     crate::mouse::selectable(app, inner);
-    f.render_widget(block, area);
     inner
 }
 

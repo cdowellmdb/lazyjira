@@ -3,7 +3,7 @@ use std::ops::Range;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::{App, GroupSelectionState, VisibleGroup};
 use crate::cache::{Epic, Status, StatusKind, StatusRules, Ticket};
@@ -24,15 +24,6 @@ pub const COLUMN_GAP: usize = 2;
 pub const STATUS_DOT_WIDTH: usize = 2;
 /// The `└ ` before a sub-task's key, and the two cells of indent before it.
 const CHILD_PREFIX: &str = "  └ ";
-
-pub fn panel() -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(style::secondary())
-        .title_style(style::primary())
-        .padding(Padding::horizontal(1))
-}
 
 /// The arrow of a folded group or parent, and of an open one.
 const FOLDED: &str = "▶";

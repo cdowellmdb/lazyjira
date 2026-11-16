@@ -966,3 +966,74 @@ async fn a_drag_in_the_detail_pane_copies_detail_text_only_and_a_drag_in_the_lis
     // The divider is selectable by neither.
     assert_eq!(drag_text((50, status), (50, status + 1)).await, None);
 }
+
+#[tokio::test]
+async fn help_and_settings_are_sheets_over_the_whole_frame_with_a_title_a_close_cell_and_no_box() {
+    for (name, key, title) in [
+        ("help", '?', "Keyboard shortcuts"),
+        ("settings", 'S', "Settings"),
+    ] {
+        for (width, height) in [(80, 24), (120, 30), (160, 45)] {
+            let mut config = two_saved_filters();
+            let mut app = app_with_a_long_list();
+            press(&mut app, &mut config, KeyCode::Char(key)).await;
+            let rows = screen(&app, width, height);
+            let case = format!("{name} at {width}x{height}\n{}", rows.join("\n"));
+            assert!(rows[0].starts_with(&format!(" {title} ")), "{case}");
+            assert!(rows[0].ends_with(" [×]  "), "{case}");
+            // Nothing of the screen behind it shows: not the top bar, the list or the footer.
+            for covered in [
+                " lazyjira   My Work",
+                "LEAK",
+                "LAST",
+                "Tab switch",
+                "Unassigned   Filters",
+            ] {
+                assert!(
+                    rows.iter().all(|row| !row.contains(covered)),
+                    "{covered:?} shows through: {case}"
+                );
+            }
+            for glyph in [
+                '╭', '╮', '╰', '╯', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼', '│',
+            ] {
+                assert!(
+                    rows.iter().all(|row| !row.contains(glyph)),
+                    "{glyph}: {case}"
+                );
+            }
+            let close = Rect::new(width - 6, 0, 5, 1);
+            assert!(
+                app.mouse_targets
+                    .borrow()
+                    .contains(&(close, mouse::Target::Key(KeyCode::Esc))),
+                "{case}"
+            );
+            assert!(
+                app.text_selection
+                    .borrow()
+                    .areas
+                    .iter()
+                    .all(|area| area.y >= 2 && area.x == 2 && area.right() == width - 2),
+                "{case}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn clicking_the_sheets_close_cell_closes_it_and_the_cell_before_it_does_not() {
+    let mut config = two_saved_filters();
+    for (key, open) in [
+        ('?', (|app: &App| app.show_keybindings) as fn(&App) -> bool),
+        ('S', |app: &App| app.settings.is_some()),
+    ] {
+        for (x, closes) in [(153, false), (154, true), (158, true), (159, false)] {
+            let mut app = app_with_a_long_list();
+            press(&mut app, &mut config, KeyCode::Char(key)).await;
+            screen(&app, 160, 40);
+            click(&mut app, &mut config, x, 0).await;
+            assert_eq!(!open(&app), closes, "{key} clicked at {x}");
+        }
+    }
+}
