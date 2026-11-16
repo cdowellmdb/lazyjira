@@ -36,7 +36,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/delight.rs** — Confetti, the quit receipt, stale-ticket fading, the empty My Work scene and spooky season; all off with `preferences.delight = false`
 - **src/theme.rs** — Color themes: presets, custom themes from `[themes]`, and the pass that recolors a drawn frame; a test keeps every preset's text and roles readable
 - **src/top_bar.rs** — The one-line top bar (`lazyjira`, the tabs, and `Settings` as muted text at the right) and its rule; registers the tab and Settings mouse targets
-- **src/style.rs** — The shared styles, one function per role in `docs/tui-style.md` (primary, secondary, subtle, error, warning, accent, key hint, heading, selected row, status) and `status_color`, in the ANSI colors `theme.rs` recolors
+- **src/style.rs** — The shared styles, one function per role in `docs/tui-style.md` (primary, secondary, subtle, error, warning, accent, key hint, heading, selected row, code, link, status) and `status_color`, in the ANSI colors `theme.rs` recolors
 - **src/footer.rs** — The idle footer: `Hint`s (key, label, priority) that drop as the terminal narrows, the muted segment of non-default state at the right, and the bulk bar shown above it while tickets are marked
 - **src/status.rs** — The status area under the content: a flash error, the search, a pending move or the footer, and while a detail is open its hints wrapped onto as many rows as the width needs, with a message on a row above
 - **src/mouse.rs** — Hit targets registered by renderers and mouse event handling
@@ -58,7 +58,7 @@ When naming domain concepts, use [CONTEXT.md](CONTEXT.md). Before changing Jira 
 - **src/moves.rs** — Single-ticket move tracking: pending moves, Jira-confirmed moves (to ignore stale reads), and rejected moves awaiting dismissal
 - **src/bulk_upload.rs** — CSV parsing and validation for bulk ticket creation
 - **src/views/** — Tab renderers (`my_work.rs`, `team.rs`, `epics.rs`, `unassigned.rs`, `filters.rs`, shared helpers in `common.rs`, and the column widths in `columns.rs`: `Shared::trailing` says whether Epic and Labels are drawn, only where Summary keeps `SUMMARY_MIN` columns, as a `Trailing`)
-- **src/widgets/** — Overlays: `ticket_detail.rs` (the detail pane beside or over the list), `keybindings_help.rs` (a sheet), and the forms, pickers and notices that dock as one panel (`dock.rs` says which is open and how tall, then `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `filter_edit.rs`, `move_failure.rs`, `move_status.rs`), with `activity.rs` (the pane's history view) and `form.rs` (their fields, buttons, panel and sheet frames). `markup.rs`, which renders Jira wiki markup in descriptions (emphasis, links, mentions, lists, tables, quotes, code) as styled lines wrapped to the pane's width
+- **src/widgets/** — Overlays: `ticket_detail.rs` (the detail pane beside or over the list), `keybindings_help.rs` (a sheet), and the forms, pickers and notices that dock as one panel (`dock.rs` says which is open and how tall, then `assign.rs`, `bulk_actions.rs`, `bulk_upload.rs`, `comment.rs`, `create_ticket.rs`, `edit_fields.rs`, `filter_edit.rs`, `move_failure.rs`, `move_status.rs`), with `activity.rs` (the pane's history view) and `form.rs` (their fields, buttons, panel and sheet frames). `markup/`, which renders Jira wiki markup in descriptions and comments (emphasis, links, mentions, lists, quotes, code, backslash escapes) as styled lines wrapped to the pane's width: `mod.rs` for the blocks, `inline.rs`, `table.rs` (aligned tables, and records for one too wide) and `wrap.rs`
 
 ## Before changing behaviour
 
@@ -92,6 +92,7 @@ Read the named section of [docs/architecture.md](docs/architecture.md) before ch
 - `futures-core` — the `Stream` trait that stream implements
 - `tui-textarea` — text input in forms
 - `unicode-width` — column widths when wrapping rendered markup
+- `unicode-segmentation` — grapheme clusters, so wrapping, tables and truncation measure text the way ratatui draws it (already in the tree through ratatui)
 - `tokio` — async runtime for parallel CLI calls
 - `reqwest` (rustls, no OpenSSL, gzip) — Jira REST calls for list and detail reads and moves
 - `serde` + `serde_json` + `serde_yaml` + `toml` — JSON/YAML/TOML parsing

@@ -11,6 +11,7 @@ use crate::delight::Delight;
 use crate::style;
 use crate::subtasks::Family;
 use crate::views::columns::Shared;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// Cells before a row's content: a margin, the `›` marker (a header's glyph), and a space.
@@ -129,21 +130,27 @@ fn share_cells(counts: &[usize], width: usize) -> Vec<usize> {
     cells
 }
 
-/// `s` cut to at most `max` display columns, ending "..." when cut. Widths are measured on whole
-/// prefixes, as `fit` and the columns measure them: an emoji with its variation selector is two
-/// columns together but one per character.
+/// The display columns `text` takes, counted per grapheme as ratatui draws it: an emoji with its
+/// variation selector or joiners is one cluster of two columns, though one per character.
+pub fn text_width(text: &str) -> usize {
+    text.graphemes(true).map(UnicodeWidthStr::width).sum()
+}
+
+/// `s` cut to at most `max` display columns, ending "..." when cut. It cuts between graphemes,
+/// never inside an emoji sequence.
 pub fn truncate(s: &str, max: usize) -> String {
-    if s.width() <= max {
+    if text_width(s) <= max {
         return s.to_string();
     }
     let ellipsis = &"..."[..max.min(3)];
     let room = max - ellipsis.len();
-    // ponytail: re-measures each prefix, quadratic in the cut length (a few thousand width
-    // lookups per cut cell); keep a running width if long lists ever redraw slowly.
+    let mut used = 0;
     let end = s
-        .char_indices()
-        .map(|(at, c)| at + c.len_utf8())
-        .take_while(|&end| s[..end].width() <= room)
+        .grapheme_indices(true)
+        .map_while(|(at, grapheme)| {
+            used += grapheme.width();
+            (used <= room).then_some(at + grapheme.len())
+        })
         .last()
         .unwrap_or(0);
     s[..end].to_string() + ellipsis
@@ -153,7 +160,7 @@ pub fn truncate(s: &str, max: usize) -> String {
 /// keeps the columns after it in line.
 pub fn fit(text: &str, width: usize) -> String {
     let cell = truncate(text, width);
-    let pad = width.saturating_sub(cell.width());
+    let pad = width.saturating_sub(text_width(&cell));
     cell + &" ".repeat(pad)
 }
 
@@ -728,9 +735,12 @@ mod tests {
         assert_eq!(fit("山田太郎", 5), "山...");
         assert_eq!(fit("abcdef", 2), "..");
         assert_eq!(fit("承認待ち", 20), format!("承認待ち{}", " ".repeat(12)));
-        // "❤️" (heart and variation selector) is two columns together, one per character.
+        // "❤️" (heart and variation selector) is one two-column cluster, so a cut never splits it.
         assert_eq!(fit("❤️❤️xyzw", 5), "❤️...");
-        assert_eq!(fit("✔️✔️✔️✔️", 6), "✔️✔...");
+        assert_eq!(fit("✔️✔️✔️✔️", 6), "✔️... ");
+        assert_eq!(fit("⚠\u{FE0F}", 2), "⚠\u{FE0F}");
+        assert_eq!(fit("⚠\u{FE0F}", 4), "⚠\u{FE0F}  ");
+        assert_eq!(fit("👨\u{200D}👩", 2), "👨\u{200D}👩");
         for (text, width) in [
             ("山田太郎", 6),
             ("山田太郎", 5),

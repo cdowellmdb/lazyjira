@@ -21,6 +21,15 @@ use crate::widgets::{form, markup};
 /// Width of the field names ("Assignee", ...) in the header.
 const FIELD_WIDTH: usize = 10;
 
+/// Blank cells before the pane's text.
+const LEFT_MARGIN: u16 = 1;
+
+/// The pane's last column, where the scrollbar's thumb is drawn.
+const SCROLLBAR_COLUMN: u16 = 1;
+
+/// Blank cells between the pane's text and its scrollbar column.
+const SCROLLBAR_GAP: u16 = 2;
+
 /// The narrowest content area the detail sits beside the list in. Narrower, it replaces it.
 pub const SPLIT_MIN_WIDTH: u16 = 120;
 /// Cells of the list beside the detail, which shows only keys and summaries.
@@ -131,24 +140,19 @@ pub fn render(f: &mut ratatui::Frame, app: &App, area: Rect) {
     }
     f.render_widget(Paragraph::new(Line::from(title)), head);
     form::close_button(f, app, head, Target::CloseDetail);
-    // A drag selects the header and the text, not the scrollbar's column.
-    crate::mouse::selectable(
-        app,
-        Rect::new(
-            area.x + 1,
-            area.y,
-            area.width.saturating_sub(2),
-            area.height,
-        ),
-    );
-    match (ticket, epic) {
-        (Some(ticket), _) => match &app.detail_mode {
+    // A drag selects the header and the text, not the gap or the scrollbar's column.
+    if let Some(ticket) = ticket {
+        if let DetailMode::History { scroll } = &app.detail_mode {
+            crate::mouse::selectable(app, inset(area, SCROLLBAR_COLUMN));
+            render_history(f, app, body, ticket, *scroll);
+        } else {
             // The move picker docks under the detail, which keeps showing the ticket.
-            DetailMode::History { scroll } => render_history(f, app, body, ticket, *scroll),
-            _ => render_view(f, app, body, ticket),
-        },
-        (None, Some(epic)) => render_epic_view(f, app, body, epic),
-        (None, None) => {}
+            crate::mouse::selectable(app, text_area(area));
+            render_view(f, app, body, ticket);
+        }
+    } else if let Some(epic) = epic {
+        crate::mouse::selectable(app, text_area(area));
+        render_epic_view(f, app, body, epic);
     }
 }
 
@@ -158,41 +162,41 @@ fn render_history(f: &mut ratatui::Frame, app: &App, body: Rect, ticket: &Ticket
         Constraint::Length(u16::from(body.height > 1)),
     ])
     .areas(body);
-    let text = Rect::new(
-        text.x + 1,
-        text.y,
-        text.width.saturating_sub(2),
-        text.height,
-    );
-    crate::widgets::activity::render(f, text, &ticket.activity, scroll);
+    crate::widgets::activity::render(f, inset(text, SCROLLBAR_COLUMN), &ticket.activity, scroll);
     form::buttons(
         f,
         app,
-        Rect::new(
-            buttons.x + 1,
-            buttons.y,
-            buttons.width.saturating_sub(1),
-            buttons.height,
-        ),
+        inset(buttons, 0),
         &[("Back", crossterm::event::KeyCode::Esc)],
     );
 }
 
-/// Draws `lines` in `area`, a cell in from the left and leaving the right column for a
-/// scrollbar, at the detail's scroll position, and records the scroll limits for the scroll
-/// keys.
+/// `area` less the left margin and `right` cells on its right.
+fn inset(area: Rect, right: u16) -> Rect {
+    Rect::new(
+        area.x + LEFT_MARGIN.min(area.width),
+        area.y,
+        area.width.saturating_sub(LEFT_MARGIN + right),
+        area.height,
+    )
+}
+
+/// Where a ticket's or an epic's text goes in `area`: a cell in from the left, and ending
+/// `SCROLLBAR_GAP` cells before the scrollbar's column. The activity view keeps its old width,
+/// `area` less the margin and the scrollbar's column.
+fn text_area(area: Rect) -> Rect {
+    inset(area, SCROLLBAR_COLUMN + SCROLLBAR_GAP)
+}
+
+/// Draws `lines` in `text_area(area)` at the detail's scroll position, with the scrollbar in
+/// the last column of `area`, and records the scroll limits for the scroll keys.
 fn render_scrollable(
     f: &mut ratatui::Frame,
     app: &App,
     area: Rect,
     build: impl FnOnce(usize) -> Vec<Line<'static>>,
 ) {
-    let body = Rect::new(
-        area.x + u16::from(area.width > 0),
-        area.y,
-        area.width.saturating_sub(2),
-        area.height,
-    );
+    let body = text_area(area);
     let lines = build(body.width as usize);
     let max = lines
         .len()
