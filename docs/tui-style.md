@@ -174,7 +174,7 @@ The code draws mockups 3, 4 and 5 with these differences, kept on purpose:
   `ui_tests` pin the cells of every panel and sheet at 80x24, so a change to one shows as a diff there.
 - The detail pane's last column is a scrollbar thumb when the text is longer than the pane, with no track drawn, so `│` stays the divider's alone.
 - Mockup 5 is what the app draws at 80 columns with the demo's data: a cut summary would end `...` rather than `…`, the group header under the cursor shows only the tint, and the folded Done group reads `(z to open)`.
-- Epic and Labels are not squeezed: a column is drawn full or dropped, so between 86 and 109 columns My Work shows Epic without Labels (Team: 100 to 119, with a 14 wide status), and two columns more while tickets are marked. The thresholds shift with the keys and statuses drawn, because they are measured as the room Summary keeps.
+- Epic and Labels are not squeezed: a column is drawn full or dropped, so between 86 and 109 columns My Work shows Epic without Labels (Team: 100 to 119, with a 14 wide status), and marking a ticket changes none of this, because the checkbox takes its two cells from Summary. The thresholds shift with the keys and statuses drawn, because they are measured as the room Summary keeps.
 - Settings gives Starting tab and Theme six rows so all five tabs and all five presets show at 80x24. A user's custom themes make the Theme list longer than five and it still scrolls with no cue.
 - The first-run setup is a sheet: a bold title, labelled fields with a cursor, and buttons on the last row that the keys drive (they are not clickable, the setup has never read the mouse). It runs before any theme exists, so it draws the terminal's own colors from the `style` roles.
 

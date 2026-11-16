@@ -4,13 +4,14 @@ use ratatui::text::Span;
 use crate::app::App;
 use crate::style;
 use crate::views::common::{
-    cells_width, key_width, muted, narrow_for_summary, status_cell, status_width, tint, Columns,
-    ListLines, Shared, COLUMN_GAP, STATUS_DOT_WIDTH, UPDATED_WIDTH,
+    cells_width, key_width, lead_width, muted, narrow_for_summary, status_cell, status_width, tint,
+    Columns, ListLines, Shared, COLUMN_GAP, STATUS_DOT_WIDTH, UPDATED_WIDTH,
 };
 
 /// (status, summary, epic, labels) widths: Epic (20) and Labels (18) are drawn only where Summary
-/// keeps `SUMMARY_MIN` beside them and the full Status, Labels dropped first. Then Status gives up
-/// columns, down to 8, so Summary keeps 14.
+/// keeps `SUMMARY_MIN` beside them and the full Status, Labels dropped first, judged as if no
+/// ticket were marked so that marking never adds or drops a column. Then Status gives up columns,
+/// down to 8, so Summary keeps 14.
 fn team_column_widths(
     area: Rect,
     lead: usize,
@@ -18,10 +19,13 @@ fn team_column_widths(
     mut status_w: usize,
     shared: &Shared,
 ) -> (usize, usize, usize, usize) {
-    let fixed = lead + key_w + 3 * COLUMN_GAP + STATUS_DOT_WIDTH + UPDATED_WIDTH;
-    let room = (area.width as usize).saturating_sub(fixed);
-    let (epic_w, labels_w) = shared.trailing_widths(room.saturating_sub(status_w), 20, 18);
-    let room = room.saturating_sub(cells_width(epic_w, labels_w));
+    let width = area.width as usize;
+    let fixed = key_w + 3 * COLUMN_GAP + STATUS_DOT_WIDTH + UPDATED_WIDTH;
+    let unmarked_room = width.saturating_sub(lead_width(false) + fixed + status_w);
+    let (epic_w, labels_w) = shared.trailing_widths(unmarked_room, 20, 18);
+    let room = width
+        .saturating_sub(lead + fixed)
+        .saturating_sub(cells_width(epic_w, labels_w));
     let summary_w = narrow_for_summary(room, 14, &mut [(&mut status_w, 8)]);
     (status_w, summary_w, epic_w, labels_w)
 }

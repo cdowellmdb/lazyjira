@@ -5,14 +5,15 @@ use ratatui::text::{Line, Span};
 use crate::app::App;
 use crate::style;
 use crate::views::common::{
-    cells_width, key_width, Columns, ListLines, Shared, COLUMN_GAP, UPDATED_WIDTH,
+    cells_width, key_width, lead_width, Columns, ListLines, Shared, COLUMN_GAP, UPDATED_WIDTH,
 };
 
 /// The least Summary keeps on a terminal too narrow for it, the row running off the edge.
 const SUMMARY_FLOOR: usize = 12;
 
 /// (summary, epic, labels) widths: Epic (24) and Labels (22) are drawn only where Summary keeps
-/// `SUMMARY_MIN` beside them, Labels dropped first. Summary takes the rest, and never less than
+/// `SUMMARY_MIN` beside them, Labels dropped first, judged as if no ticket were marked so that
+/// marking never adds or drops a column. Summary takes the rest, and never less than
 /// `SUMMARY_FLOOR`.
 pub(super) fn my_work_column_widths(
     area: Rect,
@@ -20,8 +21,11 @@ pub(super) fn my_work_column_widths(
     key_w: usize,
     shared: &Shared,
 ) -> (usize, usize, usize) {
-    let room = (area.width as usize).saturating_sub(lead + key_w + 2 * COLUMN_GAP + UPDATED_WIDTH);
-    let (epic_w, labels_w) = shared.trailing_widths(room, 24, 22);
+    let width = area.width as usize;
+    let fixed = key_w + 2 * COLUMN_GAP + UPDATED_WIDTH;
+    let unmarked_room = width.saturating_sub(lead_width(false) + fixed);
+    let (epic_w, labels_w) = shared.trailing_widths(unmarked_room, 24, 22);
+    let room = width.saturating_sub(lead + fixed);
     (
         room.saturating_sub(cells_width(epic_w, labels_w))
             .max(SUMMARY_FLOOR),

@@ -49,21 +49,6 @@ fn my_work_draws_epic_from_86_columns_and_labels_from_110_and_keeps_the_rest_at_
 }
 
 #[test]
-fn marking_moves_each_my_work_threshold_two_columns() {
-    let mut app = mockup_app();
-    app.selected_ticket_keys.insert("DEMO-201".into());
-    for (width, expected) in [
-        (87, (false, false)),
-        (88, (true, false)),
-        (111, (true, false)),
-        (112, (true, true)),
-    ] {
-        let row = my_work_row(&mut app, width);
-        assert_eq!(trailing_columns(&row), expected, "{width} columns: {row}");
-    }
-}
-
-#[test]
 fn a_column_every_row_shares_takes_no_room_so_labels_alone_come_at_84_columns() {
     let mut app = mockup_app();
     for ticket in &mut app.cache.my_tickets {
@@ -261,10 +246,8 @@ fn rows_register_the_same_click_and_drag_cells_at_80_and_120_columns() {
     }
 }
 
-#[test]
-fn team_keeps_epic_and_labels_at_120_columns_beside_12_wide_keys_and_14_wide_statuses() {
-    // The demo's Team: `DEMO-101 ▼` and `  └ DEMO-111` (12) and "Ready for Work" (14) leave
-    // 3 + 12 + 14 + 2 + 4 + three gaps = 41 columns, so Epic and Labels need 41 + 37 + 42 = 120.
+/// The demo's Team: DEMO-101 `Ready for Work` with its sub-task DEMO-111, in one epic of its own.
+fn demo_team_app() -> App {
     let mut app = team_app();
     let mut child = app.cache.team_tickets[0].clone();
     child.key = "DEMO-111".into();
@@ -273,12 +256,79 @@ fn team_keeps_epic_and_labels_at_120_columns_beside_12_wide_keys_and_14_wide_sta
     app.cache.team_tickets[0].status = "Ready for Work".into();
     app.cache.team_tickets.push(child);
     app.mark_cache_changed();
+    app
+}
+
+#[test]
+fn team_keeps_epic_and_labels_at_120_columns_beside_12_wide_keys_and_14_wide_statuses() {
+    // The demo's Team: `DEMO-101 ▼` and `  └ DEMO-111` (12) and "Ready for Work" (14) leave
+    // 3 + 12 + 14 + 2 + 4 + three gaps = 41 columns, so Epic and Labels need 41 + 37 + 42 = 120.
+    let app = demo_team_app();
     for (width, labels) in [(119, false), (120, true)] {
         let rows = draw(&app, Tab::Team, width);
         let row = &line_with(&rows, "DEMO-101").unwrap().0;
         assert!(row.contains("Alpha epic"), "{width}: {row}");
         assert_eq!(row.contains("alpha-label"), labels, "{width}: {row}");
     }
+}
+
+/// (Epic drawn, Labels drawn) in the Team row of `key` at `width` columns.
+fn team_columns(app: &App, key: &str, width: u16) -> (bool, bool) {
+    let rows = draw(app, Tab::Team, width);
+    let row = &line_with(&rows, key).unwrap().0;
+    (row.contains("Alpha epic"), row.contains("alpha-label"))
+}
+
+#[test]
+fn marking_a_row_adds_and_drops_no_my_work_or_team_column() {
+    let widths = [80u16, 86, 110, 120];
+    let mut my_work = mockup_app();
+    let mut team = team_app();
+    let mut demo_team = demo_team_app();
+    let none = (false, false);
+    let epic = (true, false);
+    let both = (true, true);
+    for marked in [false, true] {
+        if marked {
+            my_work.selected_ticket_keys.insert("DEMO-201".into());
+            team.selected_ticket_keys.insert("DEMO-2".into());
+            demo_team.selected_ticket_keys.insert("DEMO-101".into());
+        }
+        let got: Vec<_> = widths
+            .iter()
+            .map(|&w| trailing_columns(&my_work_row(&mut my_work, w)))
+            .collect();
+        assert_eq!(got, [none, epic, both, both], "My Work, marked {marked}");
+        let got: Vec<_> = widths
+            .iter()
+            .map(|&w| team_columns(&team, "DEMO-1", w))
+            .collect();
+        assert_eq!(got, [none, none, epic, both], "Team, marked {marked}");
+        let got: Vec<_> = widths
+            .iter()
+            .map(|&w| team_columns(&demo_team, "DEMO-101", w))
+            .collect();
+        assert_eq!(got, [none, none, epic, both], "demo Team, marked {marked}");
+    }
+}
+
+#[test]
+fn summary_is_exactly_37_beside_epic_at_86_columns_and_marking_takes_2_cells_from_it() {
+    // (summary, epic, labels) of the demo's My Work, whose keys are 12 wide. At 85 columns Epic
+    // is dropped and Summary takes the 62 columns left, at 86 it is 37 beside Epic.
+    let app = mockup_app();
+    let grouped = app.my_work_visible_by_status();
+    let shared = Shared::of(&grouped, Columns::EpicAndLabels);
+    let key_w = crate::views::common::key_width(&grouped);
+    assert_eq!(key_w, 12);
+    let widths =
+        |width, lead| my_work_column_widths(Rect::new(0, 0, width, 10), lead, key_w, &shared);
+    assert_eq!(widths(85, 3), (62, 0, 0));
+    assert_eq!(widths(86, 3), (37, 24, 0));
+    assert_eq!(widths(85, 5), (60, 0, 0));
+    assert_eq!(widths(86, 5), (35, 24, 0));
+    assert_eq!(widths(110, 3), (37, 24, 22));
+    assert_eq!(widths(110, 5), (35, 24, 22));
 }
 
 #[test]
