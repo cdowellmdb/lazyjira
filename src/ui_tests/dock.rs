@@ -735,3 +735,76 @@ async fn a_panel_takes_at_most_60_percent_of_the_content_rounded_down() {
         }
     }
 }
+
+/// Whether the panel called `name` is open on `app`.
+fn is_open(app: &App, name: &str) -> bool {
+    match name {
+        "create" => app.is_create_ticket_open(),
+        "comment" => app.is_comment_open(),
+        "assign" => app.is_assign_open(),
+        "edit" => app.is_edit_open(),
+        "filter" => app.is_filter_edit_open(),
+        "bulk" => app.is_bulk_open(),
+        "upload" => app.is_bulk_upload_open(),
+        "move" => widgets::move_status::is_open(app),
+        "failure" => !app.moves.failures().is_empty(),
+        other => panic!("no panel called {other}"),
+    }
+}
+
+/// The name `open_panel` knows `panel` by.
+fn name_of(panel: widgets::dock::Panel) -> &'static str {
+    use widgets::dock::Panel;
+    match panel {
+        Panel::Create => "create",
+        Panel::Comment => "comment",
+        Panel::Assign => "assign",
+        Panel::Edit => "edit",
+        Panel::FilterEdit => "filter",
+        Panel::Bulk => "bulk",
+        Panel::BulkUpload => "upload",
+        Panel::Move => "move",
+        Panel::MoveFailure => "failure",
+    }
+}
+
+/// Opens the panel called `name` over `app` and leaves what is open open. The panels that are
+/// opened with keys are opened on a scratch app and their state moved over, since the keys would
+/// go to the panel already open.
+async fn also_open(app: &mut App, config: &mut AppConfig, name: &str) {
+    let mut scratch = app_with_a_long_list();
+    match name {
+        "move" | "failure" => return open_panel(app, config, name).await,
+        _ => open_panel(&mut scratch, config, name).await,
+    }
+    match name {
+        "create" => app.create_ticket = scratch.create_ticket.take(),
+        "comment" => app.comment_state = scratch.comment_state.take(),
+        "assign" => app.assign_state = scratch.assign_state.take(),
+        "edit" => app.edit_state = scratch.edit_state.take(),
+        "filter" => app.filter_edit = scratch.filter_edit.take(),
+        "bulk" => app.bulk_state = scratch.bulk_state.take(),
+        "upload" => app.bulk_upload_state = scratch.bulk_upload_state.take(),
+        other => panic!("no panel called {other}"),
+    }
+}
+
+#[tokio::test]
+async fn with_any_two_panels_open_the_one_dock_open_names_is_the_one_that_gets_the_keys() {
+    let mut config = two_saved_filters();
+    for a in PANELS {
+        for b in PANELS.into_iter().filter(|b| *b != a) {
+            let mut app = app_with_a_long_list();
+            also_open(&mut app, &mut config, a).await;
+            also_open(&mut app, &mut config, b).await;
+            let case = format!("{a} and {b}");
+            assert!(is_open(&app, a) && is_open(&app, b), "{case}: both open");
+            let top = name_of(widgets::dock::open(&app).unwrap());
+            let other = if top == a { b } else { a };
+            // The panel drawn is the panel that closes on Esc.
+            press(&mut app, &mut config, KeyCode::Esc).await;
+            assert!(!is_open(&app, top), "{case}: Esc did not close {top}");
+            assert!(is_open(&app, other), "{case}: Esc closed {other} too");
+        }
+    }
+}

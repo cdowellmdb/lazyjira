@@ -1,7 +1,12 @@
 //! The one panel that forms, pickers and notices share. It docks at the bottom of the content
-//! area, under what is already there, which shrinks to make room. `open` says which panel is
-//! showing, in the order the keys reach them (`handle_key`), `height` how much of the area it
-//! takes, and `render` draws it.
+//! area, under what is already there, which shrinks to make room. `open` names the panel that
+//! shows, `plan` how much of the area it takes, and `render` draws it.
+//!
+//! `open` is the first open panel in its list, and that is the panel `handle_key` gives the keys
+//! to: a test in `ui_tests::dock` opens every pair and presses Esc. The two orders agree
+//! because a sheet (settings, help) opens beside a panel only when a move failure arrives, which
+//! comes first in both, and the move panel is last because it is the detail's mode and the
+//! detail's keys come after the other panels'. Add a panel in the same place in both.
 
 use ratatui::layout::Rect;
 
