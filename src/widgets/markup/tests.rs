@@ -618,3 +618,15 @@ fn an_escaped_pipe_or_bracket_belongs_to_the_text_of_a_link_and_an_escaped_bar_t
         vec![Span::styled("@a_b", Style::default().fg(Color::Cyan))]
     );
 }
+
+#[test]
+fn the_demo_slow_cases_table_aligns_from_104_text_columns_and_is_records_below() {
+    // docs/tui-style.md quotes 104: the widths 11, 53 and 34 and two separators of 3.
+    let table = "||Query||Cause||Seen||\n\
+        |title:* red|wildcard skips the cache and counts every facet again|12,400 hits in 1.9 s, no cache hit|\n\
+        |brand:Acme|none, served from cache|4,100 hits in 0.3 s|";
+    let aligned = text(&render(table, 104));
+    assert_eq!(aligned.len(), 4);
+    assert_eq!(aligned[2].chars().count(), 104);
+    assert_eq!(text(&render(table, 103))[0], "title:* red");
+}
