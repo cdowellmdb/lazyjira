@@ -24,7 +24,7 @@ Enter
 Sleep 3s
 Show
 
-# My Work: detail shows the top-left close control and Jira markup.
+# My Work: detail shows the muted × close cell at the right of its first line and Jira markup.
 Sleep 2s
 Down
 Sleep 800ms

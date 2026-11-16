@@ -35,7 +35,7 @@ pub fn success() -> Style {
     Style::default().fg(Color::Green)
 }
 
-/// Focus, links, the active tab.
+/// Keys, focus, the active tab.
 pub fn accent() -> Style {
     Style::default().fg(Color::Cyan)
 }

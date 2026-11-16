@@ -25,7 +25,7 @@ pub struct Theme {
     pub subtle: Option<Color>,
     /// Behind the selected row.
     pub selection: Option<Color>,
-    /// Keys, focused fields, links, In Review.
+    /// Keys, focused fields, In Review.
     pub accent: Option<Color>,
     /// Headers, the chosen option, In Progress.
     pub highlight: Option<Color>,
@@ -33,7 +33,7 @@ pub struct Theme {
     pub error: Option<Color>,
     /// Done.
     pub success: Option<Color>,
-    /// Ready for Work, info markers, selected text.
+    /// Ready for Work, links in a description or comment, info markers, selected text.
     pub info: Option<Color>,
     /// Statuses the app doesn't know.
     pub special: Option<Color>,
