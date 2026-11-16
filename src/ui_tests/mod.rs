@@ -49,12 +49,17 @@ fn app_that_draws_every_glyph(tab: Tab, selected_index: usize) -> App {
     app
 }
 
-fn screen(app: &App, width: u16, height: u16) -> Vec<String> {
+/// `app` drawn at `width` x `height`.
+fn draw(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
     use ratatui::backend::TestBackend;
 
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| ui(f, app, &sample_config())).unwrap();
-    let buffer = terminal.backend().buffer();
+    terminal.backend().buffer().clone()
+}
+
+fn screen(app: &App, width: u16, height: u16) -> Vec<String> {
+    let buffer = draw(app, width, height);
     (0..height)
         .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
         .collect()

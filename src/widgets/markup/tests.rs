@@ -65,10 +65,11 @@ fn a_theme_recolors_the_chip_to_its_text_on_its_selection_color() {
     let line = Line::from(inline("ab {{cd}}", style::primary()));
     let mut buffer = Buffer::empty(Rect::new(0, 0, 9, 1));
     buffer.set_line(0, 0, &line, 9);
-    crate::theme::resolve("nord", &Default::default()).apply(&mut buffer);
+    let nord = crate::theme::resolve("nord", &Default::default());
+    nord.apply(&mut buffer);
     let colors = |x| (buffer[(x, 0)].fg, buffer[(x, 0)].bg);
-    let (text, selection) = (Color::Rgb(0xd8, 0xde, 0xe9), Color::Rgb(0x3b, 0x42, 0x52));
-    assert_eq!(colors(0), (text, Color::Rgb(0x2e, 0x34, 0x40)));
+    let (text, selection) = (nord.text.unwrap(), nord.selection.unwrap());
+    assert_eq!(colors(0), (text, nord.background.unwrap()));
     assert_eq!(colors(3), (text, selection));
     assert_eq!(colors(4), (text, selection));
     assert_eq!(buffer[(5, 0)].symbol(), " ");
