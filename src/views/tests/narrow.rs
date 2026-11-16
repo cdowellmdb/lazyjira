@@ -5,7 +5,8 @@ use super::support::*;
 use crate::app::{App, Tab};
 use crate::cache::{TeamMember, Ticket};
 use crate::mouse::Target;
-use crate::views::my_work;
+use crate::views::common::{Columns, Shared};
+use crate::views::{my_work, my_work::my_work_column_widths};
 use ratatui::{backend::TestBackend, layout::Rect, Terminal};
 
 /// DEMO-101's row from `draw`, `width` columns wide, with the cursor on it.
@@ -277,5 +278,24 @@ fn team_keeps_epic_and_labels_at_120_columns_beside_12_wide_keys_and_14_wide_sta
         let row = &line_with(&rows, "DEMO-101").unwrap().0;
         assert!(row.contains("Alpha epic"), "{width}: {row}");
         assert_eq!(row.contains("alpha-label"), labels, "{width}: {row}");
+    }
+}
+
+#[test]
+fn my_work_keeps_summary_at_12_columns_however_narrow_the_terminal() {
+    // Lead 3, a 12 wide key, two gaps and Updated leave width - 23 columns for Summary. Below 35
+    // that is under 12, and Summary keeps 12 with the row running off the edge.
+    let shared = Shared::of::<()>(&[], Columns::EpicAndLabels);
+    for (width, summary) in [
+        (10, 12),
+        (20, 12),
+        (25, 12),
+        (28, 12),
+        (34, 12),
+        (35, 12),
+        (36, 13),
+    ] {
+        let (got, epic, labels) = my_work_column_widths(Rect::new(0, 0, width, 10), 3, 12, &shared);
+        assert_eq!((got, epic, labels), (summary, 0, 0), "{width} columns");
     }
 }

@@ -8,9 +8,13 @@ use crate::views::common::{
     cells_width, key_width, Columns, ListLines, Shared, COLUMN_GAP, UPDATED_WIDTH,
 };
 
+/// The least Summary keeps on a terminal too narrow for it, the row running off the edge.
+const SUMMARY_FLOOR: usize = 12;
+
 /// (summary, epic, labels) widths: Epic (24) and Labels (22) are drawn only where Summary keeps
-/// `SUMMARY_MIN` beside them, Labels dropped first. Summary takes the rest.
-fn my_work_column_widths(
+/// `SUMMARY_MIN` beside them, Labels dropped first. Summary takes the rest, and never less than
+/// `SUMMARY_FLOOR`.
+pub(super) fn my_work_column_widths(
     area: Rect,
     lead: usize,
     key_w: usize,
@@ -19,7 +23,8 @@ fn my_work_column_widths(
     let room = (area.width as usize).saturating_sub(lead + key_w + 2 * COLUMN_GAP + UPDATED_WIDTH);
     let (epic_w, labels_w) = shared.trailing_widths(room, 24, 22);
     (
-        room.saturating_sub(cells_width(epic_w, labels_w)),
+        room.saturating_sub(cells_width(epic_w, labels_w))
+            .max(SUMMARY_FLOOR),
         epic_w,
         labels_w,
     )
