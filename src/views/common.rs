@@ -71,7 +71,7 @@ pub const DONE_CELL: &str = "█";
 
 /// An epic's progress bar, `width` cells: a run per status in `Epic::status_counts`' order, as
 /// wide as its share of the children (see `share_cells`), `DONE_CELL` when the status is done,
-/// `░` when it's dropped and `▓` when it's active, in the status's color. An epic with no
+/// `░` when it's dropped and `▒` when it's active, in the status's color. An epic with no
 /// children draws `·` in `style`.
 pub fn epic_bar(
     epic: &Epic,

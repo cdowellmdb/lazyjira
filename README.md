@@ -28,7 +28,7 @@ Five tabs: **My Work**, **Team**, **Epics**, **Unassigned**, and **Filters** (sa
 
 **Keyboard or mouse**
 - Click to select, click again to open; works on rows, menus, and pickers
-- Click checkboxes (`☐`, `☒`) to select tickets, fold arrows to fold groups, and **[×]** to close a detail
+- Click the left edge of a row (or a checkbox, once you are marking) to mark tickets, fold arrows to fold groups, and **[×]** to close a detail
 - Click into form fields and buttons; scroll lists and details with the wheel
 - Drag across text to select it, then copy with `Ctrl+C`
 - Edit in `$EDITOR`, paste multiple lines, and filter pickers by typing
@@ -200,17 +200,17 @@ To make your own, add a `[themes.<name>]` table and pick it in settings. Each ro
 | `?` | Keybindings help |
 | `q` | Quit |
 
-The bottom line lists the keys that matter most, like `Tab switch · j/k move · Enter open · ? more`. As the terminal narrows it drops the least important keys from the right, never half of one, and `? more` always stays; `?` lists every key. Whatever differs from the defaults sits muted at the right edge while it fits: how many tickets are selected, hidden Done groups, the focused status, a refresh in progress, how stale the cache is, and epics syncing. While tickets are marked, `u clear · A all` follow `Space mark`. In spooky season `S settings` leads the line until the spooky theme is chosen. The Filters tab has its own keys there.
+The bottom line lists the keys that matter most, like `Tab switch · j/k move · Enter open · ? more`. As the terminal narrows it drops the least important keys from the right, never half of one, and `? more` always stays; `?` lists every key. Whatever differs from the defaults sits muted at the right edge while it fits: hidden Done groups, the focused status, a refresh in progress, how stale the cache is, and epics syncing. While tickets are marked, a line above it shows `2 selected   B move or assign · u clear · A all`. In spooky season `S settings` leads the line until the spooky theme is chosen. The Filters tab has its own keys there.
 
 Each tab remembers its selection, search, status focus, and folded groups during the session. Folded parents are one set shared by every tab: a parent folded in My Work is folded in Epics too. A folded parent shows `▶` and how many sub-tasks are hidden, and a sub-task whose parent is in another group leads with the parent's key, muted. Done groups start folded in My Work and each time a filter runs, and list the most recently updated tickets first.
 
-Rows are marked `☐`, or `☒` when selected; a group header shows `⊟` when only some of its tickets are selected. My Work, Team, Unassigned and Filters show an Updated column with how long ago Jira last changed each ticket (`12m`, `5h`, `2d`, `3w`). An active ticket unchanged for 3 weeks keeps its plain age, and after 90 days its row fades. When every row with an epic shares it, or every row carries the same labels, a muted line under the column headers names them once, like `all rows · epic Payments Platform Revamp · DEMO, Q3` (Unassigned, already grouped by epic, names only labels). My Work and Team then drop the Epic column, and their Labels column keeps only the labels that differ.
+Marking is a mode: press `Space` and a checkbox column appears (`☐`, or `☒` when selected; a group header shows `⊟` when only some of its tickets are selected). It goes away when nothing is marked. The selected row has a `›` in the margin and a tint across the row. My Work, Team, Unassigned and Filters show an Updated column with how long ago Jira last changed each ticket (`12m`, `5h`, `2d`, `3w`). An active ticket unchanged for 3 weeks keeps its plain age, and after 90 days its row fades. When every row with an epic shares it, or every row carries the same labels, a muted line at the top of the list names them once, like `all rows · epic Payments Platform Revamp · DEMO, Q3` (Unassigned, already grouped by epic, names only labels). My Work and Team then drop the Epic column, and their Labels column keeps only the labels that differ.
 
 Refresh keeps the loaded list visible and follows the selected ticket even when other rows are added or reordered.
 
 ### Mouse
 
-Click a tab or row to select it; click the selected row again to open it. Menus (bulk actions, and the move and resolution pickers in ticket detail) work the same way: click an option to choose it, and click it again to take it. Click checkboxes to mark tickets or groups and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
+Click a tab or row to select it; click the selected row again to open it. Menus (bulk actions, and the move and resolution pickers in ticket detail) work the same way: click an option to choose it, and click it again to take it. Click the left edge of a row or group to mark it, and fold arrows to expand or collapse groups and parents. The wheel navigates lists and scrolls details, help, and editors.
 
 Click the red **[×]** in the top-left of ticket or epic detail to close the popup, including from its activity and move menus.
 

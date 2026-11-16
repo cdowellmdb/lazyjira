@@ -22,12 +22,12 @@ Preconditions:
 
 - Fresh run. `$V <run> issue DEMO-201` reports `status=Ready for Work`.
 
-- **Open the ticket.** `$V <run> keys /`, `$V <run> type DEMO-201`, `$V <run> wait 'READY FOR WORK \(1\)'`, `$V <run> keys Down`, `$V <run> keys Enter`, `$V <run> wait 'Status +● Ready for Work'`.
+- **Open the ticket.** `$V <run> keys /`, `$V <run> type DEMO-201`, `$V <run> wait '● Ready for Work 1'`, `$V <run> keys Down`, `$V <run> keys Enter`, `$V <run> wait 'Status +● Ready for Work'`.
 - **Open the picker.** `$V <run> keys m`, `$V <run> wait 'Move from Ready for Work:'`. The lines `[p] Start Progress → In Progress`, `[v] Send to Review → In Review`, `[b] Block → Blocked` and `[c] Done` appear.
 - **Pick by status.** `$V <run> keys p`, `$V <run> wait 'Move with Start Progress → In Progress\? Press Enter or y'`, `$V <run> snap move-pick`.
 - **Confirm.** `$V <run> keys y`, `$V <run> wait 'Status +● In Progress'`. The status bar reads `Moved DEMO-201 to In Progress`. `$V <run> snap move-confirm`.
 - **Jira agrees.** `$V <run> issue DEMO-201` reports `status=In Progress` and an `updated` of today.
-- **List agrees.** `$V <run> keys Escape`, `$V <run> keys Escape` (closes detail, then search), `$V <run> keys r`, `$V <run> wait 'DEMO-201 .*  0m '`. DEMO-201 now sits under IN PROGRESS with Updated `0m`. `$V <run> snap move-list`.
+- **List agrees.** `$V <run> keys Escape`, `$V <run> keys Escape` (closes detail, then search), `$V <run> keys r`, `$V <run> wait 'DEMO-201 .*  0m '`. DEMO-201 now sits under In Progress with Updated `0m`. `$V <run> snap move-list`.
 - **Move now** (*not yet driven*). Open another active ticket, `$V <run> keys m`, `$V <run> keys C`. Expect `Moved <KEY> to Done` with no confirmation prompt.
 
 ## Gotchas
