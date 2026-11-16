@@ -745,6 +745,13 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
             Constraint::Length(1),                       // Status bar
         ])
         .split(f.area());
+    // A panel docks at the bottom of the content, which shrinks to make room.
+    let panel = widgets::dock::open(app);
+    let [content, dock] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(panel.map_or(0, |panel| widgets::dock::height(app, panel, chunks[1]))),
+    ])
+    .areas(chunks[1]);
 
     mouse::begin_layer(app);
     top_bar::render(f, app, chunks[0]);
@@ -761,14 +768,14 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
             Span::raw(" "),
             vec![Span::styled("Loading...", style::warning())],
         );
-        loading.render(f, chunks[1]);
+        loading.render(f, content);
     } else {
         match app.active_tab {
-            Tab::MyWork => views::my_work::render(f, chunks[1], app),
-            Tab::Team => views::team::render(f, chunks[1], app),
-            Tab::Epics => views::epics::render(f, chunks[1], app),
-            Tab::Unassigned => views::unassigned::render(f, chunks[1], app),
-            Tab::Filters => views::filters::render(f, chunks[1], app, config),
+            Tab::MyWork => views::my_work::render(f, content, app),
+            Tab::Team => views::team::render(f, content, app),
+            Tab::Epics => views::epics::render(f, content, app),
+            Tab::Unassigned => views::unassigned::render(f, content, app),
+            Tab::Filters => views::filters::render(f, content, app, config),
         }
     }
 
@@ -783,6 +790,9 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         Line::from(Span::styled(format!("/{}", search), style::warning()))
     } else if let Some(pending) = app.moves.pending_message() {
         Line::from(Span::styled(pending, style::warning()))
+    } else if panel.is_some() {
+        // The panel has its own hints.
+        Line::default()
     } else {
         footer::line(app, &config.preferences.theme, chunks[3].width)
     };
@@ -796,34 +806,6 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         mouse::begin_layer(app);
         widgets::ticket_detail::render(f, app);
     }
-    if app.is_create_ticket_open() {
-        mouse::begin_layer(app);
-        widgets::create_ticket::render(f, app);
-    }
-    if app.is_comment_open() {
-        mouse::begin_layer(app);
-        widgets::comment::render(f, app);
-    }
-    if app.is_assign_open() {
-        mouse::begin_layer(app);
-        widgets::assign::render(f, app);
-    }
-    if app.is_edit_open() {
-        mouse::begin_layer(app);
-        widgets::edit_fields::render(f, app);
-    }
-    if app.is_filter_edit_open() {
-        mouse::begin_layer(app);
-        render_filter_edit_modal(f, app);
-    }
-    if app.is_bulk_open() {
-        mouse::begin_layer(app);
-        widgets::bulk_actions::render(f, app);
-    }
-    if app.is_bulk_upload_open() {
-        mouse::begin_layer(app);
-        widgets::bulk_upload::render(f, app);
-    }
     if app.show_keybindings {
         mouse::begin_layer(app);
         widgets::keybindings_help::render(f, app);
@@ -832,22 +814,10 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         mouse::begin_layer(app);
         settings::render(f, app);
     }
-    if !app.moves.failures().is_empty() {
+    if let Some(panel) = panel {
         mouse::begin_layer(app);
-        let area = f.area();
-        widgets::form::buttons(
-            f,
-            app,
-            ratatui::layout::Rect::new(
-                area.x + 2,
-                area.bottom().saturating_sub(2),
-                area.width.saturating_sub(4),
-                1,
-            ),
-            &[("Dismiss", KeyCode::Enter), ("Browser", KeyCode::Char('o'))],
-        );
+        widgets::dock::render(f, app, panel, dock);
     }
-    widgets::move_failure::render(f, app, app.moves.failures());
     mouse::render_selection(f, app);
     let area = f.area();
     app.delight
@@ -858,54 +828,6 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
             theme::resolve(&state.themes[state.theme], &config.themes)
         })
         .apply(f.buffer_mut());
-}
-
-fn render_filter_edit_modal(f: &mut ratatui::Frame, app: &App) {
-    use ratatui::layout::{Constraint, Layout};
-    use widgets::form;
-    let Some(state) = &app.filter_edit else {
-        return;
-    };
-    let title = if state.editing_idx.is_some() {
-        "Edit Filter"
-    } else {
-        "New Filter"
-    };
-    let inner = form::render_modal_frame(f, app, title, 80, 50);
-    let areas = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(3),
-        Constraint::Length(1),
-    ])
-    .split(inner);
-    form::render_editor(
-        f,
-        app,
-        areas[0],
-        "Name",
-        &state.name,
-        state.focused_field == 0,
-        0,
-    );
-    form::render_editor(
-        f,
-        app,
-        areas[1],
-        "JQL",
-        &state.jql,
-        state.focused_field == 1,
-        1,
-    );
-    form::buttons(
-        f,
-        app,
-        areas[2],
-        &[
-            ("Save", KeyCode::Enter),
-            ("Cancel", KeyCode::Esc),
-            ("Editor", KeyCode::F(4)),
-        ],
-    );
 }
 
 fn handle_keybindings_keys(app: &mut App, key: KeyCode) {

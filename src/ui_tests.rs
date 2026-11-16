@@ -4,6 +4,7 @@ use crate::tests::{
     app_with_a_ticket_on_every_tab, press, sample_config, ticket, two_saved_filters,
 };
 use crate::*;
+use ratatui::layout::Rect;
 
 #[tokio::test]
 async fn forms_render_after_resizing_and_keep_actions_visible_at_normal_sizes() {
@@ -536,5 +537,190 @@ fn the_whole_my_work_screen_at_80_columns_is_the_top_bar_the_list_and_the_footer
     assert_eq!(
         rows[4].trim_end(),
         " › ☒ DEMO-1  Mine                                                              -"
+    );
+}
+
+/// An app whose My Work holds 30 tickets, `LEAK-1` to `LEAK-29` and `LAST-30`, with the last one
+/// selected: whatever overlay opens over it, none of the `LEAK` rows may show through.
+fn app_with_a_long_list() -> App {
+    let mut app = App::new();
+    app.loading = false;
+    app.cache.team_members = vec![
+        cache::TeamMember {
+            name: "Alex".into(),
+            email: "alex@example.com".into(),
+        },
+        cache::TeamMember {
+            name: "Sam".into(),
+            email: "sam@example.com".into(),
+        },
+    ];
+    app.cache.my_tickets = (1..=29)
+        .map(|n| ticket(&format!("LEAK-{n}"), "Summary", "In Progress"))
+        .chain([ticket("LAST-30", "Summary", "In Progress")])
+        .collect();
+    app.mark_cache_changed();
+    app.selected_index = 30;
+    app
+}
+
+/// Opens the panel called `name` over `app`.
+async fn open_panel(app: &mut App, config: &mut AppConfig, name: &str) {
+    match name {
+        "create" => press(app, config, KeyCode::Char('c')).await,
+        "comment" => {
+            app.comment_state = Some(app::CommentState {
+                ticket_key: "DEMO-9".into(),
+                body: widgets::form::editor(""),
+            })
+        }
+        "assign" => {
+            app.assign_state = Some(app::AssignState {
+                ticket_key: "DEMO-9".into(),
+                selected: 0,
+                search: String::new(),
+            })
+        }
+        "edit" => {
+            app.edit_state = Some(app::EditFieldsState {
+                ticket_key: "DEMO-9".into(),
+                focused_field: 0,
+                summary: widgets::form::editor("Summary"),
+                labels: widgets::form::editor(""),
+                description: widgets::form::editor(""),
+            })
+        }
+        "filter" => {
+            app.filter_edit = Some(app::FilterEditState {
+                focused_field: 0,
+                name: widgets::form::editor(""),
+                jql: widgets::form::editor(""),
+                editing_idx: None,
+            })
+        }
+        "bulk" => {
+            press(app, config, KeyCode::Char(' ')).await;
+            press(app, config, KeyCode::Char('B')).await;
+        }
+        "upload" => press(app, config, KeyCode::Char('U')).await,
+        "failure" => {
+            assert!(app.moves.start("DEMO-9", "Done"));
+            app.finish_move("DEMO-9", Err("Jira answered 400 Bad Request.".to_string()));
+        }
+        other => panic!("no panel called {other}"),
+    }
+    assert!(widgets::dock::open(app).is_some(), "{name} did not open");
+}
+
+const PANELS: [&str; 8] = [
+    "create", "comment", "assign", "edit", "filter", "bulk", "upload", "failure",
+];
+
+#[tokio::test]
+async fn a_panel_takes_the_rows_it_needs_up_to_60_percent_of_the_content_at_80x24_120x40_and_160x45(
+) {
+    // The content is the screen less the top bar's two rows and the status line, and less the
+    // bulk bar while a ticket is marked. A panel is its rule and title, then the rows its body
+    // asks for.
+    let wants = [
+        ("create", 2 + 11, 0),
+        ("comment", 2 + 5, 0),
+        ("assign", 2 + 4, 0),
+        ("edit", 2 + 7, 0),
+        ("filter", 2 + 5, 0),
+        ("bulk", 2 + 6, 1),
+        ("upload", 2 + 3, 0),
+        ("failure", 2 + 4, 0),
+    ];
+    for (width, height) in [(80, 24), (120, 40), (160, 45)] {
+        for (name, want, bulk_bar) in wants {
+            let mut config = two_saved_filters();
+            let mut app = app_with_a_long_list();
+            open_panel(&mut app, &mut config, name).await;
+            let content = height - 3 - bulk_bar;
+            let expected = want.min(content * 60 / 100);
+            let rows = screen(&app, width, height);
+            let rules: Vec<usize> = rows
+                .iter()
+                .enumerate()
+                .skip(2)
+                .filter(|(_, row)| **row == "─".repeat(width as usize))
+                .map(|(y, _)| y)
+                .collect();
+            let bottom = 2 + content as usize;
+            assert_eq!(
+                rules,
+                [bottom - expected as usize],
+                "{name} at {width}x{height}: a panel of {expected} rows"
+            );
+            let panel = widgets::dock::open(&app).unwrap();
+            let area = Rect::new(0, 2, width, content);
+            assert_eq!(widgets::dock::height(&app, panel, area), expected, "{name}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_panel_hides_the_list_under_it_but_leaves_the_list_above_with_its_selection() {
+    for (width, height) in [(80, 24), (120, 40), (160, 45)] {
+        for name in PANELS {
+            let mut config = two_saved_filters();
+            let mut app = app_with_a_long_list();
+            open_panel(&mut app, &mut config, name).await;
+            let rows = screen(&app, width, height);
+            let rule = rows
+                .iter()
+                .skip(2)
+                .position(|row| *row == "─".repeat(width as usize))
+                .unwrap()
+                + 2;
+            let case = format!("{name} at {width}x{height}");
+            assert!(
+                rows[rule..].iter().all(|row| !row.contains("LEAK")),
+                "{case}: list text under the panel\n{}",
+                rows.join("\n")
+            );
+            assert!(
+                rows[2..rule]
+                    .iter()
+                    .any(|row| row.contains('›') && row.contains("LAST-30")),
+                "{case}: the selected row stays above the panel\n{}",
+                rows.join("\n")
+            );
+            let junction = |row: &String| {
+                row.contains([
+                    '┐', '┘', '┌', '└', '┬', '┴', '├', '┤', '╭', '╮', '╯', '╰', '│',
+                ])
+            };
+            assert!(
+                rows.iter().all(|row| !junction(row)),
+                "{case}: a border glyph"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_comment_panel_registers_exact_cells_for_its_buttons_close_and_selectable_text() {
+    use crate::mouse::Target;
+    let mut config = sample_config();
+    let mut app = app_with_a_long_list();
+    open_panel(&mut app, &mut config, "comment").await;
+    screen(&app, 80, 24);
+    // 80x24: content rows 2 to 22, a 7-row panel from row 16. The rule is row 16, the title
+    // row 17, the label row 18, three editor rows, then the buttons on row 22.
+    let targets = app.mouse_targets.borrow().clone();
+    let has = |rect: Rect, target: Target| {
+        assert!(targets.contains(&(rect, target)), "{rect:?} {target:?}")
+    };
+    has(Rect::new(1, 22, 8, 1), Target::Key(KeyCode::Enter));
+    has(Rect::new(11, 22, 8, 1), Target::Key(KeyCode::Esc));
+    has(Rect::new(21, 22, 8, 1), Target::Key(KeyCode::F(4)));
+    has(Rect::new(74, 17, 5, 1), Target::Key(KeyCode::Esc));
+    has(Rect::new(1, 18, 78, 4), Target::Field(0));
+    assert_eq!(
+        app.text_selection.borrow().areas,
+        [Rect::new(1, 18, 78, 5)],
+        "a drag selects the panel's text, not the list's"
     );
 }
