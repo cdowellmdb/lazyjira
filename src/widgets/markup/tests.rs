@@ -327,3 +327,162 @@ fn a_bare_link_ends_where_an_escape_begins() {
     assert_eq!(span(&spans, "http://b.io").style, link_style());
     assert_eq!(text(&[Line::from(spans)]), vec!["see http://b.io) now"]);
 }
+
+const WIDE_TABLE: &str = "||Query||Cause||Seen||\n\
+    |title:* red|wildcard skips the cache and counts every facet again|12,400 hits in 1.9 s, no cache hit|\n\
+    |brand:Acme|none, served from cache|4,100 hits in 0.3 s|";
+
+#[test]
+fn a_table_fits_at_exactly_its_width_and_becomes_records_one_column_less() {
+    let table = "||AAAAA||Bb||\n|aaaaa|bbbbb|";
+    let aligned = vec!["AAAAA │ Bb", "──────┼──────", "aaaaa │ bbbbb"];
+    assert_eq!(text(&render(table, 14)), aligned);
+    assert_eq!(text(&render(table, 13)), aligned);
+    assert_eq!(text(&render(table, 12)), vec!["aaaaa", "  Bb  bbbbb"]);
+}
+
+#[test]
+fn a_table_too_wide_to_align_is_one_record_per_row_with_the_header_as_labels() {
+    let lines = render(WIDE_TABLE, 40);
+    assert_eq!(
+        text(&lines),
+        vec![
+            "title:* red",
+            "  Cause  wildcard skips the cache and",
+            "         counts every facet again",
+            "  Seen   12,400 hits in 1.9 s, no cache",
+            "         hit",
+            "",
+            "brand:Acme",
+            "  Cause  none, served from cache",
+            "  Seen   4,100 hits in 0.3 s",
+        ]
+    );
+    let bold = Style::default()
+        .fg(Color::Reset)
+        .add_modifier(Modifier::BOLD);
+    assert_eq!(lines[0].spans, vec![Span::styled("title:* red", bold)]);
+    assert_eq!(lines[1].spans[0], Span::styled("  Cause  ", muted()));
+    assert_eq!(lines[2].spans[0], Span::raw("         "));
+    assert_eq!(
+        lines[3].spans[1],
+        Span::styled("12,400 hits in 1.9 s, no cache", text_style())
+    );
+}
+
+#[test]
+fn header_labels_pad_to_the_widest_one_and_a_header_with_many_columns_keeps_every_label() {
+    let lines = render(
+        "||Key||Owner||Environment||Status||\n|K-1|Alex|production, eu-west-1, primary|open|",
+        48,
+    );
+    assert_eq!(
+        text(&lines),
+        vec![
+            "K-1",
+            "  Owner        Alex",
+            "  Environment  production, eu-west-1, primary",
+            "  Status       open",
+        ]
+    );
+}
+
+#[test]
+fn a_label_wider_than_a_third_of_the_pane_is_cut_with_dots() {
+    let lines = render(
+        "||Key||Environment||\n|K-1|production, eu-west-1, primary|",
+        30,
+    );
+    assert_eq!(
+        text(&lines),
+        vec![
+            "K-1",
+            "  Environ...  production,",
+            "              eu-west-1,",
+            "              primary"
+        ]
+    );
+}
+
+#[test]
+fn a_table_without_a_header_row_has_a_bold_first_cell_and_unlabeled_lines() {
+    let lines = render(
+        "|title:* red|wildcard skips the cache|12,400 hits|\n|b|c|d|",
+        20,
+    );
+    assert_eq!(
+        text(&lines),
+        vec![
+            "title:* red",
+            "  wildcard skips the",
+            "  cache",
+            "  12,400 hits",
+            "",
+            "b",
+            "  c",
+            "  d",
+        ]
+    );
+    assert!(lines[0].spans[0]
+        .style
+        .add_modifier
+        .contains(Modifier::BOLD));
+}
+
+#[test]
+fn record_cells_keep_their_inline_markup() {
+    let lines = render(
+        "||Who||Note||\n|[~arivera]|run {{make test}} then see http://b.io _now_ please|",
+        24,
+    );
+    assert_eq!(
+        text(&lines),
+        vec![
+            "@arivera",
+            "  Note  run make test",
+            "        then see",
+            "        http://b.io now",
+            "        please"
+        ]
+    );
+    let chip = Style::default().fg(Color::Reset).bg(Color::DarkGray);
+    assert_eq!(span(&lines[1].spans, "make test").style, chip);
+    assert_eq!(span(&lines[3].spans, "http://b.io").style, link_style());
+    assert!(span(&lines[3].spans, "now")
+        .style
+        .add_modifier
+        .contains(Modifier::ITALIC));
+    assert_eq!(lines[0].spans[0].style.fg, Some(Color::Cyan));
+    assert!(lines[0].spans[0]
+        .style
+        .add_modifier
+        .contains(Modifier::BOLD));
+}
+
+#[test]
+fn record_labels_and_values_measure_wide_characters_by_columns() {
+    let lines = render("||Key||Id||名前||\n|K-1|x|日本語のとても長いテキスト|", 16);
+    assert_eq!(
+        text(&lines),
+        vec![
+            "K-1",
+            "  Id    x",
+            "  名前  日本語の",
+            "        とても長",
+            "        いテキス",
+            "        ト"
+        ]
+    );
+}
+
+#[test]
+fn a_header_only_table_and_empty_cells_draw_what_they_have() {
+    assert_eq!(
+        text(&render("||Alpha||Beta||Gamma||", 10)),
+        vec!["Alpha", "  Beta", "  Gamma"]
+    );
+    assert_eq!(
+        text(&render("||H||A||B||\n|first| |third|", 14)),
+        vec!["first", "  B  third"]
+    );
+}
