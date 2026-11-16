@@ -8,9 +8,8 @@ use crate::app::{App, VisibleGroup};
 use crate::cache::{Epic, Ticket};
 use crate::style;
 use crate::views::common::{
-    column_width, epic_bar, fit, fold_indicator, group_marker, key_width, lead_width, muted,
-    narrow_for_summary, status_cell, status_label, status_width, ticket_cells, ticket_marker, tint,
-    Ages, ListLines, COLUMN_GAP, EPIC_BAR_WIDTH, GUTTER, STATUS_DOT_WIDTH,
+    column_width, epic_bar, fit, key_width, muted, narrow_for_summary, status_cell, status_label,
+    status_width, ListLines, COLUMN_GAP, EPIC_BAR_WIDTH, STATUS_DOT_WIDTH,
 };
 
 /// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so
@@ -58,31 +57,23 @@ fn status_counts(app: &App, epic: &Epic, style: Style) -> Vec<Span<'static>> {
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let visible_epics = app.epics_visible_epics();
-    let ages = Ages::of(app);
-    let lead = lead_width(app);
     let key_w = key_width(&visible_epics);
+    let mut lines = ListLines::new(app);
+    let lead = lines.lead_width();
     let (status_w, assignee_w, summary_w) = child_column_widths(area, lead, key_w, &visible_epics);
 
-    let mut lines = ListLines::new(app);
     if !visible_epics.is_empty() {
-        lines.intro(None);
+        lines.intro(None, 0);
     }
 
     for group in visible_epics {
         let epic = group.header;
-        let is_header_selected = group.index == app.selected_index;
 
         let summary_w_of_header = (area.width as usize)
             .saturating_sub(lead + epic.key.width() + 2)
             .max(12);
-        lines.header(
-            group.index,
-            is_header_selected,
-            Span::styled(
-                fold_indicator(group.tickets.is_none()),
-                muted(tint(is_header_selected)),
-            ),
-            group_marker(app.group_selection_state(&epic.key)),
+        lines.group_header(
+            &group,
             vec![
                 Span::styled(epic.key.clone(), style::heading()),
                 Span::raw("  "),
@@ -90,11 +81,10 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
             ],
         );
         let meta_style = style::secondary();
-        let mut meta = vec![Span::raw(" ".repeat(lead))];
         let bar = epic_bar(epic, app.status_rules(), EPIC_BAR_WIDTH, meta_style);
-        meta.extend(app.delight.rainbow_bar(&epic.key, bar, Instant::now()));
+        let mut meta = app.delight.rainbow_bar(&epic.key, bar, Instant::now());
         meta.extend(status_counts(app, epic, meta_style));
-        lines.push(meta);
+        lines.note_spans(meta);
 
         let Some(children) = &group.tickets else {
             lines.push("");
@@ -102,29 +92,15 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         };
 
         if children.is_empty() {
-            lines.push(Span::styled(
-                format!("{}(no related tickets)", " ".repeat(GUTTER)),
-                style::secondary(),
-            ));
+            lines.note("(no related tickets)");
         } else {
-            for (index, ticket) in children {
-                let is_selected = *index == app.selected_index;
-                let (base, primary) = ages.row_styles(ticket, is_selected, false);
-                let (key_cell, summary) = ticket_cells(
-                    app,
-                    group.family.get(index).copied(),
-                    ticket,
-                    summary_w,
-                    primary,
-                );
-
-                let cells = vec![
-                    vec![Span::styled(fit(&key_cell, key_w), primary)],
-                    status_cell(app, ticket, base, status_w),
-                    vec![Span::styled(fit(assignee(ticket), assignee_w), muted(base))],
-                ];
-                let mark = ticket_marker(app.is_ticket_selected(&ticket.key));
-                lines.ticket(*index, is_selected, mark, cells, base, summary);
+            for row in children {
+                lines.ticket_row(&group, row, key_w, summary_w, false, |base| {
+                    vec![
+                        status_cell(app, row.1, base, status_w),
+                        vec![Span::styled(fit(assignee(row.1), assignee_w), muted(base))],
+                    ]
+                });
             }
         }
 
@@ -150,7 +126,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         }
     }
 
-    lines.render(f, area, app);
+    lines.render(f, area);
 }
 
 #[cfg(test)]

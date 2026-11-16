@@ -4,10 +4,7 @@ use ratatui::text::{Line, Span};
 
 use crate::app::App;
 use crate::style;
-use crate::views::common::{
-    fit, key_width, lead_width, status_header, ticket_cells, ticket_marker, Ages, Columns,
-    ListLines, Shared, COLUMN_GAP, UPDATED_WIDTH,
-};
+use crate::views::common::{key_width, Columns, ListLines, Shared, COLUMN_GAP, UPDATED_WIDTH};
 
 /// (summary, epic, labels) widths: Summary takes what the other cells leave, and gives up columns
 /// to Epic and Labels (down to 12) on narrow terminals, those to their floors only after it.
@@ -83,40 +80,28 @@ fn empty_lines(app: &App) -> Vec<Line<'static>> {
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let grouped = app.my_work_visible_by_status();
-    let ages = Ages::of(app);
     let shared = Shared::of(&grouped, Columns::EpicAndLabels);
     let key_w = key_width(&grouped);
-    let (summary_w, epic_w, labels_w) = my_work_column_widths(area, lead_width(app), key_w);
+    let mut lines = ListLines::new(app);
+    let ages = lines.ages();
+    let (summary_w, epic_w, labels_w) = my_work_column_widths(area, lines.lead_width(), key_w);
     let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
 
-    let mut lines = ListLines::new(app);
     if !grouped.is_empty() {
-        lines.intro(shared.line(area.width as usize));
+        lines.intro(Some(&shared), area.width as usize);
     }
 
     for group in &grouped {
-        status_header(&mut lines, app, group, group.index == app.selected_index);
+        lines.status_header(group);
 
         let Some(tickets) = &group.tickets else {
             lines.push("");
             continue;
         };
 
-        for (index, ticket) in tickets {
-            let is_selected = *index == app.selected_index;
-            let (base, primary) = ages.row_styles(ticket, is_selected, false);
-            let (key_cell, summary) = ticket_cells(
-                app,
-                group.family.get(index).copied(),
-                ticket,
-                summary_w,
-                primary,
-            );
-
-            let cells = vec![vec![Span::styled(fit(&key_cell, key_w), primary)]];
-            let mark = ticket_marker(app.is_ticket_selected(&ticket.key));
-            let row = lines.ticket(*index, is_selected, mark, cells, base, summary);
-            shared.push_trailing_cells(ages, row, ticket, base, epic_w, labels_w);
+        for row in tickets {
+            let (line, base) = lines.ticket_row(group, row, key_w, summary_w, false, |_| vec![]);
+            shared.push_trailing_cells(ages, line, row.1, base, epic_w, labels_w);
         }
 
         // Blank line between groups
@@ -129,14 +114,14 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
     let hidden_done = app.hidden_done_count();
     if hidden_done > 0 {
-        lines.push(Line::from(vec![
-            Span::raw(" "),
+        lines.glyph_line(
             Span::styled("●", style::status("Done", app.status_rules())),
-            Span::raw(" "),
-            Span::styled("Done", style::heading()),
-            Span::styled(format!(" {hidden_done}  (d to show)"), style::secondary()),
-        ]));
+            vec![
+                Span::styled("Done", style::heading()),
+                Span::styled(format!(" {hidden_done}  (d to show)"), style::secondary()),
+            ],
+        );
     }
 
-    lines.render(f, area, app);
+    lines.render(f, area);
 }

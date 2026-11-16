@@ -1,7 +1,7 @@
 use super::support::*;
 use crate::app::{App, FilterFocus, Tab, VisibleItem};
 use crate::cache::{Epic, TeamMember, Ticket};
-use crate::views::common;
+use crate::views::{common, filters};
 use ratatui::{backend::TestBackend, style::Color, Terminal};
 
 /// The mark under each mark target: (symbol, color, on the highlighted row, row text).
@@ -222,6 +222,139 @@ fn checkboxes_appear_on_every_row_and_header_only_while_a_ticket_is_marked() {
             boxes(&terminal),
             items,
             "{tab:?}: one on every row and header"
+        );
+    }
+}
+
+/// An app whose every tab has a row, a group header and a line of its own among the rows.
+fn lead_app(show_done: bool) -> App {
+    let mut app = App::new();
+    app.loading = false;
+    app.show_done = show_done;
+    app.filter_focus = FilterFocus::Results;
+    let ticket = |key: &str, status: &str, email: &str| {
+        let mut ticket = Ticket::for_test(key, status);
+        ticket.assignee_email = Some(email.into());
+        ticket.labels = vec!["shared".into()];
+        ticket
+    };
+    app.cache.my_tickets = vec![
+        ticket("DEMO-1", "In Progress", "alex@example.com"),
+        ticket("DEMO-2", "Done", "alex@example.com"),
+    ];
+    app.filter_results = app.cache.my_tickets.clone();
+    app.cache.team_tickets = vec![
+        ticket("DEMO-1", "In Progress", "alex@example.com"),
+        ticket("DEMO-2", "Done", "alex@example.com"),
+        ticket("DEMO-3", "To Do", "__unassigned__"),
+    ];
+    app.cache.team_members = ["Alex", "Sam"]
+        .map(|name| TeamMember {
+            name: name.into(),
+            email: format!("{}@example.com", name.to_lowercase()),
+        })
+        .into();
+    app.cache.epics = vec![
+        Epic {
+            key: "EPIC-9".into(),
+            summary: "Epic".into(),
+            children: app.cache.my_tickets.clone(),
+        },
+        Epic {
+            key: "EPIC-8".into(),
+            summary: "Empty".into(),
+            children: vec![],
+        },
+    ];
+    app
+}
+
+#[test]
+fn rows_headers_and_the_lines_among_them_start_at_the_same_lead_with_marking_off_and_on() {
+    let lead_of = |marking: bool| common::GUTTER + if marking { common::CHECKBOX_WIDTH } else { 0 };
+    for marking in [false, true] {
+        let lead = lead_of(marking);
+        // (tab, show_done, texts a row or header draws, texts a line among the rows starts with)
+        for (tab, show_done, texts, notes) in [
+            (
+                Tab::MyWork,
+                false,
+                &["In Progress", "DEMO-1", "Done 1  (d to show)"][..],
+                &["all rows"][..],
+            ),
+            (
+                Tab::Team,
+                true,
+                &["Alex", "DEMO-1", "Sam"][..],
+                &["done 1", "(no tickets)"][..],
+            ),
+            (
+                Tab::Epics,
+                true,
+                &["EPIC-9", "EPIC-8", "DEMO-1"][..],
+                &["(no related tickets)", "█"][..],
+            ),
+            (
+                Tab::Unassigned,
+                true,
+                &["No Epic", "DEMO-3"][..],
+                &["unassigned: 1"][..],
+            ),
+            (
+                Tab::Filters,
+                true,
+                &["In Progress", "DEMO-1"][..],
+                &["all rows"][..],
+            ),
+        ] {
+            let mut app = lead_app(show_done);
+            if marking {
+                app.selected_ticket_keys.insert("DEMO-1".into());
+            }
+            assert_eq!(common::ListLines::new(&app).lead_width(), lead);
+            // Filters' results sit right of the sidebar (a quarter of 160 columns) and the divider.
+            let left = if tab == Tab::Filters { 41 } else { 0 };
+            let rows: Vec<(String, Color)> = draw(&app, tab, 160)
+                .into_iter()
+                .map(|(row, color)| (row.chars().skip(left).collect(), color))
+                .collect();
+            for text in texts {
+                let (row, _) = line_with(&rows, text).unwrap_or_else(|| panic!("{tab:?}: {text}"));
+                assert_eq!(
+                    column_of(row, text),
+                    lead,
+                    "{tab:?}, marking {marking}: {text}"
+                );
+            }
+            for text in notes {
+                let (row, _) = rows
+                    .iter()
+                    .find(|(row, _)| row.trim_start().starts_with(text))
+                    .unwrap_or_else(|| panic!("{tab:?}: {text}"));
+                let blanks = row.chars().take_while(|c| *c == ' ').count();
+                assert_eq!(blanks, lead, "{tab:?}, marking {marking}: {text}");
+            }
+        }
+
+        let mut app = lead_app(true);
+        app.filter_focus = FilterFocus::Sidebar;
+        if marking {
+            app.selected_ticket_keys.insert("DEMO-1".into());
+        }
+        let config = toml::from_str(
+            "[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n[[filters]]\nname = 'Mine'\njql = 'x'\n",
+        )
+        .unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(160, 30)).unwrap();
+        terminal
+            .draw(|f| filters::render(f, f.area(), &app, &config))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row: String = (0..40).map(|x| buffer[(x, 2)].symbol()).collect();
+        assert_eq!(
+            column_of(&row, "Mine"),
+            common::GUTTER,
+            "the sidebar marks nothing: {row}"
         );
     }
 }

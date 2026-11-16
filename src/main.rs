@@ -740,9 +740,9 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(top_bar::HEIGHT),
-            Constraint::Min(0), // Content
-            Constraint::Length((app.selected_ticket_count() > 0) as u16), // Bulk bar
-            Constraint::Length(1), // Status bar
+            Constraint::Min(0),                          // Content
+            Constraint::Length(app.is_marking() as u16), // Bulk bar
+            Constraint::Length(1),                       // Status bar
         ])
         .split(f.area());
 

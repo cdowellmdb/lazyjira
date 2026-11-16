@@ -5,9 +5,8 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::app::{App, FilterFocus};
 use crate::style;
 use crate::views::common::{
-    fit, highlight_row, key_width, lead_width, narrow_for_summary, status_cell, status_header,
-    status_width, ticket_cells, ticket_marker, Ages, Columns, ListLines, Shared, COLUMN_GAP,
-    STATUS_DOT_WIDTH, UPDATED_WIDTH,
+    gutter, highlight_row, key_width, narrow_for_summary, status_cell, status_width, Columns,
+    ListLines, Shared, COLUMN_GAP, STATUS_DOT_WIDTH, UPDATED_WIDTH,
 };
 
 /// Rows a pane's title and the blank line under it take.
@@ -76,15 +75,13 @@ fn render_sidebar(
             } else {
                 style::primary()
             };
-            lines.push(Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    if is_selected { "›" } else { " " },
-                    style::accent().patch(style::heading()),
-                ),
-                Span::raw(" "),
-                Span::styled(filter.name.clone(), name),
-            ]));
+            let marker = Span::styled(
+                if is_selected { "›" } else { " " },
+                style::accent().patch(style::heading()),
+            );
+            let mut row = gutter(marker);
+            row.push(Span::styled(filter.name.clone(), name));
+            lines.push(Line::from(row));
         }
     }
 
@@ -125,7 +122,6 @@ fn results_column_widths(
 
 fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let results_focused = app.filter_focus == FilterFocus::Results;
-    let ages = Ages::of(app);
 
     // The divider between the panes is the results' left border.
     let divider = Block::default()
@@ -145,7 +141,7 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
     render_title(f, inner, title, results_focused);
     let list = below_title(inner);
 
-    let mut lines = ListLines::new(app);
+    let mut lines = ListLines::new(app).focused(results_focused);
 
     if app.filter_loading {
         lines.push(Span::styled("  Loading...", style::warning()));
@@ -164,51 +160,34 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App) {
             style::secondary(),
         ));
     } else {
+        let ages = lines.ages();
         let key_w = key_width(&groups);
         let (status_w, summary_w) =
-            results_column_widths(list, lead_width(app), key_w, status_width(&groups));
+            results_column_widths(list, lines.lead_width(), key_w, status_width(&groups));
 
         let shared = Shared::of(&groups, Columns::Neither);
-        lines.intro(shared.line(list.width as usize));
+        lines.intro(Some(&shared), list.width as usize);
 
         for group in groups {
-            status_header(
-                &mut lines,
-                app,
-                &group,
-                results_focused && group.index == app.selected_index,
-            );
+            lines.status_header(&group);
 
             let Some(tickets) = &group.tickets else {
                 lines.push("");
                 continue;
             };
 
-            for (index, ticket) in tickets {
-                let is_selected = results_focused && *index == app.selected_index;
-                let (base, primary) = ages.row_styles(ticket, is_selected, false);
-                let (key_cell, summary) = ticket_cells(
-                    app,
-                    group.family.get(index).copied(),
-                    ticket,
-                    summary_w,
-                    primary,
-                );
-
-                let cells = vec![
-                    vec![Span::styled(fit(&key_cell, key_w), primary)],
-                    status_cell(app, ticket, base, status_w),
-                ];
-                let mark = ticket_marker(app.is_ticket_selected(&ticket.key));
-                let row = lines.ticket(*index, is_selected, mark, cells, base, summary);
-                shared.push_trailing_cells(ages, row, ticket, base, 0, 0);
+            for row in tickets {
+                let (line, base) = lines.ticket_row(&group, row, key_w, summary_w, false, |base| {
+                    vec![status_cell(app, row.1, base, status_w)]
+                });
+                shared.push_trailing_cells(ages, line, row.1, base, 0, 0);
             }
 
             lines.push("");
         }
     }
 
-    lines.render(f, list, app);
+    lines.render(f, list);
 }
 
 #[cfg(test)]

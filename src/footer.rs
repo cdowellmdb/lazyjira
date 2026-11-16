@@ -116,10 +116,10 @@ const BULK_HINTS: [(&str, &str); 3] = [("B", "move or assign"), ("u", "clear"), 
 /// A all`, with whole hints dropped from the right in `width` columns. `None` when nothing is
 /// marked.
 pub fn bulk_bar(app: &App, width: u16) -> Option<Line<'static>> {
-    let selected = app.selected_ticket_count();
-    if selected == 0 {
+    if !app.is_marking() {
         return None;
     }
+    let selected = app.selected_ticket_count();
     let count = format!("{selected} selected");
     let width_of = |hints: &[(&str, &str)]| {
         let text: usize = hints

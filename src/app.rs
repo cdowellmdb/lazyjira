@@ -1362,6 +1362,11 @@ impl App {
         self.selected_ticket_keys.len()
     }
 
+    /// Whether any ticket is marked: lists draw their checkboxes and the bulk bar shows.
+    pub fn is_marking(&self) -> bool {
+        self.selected_ticket_count() > 0
+    }
+
     pub fn is_ticket_selected(&self, key: &str) -> bool {
         self.selected_ticket_keys.contains(key)
     }

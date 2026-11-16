@@ -4,9 +4,8 @@ use ratatui::text::Span;
 use crate::app::App;
 use crate::style;
 use crate::views::common::{
-    fit, fold_indicator, group_marker, key_width, lead_width, muted, narrow_for_summary,
-    status_cell, status_width, ticket_cells, ticket_marker, tint, Ages, Columns, ListLines, Shared,
-    COLUMN_GAP, GUTTER, STATUS_DOT_WIDTH, UPDATED_WIDTH,
+    key_width, muted, narrow_for_summary, status_cell, status_width, tint, Columns, ListLines,
+    Shared, COLUMN_GAP, STATUS_DOT_WIDTH, UPDATED_WIDTH,
 };
 
 /// Summary takes what Status, Epic, Labels and the fixed cells leave; on narrow terminals Epic,
@@ -27,28 +26,24 @@ fn team_column_widths(
 
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let members = app.team_visible_tickets_by_member();
-    let ages = Ages::of(app);
     let shared = Shared::of(&members, Columns::EpicAndLabels);
     let key_w = key_width(&members);
+    let mut lines = ListLines::new(app);
+    let ages = lines.ages();
     let (status_w, summary_w, epic_w, labels_w) =
-        team_column_widths(area, lead_width(app), key_w, status_width(&members));
+        team_column_widths(area, lines.lead_width(), key_w, status_width(&members));
     let summary_w = shared.summary_width(summary_w, epic_w, labels_w);
 
-    let mut lines = ListLines::new(app);
     if !members.is_empty() {
-        lines.intro(shared.line(area.width as usize));
+        lines.intro(Some(&shared), area.width as usize);
     }
 
     for group in members {
         let (member, active_count) = group.header;
         let done_count = group.total - active_count;
-        let is_header_selected = group.index == app.selected_index;
-        let header_muted = muted(tint(is_header_selected));
-        lines.header(
-            group.index,
-            is_header_selected,
-            Span::styled(fold_indicator(group.tickets.is_none()), header_muted),
-            group_marker(app.group_selection_state(&member.email)),
+        let header_muted = muted(tint(lines.is_selected(group.index)));
+        lines.group_header(
+            &group,
             vec![
                 Span::styled(member.name.clone(), style::heading()),
                 Span::styled(
@@ -68,36 +63,17 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let (active, done) = tickets.split_at(split);
 
         if active.is_empty() && done.is_empty() {
-            lines.push(Span::styled(
-                format!("{}(no tickets)", " ".repeat(GUTTER)),
-                style::secondary(),
-            ));
+            lines.note("(no tickets)");
         }
         for (rows, faded) in [(active, false), (done, true)] {
             if faded && !rows.is_empty() {
-                lines.push(Span::styled(
-                    format!("{}done {done_count}", " ".repeat(GUTTER)),
-                    style::secondary(),
-                ));
+                lines.note(format!("done {done_count}"));
             }
-            for (index, ticket) in rows {
-                let is_selected = *index == app.selected_index;
-                let (base, primary) = ages.row_styles(ticket, is_selected, faded);
-                let (key_cell, summary) = ticket_cells(
-                    app,
-                    group.family.get(index).copied(),
-                    ticket,
-                    summary_w,
-                    primary,
-                );
-
-                let cells = vec![
-                    vec![Span::styled(fit(&key_cell, key_w), primary)],
-                    status_cell(app, ticket, base, status_w),
-                ];
-                let mark = ticket_marker(app.is_ticket_selected(&ticket.key));
-                let row = lines.ticket(*index, is_selected, mark, cells, base, summary);
-                shared.push_trailing_cells(ages, row, ticket, base, epic_w, labels_w);
+            for row in rows {
+                let (line, base) = lines.ticket_row(&group, row, key_w, summary_w, faded, |base| {
+                    vec![status_cell(app, row.1, base, status_w)]
+                });
+                shared.push_trailing_cells(ages, line, row.1, base, epic_w, labels_w);
             }
         }
 
@@ -109,7 +85,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         lines.push(Span::styled("  No team members", style::secondary()));
     }
 
-    lines.render(f, area, app);
+    lines.render(f, area);
 }
 
 #[cfg(test)]

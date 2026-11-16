@@ -335,14 +335,9 @@ pub struct Item {
 }
 
 /// Registers each item's targets. Every drawn line of an item selects it; its first line also
-/// holds its mark, over the gutter (and the checkbox, while `marking`), and its fold cell.
-pub fn register_rows(app: &App, inner: Rect, items: &[Item], scroll: u16, marking: bool) {
-    let mark_width = crate::views::common::GUTTER
-        + if marking {
-            crate::views::common::CHECKBOX_WIDTH
-        } else {
-            0
-        };
+/// holds its mark, over the `lead` cells before its content (the gutter, and the checkbox while
+/// tickets are marked), and its fold cell.
+pub fn register_rows(app: &App, inner: Rect, items: &[Item], scroll: u16, lead: usize) {
     for item in items {
         let index = item.index;
         for line in item.lines.clone() {
@@ -359,7 +354,7 @@ pub fn register_rows(app: &App, inner: Rect, items: &[Item], scroll: u16, markin
                 continue;
             }
             targets.push((
-                Rect::new(rect.x, rect.y, rect.width.min(mark_width as u16), 1),
+                Rect::new(rect.x, rect.y, rect.width.min(lead as u16), 1),
                 Target::Mark(index),
             ));
             if let Some(fold) = item.fold {
