@@ -12,10 +12,17 @@ use crate::views::common::{
 /// Rows a pane's title and the blank line under it take.
 const TITLE_HEIGHT: u16 = 2;
 
-pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::config::AppConfig) {
+/// `compact` is the list's width beside the detail pane, which shows only keys and summaries.
+pub fn render(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    app: &App,
+    config: &crate::config::AppConfig,
+    compact: Option<u16>,
+) {
     // Beside the detail pane there is room for the results alone.
-    if app.compact_list_width.get().is_some() {
-        render_results(f, area, app, false);
+    if compact.is_some() {
+        render_results(f, area, app, false, compact);
         return;
     }
     let chunks = Layout::default()
@@ -24,7 +31,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, config: &crate::con
         .split(area);
 
     render_sidebar(f, chunks[0], app, config);
-    render_results(f, chunks[1], app, true);
+    render_results(f, chunks[1], app, true, None);
 }
 
 /// A pane's title, over its list: the accent while the pane has focus.
@@ -136,7 +143,13 @@ fn results_column_widths(
     (status_w, summary_w)
 }
 
-fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App, divided: bool) {
+fn render_results(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    app: &App,
+    divided: bool,
+    compact: Option<u16>,
+) {
     let results_focused = app.filter_focus == FilterFocus::Results;
 
     // The divider between the panes is the results' left border.
@@ -162,7 +175,9 @@ fn render_results(f: &mut ratatui::Frame, area: Rect, app: &App, divided: bool) 
     render_title(f, app, inner, title, results_focused);
     let list = below_title(inner);
 
-    let mut lines = ListLines::new(app).focused(results_focused);
+    let mut lines = ListLines::new(app)
+        .compact(compact)
+        .focused(results_focused);
 
     if app.filter_loading {
         lines.glyph_line(

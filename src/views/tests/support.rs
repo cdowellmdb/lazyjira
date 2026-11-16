@@ -13,11 +13,11 @@ pub fn render_tab(frame: &mut ratatui::Frame, app: &App, tab: Tab) {
     let config = toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
     let area = frame.area();
     match tab {
-        Tab::MyWork => my_work::render(frame, area, app),
-        Tab::Team => team::render(frame, area, app),
-        Tab::Epics => epics::render(frame, area, app),
-        Tab::Unassigned => unassigned::render(frame, area, app),
-        Tab::Filters => filters::render(frame, area, app, &config),
+        Tab::MyWork => my_work::render(frame, area, app, None),
+        Tab::Team => team::render(frame, area, app, None),
+        Tab::Epics => epics::render(frame, area, app, None),
+        Tab::Unassigned => unassigned::render(frame, area, app, None),
+        Tab::Filters => filters::render(frame, area, app, &config, None),
     }
 }
 

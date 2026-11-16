@@ -55,10 +55,11 @@ fn status_counts(app: &App, epic: &Epic, style: Style) -> Vec<Span<'static>> {
     spans
 }
 
-pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
+/// `compact` is the list's width beside the detail pane, which shows only keys and summaries.
+pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App, compact: Option<u16>) {
     let visible_epics = app.epics_visible_epics();
     let key_w = key_width(&visible_epics);
-    let mut lines = ListLines::new(app);
+    let mut lines = ListLines::new(app).compact(compact);
     let lead = lines.lead_width();
     let (status_w, assignee_w, summary_w) = child_column_widths(area, lead, key_w, &visible_epics);
 
@@ -80,13 +81,13 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 Span::styled(fit(&epic.summary, summary_w_of_header), style::heading()),
             ],
         );
-        if !lines.is_compact() {
+        lines.meta_line(Span::raw(" "), || {
             let meta_style = style::secondary();
             let bar = epic_bar(epic, app.status_rules(), EPIC_BAR_WIDTH, meta_style);
             let mut meta = app.delight.rainbow_bar(&epic.key, bar, Instant::now());
             meta.extend(status_counts(app, epic, meta_style));
-            lines.glyph_line(Span::raw(" "), meta);
-        }
+            meta
+        });
 
         let Some(children) = &group.tickets else {
             lines.push("");
@@ -176,6 +177,38 @@ mod tests {
         let rows = draw(&app, Tab::Epics, width);
         let widths = columns_in(&line_with(&rows, "DEMO-2").unwrap().0, width);
         (rows, widths)
+    }
+
+    #[test]
+    fn beside_the_detail_an_epic_is_its_header_and_its_children_keys_and_summaries() {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = Tab::Epics;
+        app.cache.epics = vec![Epic {
+            key: "EPIC-9".into(),
+            summary: "Epic".into(),
+            children: vec![Ticket::for_test("DEMO-1", "In Progress")],
+        }];
+        let rows_at = |compact: Option<u16>| -> Vec<String> {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(50, 8)).unwrap();
+            terminal
+                .draw(|f| super::render(f, f.area(), &app, compact))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..8)
+                .map(|y| (0..50).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect()
+        };
+        let full = rows_at(None);
+        assert!(full.iter().any(|row| row.contains("1 ticket")), "{full:?}");
+        let compact = rows_at(Some(50));
+        assert!(
+            compact.iter().all(|row| !row.contains("ticket")),
+            "{compact:?}"
+        );
+        let child = compact.iter().find(|row| row.contains("DEMO-1")).unwrap();
+        assert_eq!(child.trim_end(), "   DEMO-1  DEMO-1", "{compact:?}");
     }
 
     #[test]

@@ -45,7 +45,7 @@ fn the_panes_split_at_exactly_120_columns_with_a_50_cell_list_and_a_1_cell_divid
 
 #[tokio::test]
 async fn at_120_columns_detail_has_the_list_on_the_left_and_at_119_it_replaces_it() {
-    let (app, rows) = detail_screen(119).await;
+    let (_, rows) = detail_screen(119).await;
     assert!(
         rows.iter().all(|row| !row.contains("LEAK")),
         "the list is gone:\n{}",
@@ -54,13 +54,11 @@ async fn at_120_columns_detail_has_the_list_on_the_left_and_at_119_it_replaces_i
     assert!(rows[2].starts_with(" LAST-30  30 of 30"), "{}", rows[2]);
     assert!(rows[2].trim_end().ends_with("[×]"), "{}", rows[2]);
     assert!(!column(&rows, 50).contains('│'), "no divider at 119");
-    assert_eq!(app.compact_list_width.get(), None);
 
     for width in [120, 160] {
-        let (app, rows) = detail_screen(width).await;
+        let (_, rows) = detail_screen(width).await;
         let case = format!("{width} columns\n{}", rows.join("\n"));
         assert_eq!(column(&rows, 50), "│".repeat(27), "{case}");
-        assert_eq!(app.compact_list_width.get(), Some(50));
         // Only the list is left of the divider, and only the pane right of it.
         for row in &rows[2..29] {
             let (list, pane) = row.split_at(row.char_indices().nth(50).unwrap().0);

@@ -757,13 +757,6 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     let detail = app.is_detail_open();
     let panes = detail.then(|| widgets::ticket_detail::panes(app, content));
     let list = panes.as_ref().map_or(Some(content), |panes| panes.list);
-    app.compact_list_width.set(
-        panes
-            .as_ref()
-            .and_then(|panes| panes.list)
-            .map(|list| list.width),
-    );
-
     mouse::begin_layer(app);
     top_bar::render(f, app, chunks[0]);
     if detail {
@@ -771,27 +764,9 @@ fn ui(f: &mut ratatui::Frame, app: &App, config: &AppConfig) {
     }
 
     if let Some(list) = list {
-        if app.loading
-            && app.cache.my_tickets.is_empty()
-            && app.cache.team_tickets.is_empty()
-            && app.cache.epics.is_empty()
-            && app.filter_results.is_empty()
-        {
-            let mut loading = views::common::ListLines::new(app);
-            loading.glyph_line(
-                Span::raw(" "),
-                vec![Span::styled("Loading...", style::warning())],
-            );
-            loading.render(f, list);
-        } else {
-            match app.active_tab {
-                Tab::MyWork => views::my_work::render(f, list, app),
-                Tab::Team => views::team::render(f, list, app),
-                Tab::Epics => views::epics::render(f, list, app),
-                Tab::Unassigned => views::unassigned::render(f, list, app),
-                Tab::Filters => views::filters::render(f, list, app, config),
-            }
-        }
+        // Beside the detail pane the list is compact: its own width, keys and summaries only.
+        let compact = panes.as_ref().map(|_| list.width);
+        views::render_active(f, list, app, config, compact);
     }
     if let Some(panes) = &panes {
         if let Some(divider) = panes.divider {

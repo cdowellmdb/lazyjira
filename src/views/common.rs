@@ -379,13 +379,15 @@ impl<'a> ListLines<'a> {
             items: Vec::new(),
             selected_lines: None,
             focused: true,
-            compact: app.compact_list_width.get(),
+            compact: None,
         }
     }
 
-    /// Whether the list is beside the detail pane, and draws only keys and summaries.
-    pub fn is_compact(&self) -> bool {
-        self.compact.is_some()
+    /// The list is `width` cells wide beside the detail pane, and draws only keys and
+    /// summaries: no extra cells on a row, no meta line, and a click on a row shows its ticket.
+    pub fn compact(mut self, width: Option<u16>) -> Self {
+        self.compact = width;
+        self
     }
 
     pub fn focused(mut self, focused: bool) -> Self {
@@ -423,6 +425,13 @@ impl<'a> ListLines<'a> {
             Span::raw(" "),
             vec![Span::styled(text.into(), style::secondary())],
         );
+    }
+
+    /// A line under a header that only a full-width list draws.
+    pub fn meta_line(&mut self, glyph: Span<'static>, rest: impl FnOnce() -> Vec<Span<'static>>) {
+        if self.compact.is_none() {
+            self.glyph_line(glyph, rest());
+        }
     }
 
     /// A line among the rows with `glyph` in the gutter, then `rest` after the checkbox's cells.
@@ -517,7 +526,7 @@ impl<'a> ListLines<'a> {
         });
         let (key, summary) = ticket_cells(self.app, family, ticket, summary_w, primary);
         let mut cells = vec![vec![Span::styled(fit(&key.text, key_w), primary)]];
-        if !self.is_compact() {
+        if self.compact.is_none() {
             cells.extend(extra(base));
         }
 

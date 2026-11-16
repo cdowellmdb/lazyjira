@@ -347,7 +347,7 @@ fn rows_headers_and_the_lines_among_them_start_at_the_same_lead_with_marking_off
         .unwrap();
         let mut terminal = Terminal::new(TestBackend::new(160, 30)).unwrap();
         terminal
-            .draw(|f| filters::render(f, f.area(), &app, &config))
+            .draw(|f| filters::render(f, f.area(), &app, &config, None))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let row: String = (0..40).map(|x| buffer[(x, 2)].symbol()).collect();

@@ -25,7 +25,7 @@ fn filters_pin_their_sidebar_and_results_targets_to_exact_cells() {
         app.mouse_targets.borrow_mut().clear();
         let mut terminal = Terminal::new(TestBackend::new(160, 30)).unwrap();
         terminal
-            .draw(|f| filters::render(f, f.area(), app, &config))
+            .draw(|f| filters::render(f, f.area(), app, &config, None))
             .unwrap();
         app.mouse_targets.borrow().clone()
     };

@@ -1188,7 +1188,7 @@ mod tests {
     fn draw_my_work(app: &App) {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal
-            .draw(|f| crate::views::my_work::render(f, f.area(), app))
+            .draw(|f| crate::views::my_work::render(f, f.area(), app, None))
             .unwrap();
     }
 
