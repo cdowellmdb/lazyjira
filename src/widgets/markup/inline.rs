@@ -20,6 +20,26 @@ pub(super) fn escaped_char(chars: &[char], i: usize) -> Option<char> {
     chars.get(i + 1).copied().filter(|n| is_escapable(*n))
 }
 
+/// `text` with each backslash before an escapable character dropped.
+fn unescape(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match escaped_char(&chars, i) {
+            Some(escaped) => {
+                out.push(escaped);
+                i += 2;
+            }
+            None => {
+                out.push(chars[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 /// Parses inline markup: `*bold*`, `_italic_`, `-strike-`, `+underline+`,
 /// `{{monospace}}`, `{color:red}text{color}`, `[text|url]`, `[~mention]`,
 /// `!image.png!`, bare URLs, `--`/`---` dashes and `(/)`-style icons.
@@ -73,8 +93,19 @@ impl Inline<'_> {
         true
     }
 
+    /// Where `pat` next starts at or after `from`, not counting an escaped character.
     fn find(&self, from: usize, pat: &str) -> Option<usize> {
-        (from..self.chars.len()).find(|&j| self.starts_with(j, pat))
+        let mut j = from;
+        while j < self.chars.len() {
+            if escaped_char(self.chars, j).is_some() {
+                j += 2;
+            } else if self.starts_with(j, pat) {
+                return Some(j);
+            } else {
+                j += 1;
+            }
+        }
+        None
     }
 
     fn in_bare_url(&self, at: usize) -> bool {
@@ -117,9 +148,12 @@ impl Inline<'_> {
             return Some(i + 2);
         }
 
+        // Jira writes braces in code as `{{\{x\}}}`, so `{{ }}` code unescapes its text. A
+        // backtick span is Markdown's, so its text stays as written.
         if self.starts_with(i, "{{") {
             let end = self.find(i + 2, "}}")?;
-            self.code(self.chars[i + 2..end].iter().collect());
+            let code: String = self.chars[i + 2..end].iter().collect();
+            self.code(unescape(&code));
             return Some(end + 2);
         }
 

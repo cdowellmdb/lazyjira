@@ -577,3 +577,22 @@ fn a_one_column_table_too_wide_to_align_keeps_its_header_above_the_records() {
     assert_eq!(lines[0].spans, vec![Span::styled("Name", bold)]);
     assert_eq!(lines[2].spans, vec![Span::styled("alpha beta gamma", bold)]);
 }
+
+#[test]
+fn escaped_characters_in_double_brace_code_show_plain_and_an_escaped_brace_does_not_close_it() {
+    let chip = style::code();
+    for (source, shown) in [
+        ("{{a\\(b}}", "a(b"),
+        ("{{\\{x\\}}}", "{x}"),
+        ("{{a\\}}}", "a}"),
+        ("{{C:\\dir}}", "C:\\dir"),
+    ] {
+        assert_eq!(
+            inline(source, style::primary()),
+            vec![Span::styled(shown, chip)],
+            "{source}"
+        );
+    }
+    let lines = render("{code}\n{{\\{x\\}}}\n{code}", 20);
+    assert_eq!(text(&lines), vec!["│ {{\\{x\\}}}"]);
+}
