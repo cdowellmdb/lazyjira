@@ -5,10 +5,11 @@ use std::time::Instant;
 
 use crate::app::{App, VisibleGroup};
 use crate::cache::{Epic, Ticket};
+use crate::style::status_color;
 use crate::views::common::{
     column_width, epic_bar, fit, fold_indicator, group_marker, narrow_for_summary, panel,
-    status_color, status_label, status_width, ticket_cells, ticket_marker, Ages, ListLines,
-    EPIC_BAR_WIDTH, KEY_WIDTH, SEPARATOR_WIDTH,
+    status_label, status_width, ticket_cells, ticket_marker, Ages, ListLines, EPIC_BAR_WIDTH,
+    KEY_WIDTH, SEPARATOR_WIDTH,
 };
 
 /// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so
@@ -148,7 +149,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                         .fg(status_color(&ticket.status, app.status_rules()))
                         .bg(Color::DarkGray)
                 } else {
-                    crate::style::status_dot(&ticket.status, app.status_rules())
+                    crate::style::status(&ticket.status, app.status_rules())
                 };
                 let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
                 let (key_cell, summary) = ticket_cells(

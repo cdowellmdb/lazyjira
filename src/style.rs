@@ -3,8 +3,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::cache::StatusRules;
-use crate::views::common::status_color;
+use crate::cache::{Status, StatusKind, StatusRules};
 
 /// Most text: the terminal's foreground.
 pub fn primary() -> Style {
@@ -36,9 +35,30 @@ pub fn selected_row() -> Style {
     Style::default().bg(Color::DarkGray)
 }
 
-/// The dot before a status, in that status's color.
-pub fn status_dot(status: &str, rules: &StatusRules) -> Style {
+/// The status's color on the dot and the text beside it.
+pub fn status(status: &str, rules: &StatusRules) -> Style {
     Style::default().fg(status_color(status, rules))
+}
+
+/// Color for a status name: gray when it's dropped (readable on the selected row's dark gray, as
+/// `muted` is), green when it's done, otherwise by the built-in status it reads as, and magenta
+/// for workflow statuses the app doesn't know.
+pub fn status_color(status: &str, rules: &StatusRules) -> Color {
+    match rules.kind(status) {
+        StatusKind::Dropped => return Color::Gray,
+        StatusKind::Done => return Color::Green,
+        StatusKind::Active => {}
+    }
+    match Status::from_str(status) {
+        Status::NeedsTriage => Color::Reset,
+        Status::ReadyForWork => Color::Blue,
+        Status::InProgress => Color::Yellow,
+        Status::ToDo => Color::Reset,
+        Status::InReview => Color::Cyan,
+        Status::Blocked => Color::Red,
+        Status::Closed => Color::Green,
+        Status::Other(_) => Color::Magenta,
+    }
 }
 
 #[cfg(test)]
@@ -50,6 +70,14 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn a_dropped_status_stays_readable_on_the_selected_row() {
+        // Rows draw a selected status cell on dark gray, so its text can't be dark gray too.
+        let rules = StatusRules::default();
+        assert_eq!(status_color("Won't Do", &rules), Color::Gray);
+        assert_eq!(status_color("Done", &rules), Color::Green);
+    }
+
+    #[test]
     fn every_role_style_is_recolored_by_a_theme_and_none_is_dim() {
         let rules = StatusRules::default();
         let styles = [
@@ -59,9 +87,9 @@ mod tests {
             key_hint(),
             heading(),
             selected_row(),
-            status_dot("In Progress", &rules),
-            status_dot("Done", &rules),
-            status_dot("Blocked", &rules),
+            status("In Progress", &rules),
+            status("Done", &rules),
+            status("Blocked", &rules),
         ];
         let nord = theme::resolve("nord", &BTreeMap::new());
         for style in styles {

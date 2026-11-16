@@ -3,10 +3,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
+use crate::style::status_color;
 use crate::views::common::{
-    fit, fold_indicator, group_marker, narrow_for_summary, panel, status_color, status_label,
-    status_width, ticket_cells, ticket_marker, Ages, Columns, ListLines, Shared, KEY_WIDTH,
-    SEPARATOR_WIDTH, UPDATED_WIDTH,
+    fit, fold_indicator, group_marker, narrow_for_summary, panel, status_label, status_width,
+    ticket_cells, ticket_marker, Ages, Columns, ListLines, Shared, KEY_WIDTH, SEPARATOR_WIDTH,
+    UPDATED_WIDTH,
 };
 
 const NO_EPIC_KEY: &str = "NO-EPIC";
@@ -101,7 +102,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
                     .fg(status_color(&ticket.status, app.status_rules()))
                     .bg(Color::DarkGray)
             } else {
-                crate::style::status_dot(&ticket.status, app.status_rules())
+                crate::style::status(&ticket.status, app.status_rules())
             };
             let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
             let (key_cell, summary) = ticket_cells(

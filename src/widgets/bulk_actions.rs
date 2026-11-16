@@ -8,7 +8,8 @@ use crate::app::App;
 use crate::bulk_actions::{BulkAction, BulkState, BulkSummary, BulkTarget};
 use crate::cache::{Status, MOVE_SHORTCUTS};
 use crate::mouse::Target;
-use crate::views::common::{panel, status_color};
+use crate::style::status_color;
+use crate::views::common::panel;
 
 use super::form;
 use super::ticket_detail::{option_style, render_footer, render_menu};

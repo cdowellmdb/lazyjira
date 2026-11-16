@@ -52,27 +52,6 @@ pub fn highlight_row(lines: &mut [Line<'_>], selected: Option<Range<usize>>, wid
     }
 }
 
-/// Color for a status name: gray when it's dropped (readable on the selected row's dark gray, as
-/// `muted` is), green when it's done, otherwise by the built-in status it reads as, and magenta
-/// for workflow statuses the app doesn't know.
-pub fn status_color(status: &str, rules: &StatusRules) -> Color {
-    match rules.kind(status) {
-        StatusKind::Dropped => return Color::Gray,
-        StatusKind::Done => return Color::Green,
-        StatusKind::Active => {}
-    }
-    match Status::from_str(status) {
-        Status::NeedsTriage => Color::Reset,
-        Status::ReadyForWork => Color::Blue,
-        Status::InProgress => Color::Yellow,
-        Status::ToDo => Color::Reset,
-        Status::InReview => Color::Cyan,
-        Status::Blocked => Color::Red,
-        Status::Closed => Color::Green,
-        Status::Other(_) => Color::Magenta,
-    }
-}
-
 /// Cells in an epic's progress bar, in the Epics headers and the epic detail.
 pub const EPIC_BAR_WIDTH: usize = 24;
 
@@ -103,7 +82,7 @@ pub fn epic_bar(
         };
         spans.push(Span::styled(
             mark.repeat(cells),
-            style.fg(status_color(status, rules)),
+            style.fg(style::status_color(status, rules)),
         ));
     }
     spans
@@ -696,13 +675,6 @@ mod tests {
             colors,
             vec![Some(Color::Green), Some(Color::Yellow), Some(Color::Gray)]
         );
-    }
-
-    #[test]
-    fn a_dropped_status_stays_readable_on_the_selected_row() {
-        // Rows draw a selected status cell on dark gray, so its text can't be dark gray too.
-        assert_eq!(status_color("Won't Do", &rules()), Color::Gray);
-        assert_eq!(status_color("Done", &rules()), Color::Green);
     }
 
     #[test]

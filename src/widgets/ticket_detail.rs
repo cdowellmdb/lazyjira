@@ -9,7 +9,8 @@ use ratatui::widgets::{
 use crate::app::{App, DetailMode};
 use crate::cache::{ActivityKind, Epic, Status, StatusRules, Ticket};
 use crate::move_picker::MovePicker;
-use crate::views::common::{epic_bar, fit, panel, status_color, truncate, EPIC_BAR_WIDTH};
+use crate::style::status_color;
+use crate::views::common::{epic_bar, fit, panel, truncate, EPIC_BAR_WIDTH};
 use crate::widgets::activity::format_timestamp;
 use crate::widgets::markup;
 
@@ -538,7 +539,7 @@ fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, 
         }
         counts.push(Span::styled(
             format!("{}:\u{a0}{}", status.as_str(), count).replace(' ', "\u{a0}"),
-            crate::style::status_dot(status.as_str(), rules),
+            crate::style::status(status.as_str(), rules),
         ));
     }
     if counts.is_empty() {
@@ -564,7 +565,7 @@ fn render_epic_view(f: &mut ratatui::Frame, frame: Rect, area: Rect, app: &App, 
             ),
             Span::styled(
                 fit(&ticket.status, 15),
-                crate::style::status_dot(&ticket.status, rules),
+                crate::style::status(&ticket.status, rules),
             ),
             Span::raw("  "),
             Span::styled(

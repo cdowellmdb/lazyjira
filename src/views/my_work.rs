@@ -3,9 +3,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::App;
+use crate::style::status_color;
 use crate::views::common::{
-    fold_indicator, group_marker, panel, status_color, status_label, ticket_cells, ticket_marker,
-    Ages, Columns, ListLines, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
+    fold_indicator, group_marker, panel, status_label, ticket_cells, ticket_marker, Ages, Columns,
+    ListLines, Shared, KEY_WIDTH, SEPARATOR_WIDTH, UPDATED_WIDTH,
 };
 
 fn my_work_column_widths(area: Rect) -> (usize, usize, usize, usize) {
