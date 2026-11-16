@@ -1,25 +1,30 @@
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::style::Style;
+use ratatui::text::Span;
 use std::time::Instant;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, VisibleGroup};
 use crate::cache::{Epic, Ticket};
 use crate::style;
 use crate::views::common::{
-    column_width, epic_bar, fit, fold_indicator, group_marker, narrow_for_summary, panel,
-    status_label, status_width, ticket_cells, ticket_marker, Ages, ListLines, EPIC_BAR_WIDTH,
-    KEY_WIDTH, SEPARATOR_WIDTH,
+    column_width, epic_bar, fit, fold_indicator, group_marker, key_width, lead_width, muted,
+    narrow_for_summary, status_cell, status_label, status_width, ticket_cells, ticket_marker, tint,
+    Ages, ListLines, EPIC_BAR_WIDTH, GAP, GUTTER, STATUS_DOT_WIDTH,
 };
 
 /// Status and Assignee are as wide as the longest value on screen (Assignee at most 24), so
 /// "Waiting for Approval" or a long name doesn't push its row's summary out of line. Summary takes
 /// the rest; on narrow terminals Assignee, then Status, give up columns, down to 8, so it keeps 18.
-fn child_column_widths(area: Rect, epics: &[VisibleGroup<'_, &Epic>]) -> (usize, usize, usize) {
+fn child_column_widths(
+    area: Rect,
+    lead: usize,
+    key_w: usize,
+    epics: &[VisibleGroup<'_, &Epic>],
+) -> (usize, usize, usize) {
     let mut status_w = status_width(epics);
     let mut assignee_w = column_width(epics, "ASSIGNEE", assignee).min(24);
-    let inner = panel().inner(area).width as usize;
-    let room = inner.saturating_sub(4 + KEY_WIDTH + 3 * SEPARATOR_WIDTH);
+    let room = (area.width as usize).saturating_sub(lead + key_w + 3 * GAP + STATUS_DOT_WIDTH);
     let columns = &mut [(&mut assignee_w, 8), (&mut status_w, 8)];
     let summary_w = narrow_for_summary(room, 18, columns);
     (status_w, assignee_w, summary_w)
@@ -53,69 +58,38 @@ fn status_counts(app: &App, epic: &Epic, style: Style) -> Vec<Span<'static>> {
 pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let visible_epics = app.epics_visible_epics();
     let ages = Ages::of(app);
-    let key_w = KEY_WIDTH;
-    let (status_w, assignee_w, summary_w) = child_column_widths(area, &visible_epics);
-    let heading_style = Style::default()
-        .fg(Color::Reset)
-        .add_modifier(Modifier::BOLD);
+    let lead = lead_width(app);
+    let key_w = key_width(&visible_epics);
+    let (status_w, assignee_w, summary_w) = child_column_widths(area, lead, key_w, &visible_epics);
 
-    let mut lines = ListLines::default();
-
+    let mut lines = ListLines::new(app);
     if !visible_epics.is_empty() {
-        let header = Line::from(vec![
-            Span::styled(format!("    {:<key_w$}", "SEL KEY"), heading_style),
-            Span::styled(" │ ", style::secondary()),
-            Span::styled(format!("{:<status_w$}", "STATUS"), heading_style),
-            Span::styled(" │ ", style::secondary()),
-            Span::styled(format!("{:<assignee_w$}", "ASSIGNEE"), heading_style),
-            Span::styled(" │ ", style::secondary()),
-            Span::styled(format!("{:<summary_w$}", "SUMMARY"), heading_style),
-        ]);
-        let rule = "─".repeat(header.width());
-        lines.push(header);
-        lines.push(Span::styled(rule, style::secondary()));
-        lines.push("");
+        lines.intro(None);
     }
 
     for group in visible_epics {
         let epic = group.header;
-        let indicator = fold_indicator(group.tickets.is_none());
-        let marker = group_marker(app.group_selection_state(&epic.key));
-
         let is_header_selected = group.index == app.selected_index;
 
-        let inner = panel().inner(area).width as usize;
-        let prefix = 2 + 1 + 1 + 10 + 2; // mark + indicator + space + key + gap
-        let epic_summary_w = inner.saturating_sub(prefix).max(12);
-
-        let header_key_style = if is_header_selected {
-            style::heading().patch(style::selected_row())
-        } else {
-            style::heading()
-        };
-        let header_summary_style = if is_header_selected {
-            style::selected_row()
-        } else {
-            Style::default()
-        };
+        let summary_w_of_header = (area.width as usize)
+            .saturating_sub(lead + epic.key.width() + 2)
+            .max(12);
         lines.header(
             group.index,
             is_header_selected,
+            Span::styled(
+                fold_indicator(group.tickets.is_none()),
+                muted(tint(is_header_selected)),
+            ),
+            group_marker(app.group_selection_state(&epic.key)),
             vec![
-                Span::styled(
-                    format!("{} {} {:<10}", marker, indicator, epic.key),
-                    header_key_style,
-                ),
+                Span::styled(epic.key.clone(), style::heading()),
                 Span::raw("  "),
-                Span::styled(fit(&epic.summary, epic_summary_w), header_summary_style),
+                Span::styled(fit(&epic.summary, summary_w_of_header), style::heading()),
             ],
         );
-        let meta_style = if is_header_selected {
-            Style::default().fg(Color::Gray)
-        } else {
-            style::secondary()
-        };
-        let mut meta = vec![Span::raw("  ")];
+        let meta_style = style::secondary();
+        let mut meta = vec![Span::raw(" ".repeat(lead))];
         let bar = epic_bar(epic, app.status_rules(), EPIC_BAR_WIDTH, meta_style);
         meta.extend(app.delight.rainbow_bar(&epic.key, bar, Instant::now()));
         meta.extend(status_counts(app, epic, meta_style));
@@ -127,45 +101,29 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         };
 
         if children.is_empty() {
-            lines.push(Span::styled("    (no related tickets)", style::secondary()));
+            lines.push(Span::styled(
+                format!("{}(no related tickets)", " ".repeat(GUTTER)),
+                style::secondary(),
+            ));
         } else {
             for (index, ticket) in children {
                 let is_selected = *index == app.selected_index;
-
-                let base = if is_selected {
-                    style::selected_row()
-                } else {
-                    Style::default()
-                };
-
-                let base = ages.fade(ticket, base);
-                let status_style = style::status(&ticket.status, app.status_rules());
-                let status_style = if is_selected {
-                    status_style.patch(style::selected_row())
-                } else {
-                    status_style
-                };
-                let marker = ticket_marker(app.is_ticket_selected(&ticket.key));
+                let (base, primary) = ages.row_styles(ticket, is_selected, false);
                 let (key_cell, summary) = ticket_cells(
                     app,
                     group.family.get(index).copied(),
                     ticket,
-                    marker,
                     summary_w,
-                    base,
+                    primary,
                 );
 
                 let cells = vec![
-                    Span::styled(format!("    {:<key_w$}", key_cell), base),
-                    Span::styled(" │ ", base.patch(style::secondary())),
-                    Span::styled(
-                        fit(status_label(app, &ticket.status), status_w),
-                        status_style,
-                    ),
-                    Span::styled(" │ ", base.patch(style::secondary())),
-                    Span::styled(fit(assignee(ticket), assignee_w), base),
+                    vec![Span::styled(fit(&key_cell, key_w), primary)],
+                    status_cell(app, ticket, base, status_w),
+                    vec![Span::styled(fit(assignee(ticket), assignee_w), muted(base))],
                 ];
-                lines.ticket(*index, is_selected, cells, base, summary);
+                let mark = ticket_marker(app.is_ticket_selected(&ticket.key));
+                lines.ticket(*index, is_selected, mark, cells, base, summary);
             }
         }
 
@@ -191,18 +149,36 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &App) {
         }
     }
 
-    lines.render(f, area, app, panel());
+    lines.render(f, area, app);
 }
 
 #[cfg(test)]
 mod tests {
     use crate::app::{App, Tab};
     use crate::cache::{Epic, Ticket};
-    use crate::views::tests::{column_of, draw, line_with};
+    use crate::views::common::GAP;
+    use crate::views::tests::{draw, line_with};
     use ratatui::style::Color;
 
+    /// The drawn widths of the Status, Assignee and Summary cells in `row`, the line of a ticket
+    /// with no assignee ("-") and `DEMO-2` as its summary, `width` columns wide: from the dot
+    /// that starts Status to the "-" that starts Assignee to the summary.
+    fn columns_in(row: &str, width: u16) -> [usize; 3] {
+        let cells: Vec<char> = row.chars().collect();
+        let dot = cells.iter().position(|c| *c == '●').unwrap();
+        let dash = (dot..cells.len())
+            .find(|&at| cells[at] == '-' && cells[at - 1] == ' ')
+            .unwrap();
+        let summary = row[..row.rfind("DEMO-2").unwrap()].chars().count();
+        [
+            dash - GAP - (dot + 2),
+            summary - GAP - dash,
+            width as usize - summary,
+        ]
+    }
+
     /// The Epics tab drawn `width` wide with one child assigned to `assignee`, and the drawn
-    /// widths of its Status, Assignee and Summary columns, read from the headings.
+    /// widths of its Status, Assignee and Summary cells.
     fn epic_columns(width: u16, assignee: &str) -> (Vec<(String, Color)>, [usize; 3]) {
         let mut waiting = Ticket::for_test("DEMO-1", "Waiting for Approval");
         waiting.assignee = Some(assignee.into());
@@ -215,15 +191,7 @@ mod tests {
             children: vec![waiting, Ticket::for_test("DEMO-2", "In Progress")],
         }];
         let rows = draw(&app, Tab::Epics, width);
-        let header = &line_with(&rows, "SEL KEY").unwrap().0;
-        let [status, assignee, summary] =
-            ["STATUS", "ASSIGNEE", "SUMMARY"].map(|heading| column_of(header, heading));
-        // The panel's border and padding take two columns on each side.
-        let widths = [
-            assignee - status - 3,
-            summary - assignee - 3,
-            width as usize - 2 - summary,
-        ];
+        let widths = columns_in(&line_with(&rows, "DEMO-2").unwrap().0, width);
         (rows, widths)
     }
 
@@ -231,14 +199,13 @@ mod tests {
     fn epic_children_show_their_assignee_in_a_column_of_at_most_24() {
         let (rows, widths) = epic_columns(160, "Sam Doe");
         assert_eq!(widths[..2], [20, 8]);
-        assert!(line_with(&rows, "DEMO-1")
-            .unwrap()
-            .0
-            .contains("Waiting for Approval │ Sam Doe  │"));
-        assert!(line_with(&rows, "DEMO-2")
-            .unwrap()
-            .0
-            .contains("In Progress          │ -        │"));
+        let row = |key| line_with(&rows, key).unwrap().0.clone();
+        assert!(row("DEMO-1").contains("● Waiting for Approval  Sam Doe   D"));
+        assert!(row("DEMO-2").contains(&format!(
+            "● In Progress{}-{}D",
+            " ".repeat(11),
+            " ".repeat(9)
+        )));
 
         let name = "Alexandria Montgomery-Jo";
         let (rows, widths) = epic_columns(160, name);
@@ -246,14 +213,14 @@ mod tests {
         assert!(line_with(&rows, "DEMO-1")
             .unwrap()
             .0
-            .contains(&format!("│ {name} │")));
+            .contains(&format!("  {name}  D")));
 
         let (rows, widths) = epic_columns(160, "Alexandria Montgomery-Jon");
         assert_eq!(widths[1], 24);
         assert!(line_with(&rows, "DEMO-1")
             .unwrap()
             .0
-            .contains("│ Alexandria Montgomery... │"));
+            .contains("  Alexandria Montgomery...  D"));
 
         // Wide characters count by display width: 12 characters are 24 columns.
         let (_, widths) = epic_columns(160, "山田太郎山田太郎山田太郎");
@@ -262,15 +229,15 @@ mod tests {
 
     #[test]
     fn narrow_epics_trim_assignee_then_status_to_8_so_summary_keeps_18() {
-        // 95 columns leave Summary exactly 18 beside Status 20 and Assignee 24.
+        // 79 columns leave Summary exactly 18 beside Status 20 and Assignee 24.
         let name = "Alexandria Montgomery-Jo";
-        assert_eq!(epic_columns(95, name).1, [20, 24, 18]);
-        assert_eq!(epic_columns(94, name).1, [20, 23, 18]);
+        assert_eq!(epic_columns(79, name).1, [20, 24, 18]);
+        assert_eq!(epic_columns(78, name).1, [20, 23, 18]);
         // Assignee reaches 8 first, then Status gives up its columns.
-        assert_eq!(epic_columns(68, name).1, [9, 8, 18]);
-        assert_eq!(epic_columns(67, name).1, [8, 8, 18]);
+        assert_eq!(epic_columns(52, name).1, [9, 8, 18]);
+        assert_eq!(epic_columns(51, name).1, [8, 8, 18]);
         // Neither goes below 8, so Summary shrinks instead of the row overflowing.
-        assert_eq!(epic_columns(66, name).1, [8, 8, 17]);
+        assert_eq!(epic_columns(50, name).1, [8, 8, 17]);
     }
 
     #[test]
@@ -294,11 +261,12 @@ mod tests {
         ];
         app.toggle_group_collapse("EPIC-1");
         let rows = draw(&app, Tab::Epics, 160);
-        let header = &line_with(&rows, "SEL KEY").unwrap().0;
-        let [status, assignee, summary] =
-            ["STATUS", "ASSIGNEE", "SUMMARY"].map(|heading| column_of(header, heading));
-        // "STATUS" and "ASSIGNEE" are the widest drawn values: the folded epic's don't count.
-        assert_eq!([assignee - status - 3, summary - assignee - 3], [6, 8]);
+        // "STATUS" and "ASSIGNEE" are the narrowest the cells go, and the folded epic's longer
+        // values don't count.
+        assert_eq!(
+            columns_in(&line_with(&rows, "DEMO-2").unwrap().0, 160)[..2],
+            [6, 8]
+        );
         assert!(line_with(&rows, "DEMO-1").is_none());
     }
 }

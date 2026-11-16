@@ -71,21 +71,24 @@ mod tests {
                         let mut terminal = Terminal::new(TestBackend::new(160, 60)).unwrap();
                         terminal.draw(|frame| render_tab(frame, &app, tab)).unwrap();
                         let buffer = terminal.backend().buffer();
-                        assert_eq!(buffer[(0, 0)].symbol(), "╭");
                         let mut highlighted = Vec::new();
                         let mut text = String::new();
+                        let mut rows = Vec::new();
                         for y in 0..60 {
                             let mut row = String::new();
+                            let mut whole = String::new();
                             for x in 0..160 {
                                 let cell = &buffer[(x, y)];
-                                text.push_str(cell.symbol());
+                                whole.push_str(cell.symbol());
                                 if cell.bg == selected_bg() {
                                     row.push_str(cell.symbol());
                                 }
                             }
+                            text.push_str(&whole);
+                            rows.push(whole);
                             if !row.trim().is_empty() {
                                 assert_eq!(
-                                    buffer[(157, y)].bg,
+                                    buffer[(159, y)].bg,
                                     selected_bg(),
                                     "{tab:?}, row {index}: highlight fills the row"
                                 );
@@ -107,14 +110,20 @@ mod tests {
                                 _ => id,
                             },
                         };
-                        assert!(text.contains(if collapse { '▶' } else { '▼' }));
+                        // A folded status group says how to open it, and the other tabs' headers
+                        // lead with an arrow.
+                        match tab {
+                            Tab::MyWork | Tab::Filters => {
+                                assert_eq!(text.contains("(z to open)"), collapse, "{tab:?}")
+                            }
+                            _ => assert!(text.contains(if collapse { '▶' } else { '▼' })),
+                        }
                         assert!(highlighted.iter().any(|row| row.to_uppercase().contains(&expected.to_uppercase())),
                             "{tab:?}, search {search:?}, collapse {collapse}, row {index}: expected {expected}, got {highlighted:?}");
                         if tab == Tab::Team {
-                            assert!(text.contains("active: 1  done: 1"));
-                            if !collapse {
-                                assert!(text.contains("done (1)"));
-                            }
+                            assert!(text.contains("active 1 · done 1"));
+                            let done_line = rows.iter().any(|row| row.trim_end() == "   done 1");
+                            assert_eq!(done_line, !collapse, "{rows:?}");
                         }
                     }
                 }
@@ -182,21 +191,14 @@ mod tests {
             labelled("DEMO-3", None, &["Q3", "infra"]),
         ];
         let rows = draw(&app, Tab::MyWork, 120);
-        let header_y = rows
-            .iter()
-            .position(|(r, _)| r.contains("SEL KEY"))
-            .unwrap();
-        let header = &rows[header_y].0;
-        assert!(
-            !header.contains("EPIC") && header.contains("LABELS"),
-            "{header}"
-        );
-        let (shared, color) = &rows[header_y + 1];
+        // The shared line leads the list, over the first group.
+        let (shared, color) = &rows[0];
         assert!(
             shared.contains("all rows · epic PAY: Payments Platform Revamp · infra, Q3"),
             "{shared}"
         );
         assert_eq!(*color, Color::DarkGray);
+        assert!(rows[2].0.contains("In Progress"), "{rows:?}");
         // Rows keep only the labels that tell them apart.
         let row = &line_with(&rows, "DEMO-1").unwrap().0;
         assert!(row.contains("tech-debt") && !row.contains("infra"), "{row}");
@@ -210,13 +212,14 @@ mod tests {
         ];
         app.mark_cache_changed();
         let rows = draw(&app, Tab::MyWork, 120);
-        let header = &line_with(&rows, "SEL KEY").unwrap().0;
-        assert!(
-            header.contains("EPIC") && !header.contains("LABELS"),
-            "{header}"
-        );
         assert!(line_with(&rows, "all rows · infra").is_some());
         assert!(line_with(&rows, "DEMO-2").unwrap().0.contains("Runner"));
+        // Epic is 24 columns, so the long name ends "...".
+        assert!(line_with(&rows, "DEMO-1")
+            .unwrap()
+            .0
+            .contains("PAY: Payments Platfor..."));
+        assert!(!line_with(&rows, "DEMO-1").unwrap().0.contains("infra"));
 
         // Nothing shared: no line, and both columns.
         app.cache.my_tickets = vec![
@@ -226,10 +229,12 @@ mod tests {
         app.mark_cache_changed();
         let rows = draw(&app, Tab::MyWork, 120);
         assert!(line_with(&rows, "all rows").is_none());
-        let header = &line_with(&rows, "SEL KEY").unwrap().0;
+        let row = &line_with(&rows, "DEMO-1").unwrap().0;
+        assert!(row.contains("PAY: Payments Platfor...") && row.contains("infra"));
+        let row = &line_with(&rows, "DEMO-2").unwrap().0;
         assert!(
-            header.contains("EPIC") && header.contains("LABELS"),
-            "{header}"
+            row.contains("Runner") && row.trim_end().ends_with(" -"),
+            "{row}"
         );
     }
 
@@ -256,10 +261,10 @@ mod tests {
     #[test]
     fn shared_values_follow_search_status_focus_and_folding() {
         let epic_column = |app: &App| {
-            line_with(&draw(app, Tab::MyWork, 120), "SEL KEY")
+            line_with(&draw(app, Tab::MyWork, 120), "DEMO-1")
                 .unwrap()
                 .0
-                .contains("EPIC")
+                .contains("PAY: Payments")
         };
         let mut app = App::new();
         app.loading = false;
@@ -294,7 +299,8 @@ mod tests {
         app.mark_cache_changed();
         let rows = draw(&app, Tab::MyWork, 120);
         assert!(line_with(&rows, "all rows").is_none());
-        assert!(line_with(&rows, "SEL KEY").unwrap().0.contains("LABELS"));
+        let row = &line_with(&rows, "DEMO-1").unwrap().0;
+        assert!(row.trim_end().ends_with(" x"), "the Labels column: {row}");
     }
 
     #[test]
@@ -329,16 +335,17 @@ mod tests {
             app.active_tab = tab;
             app.mark_cache_changed();
             let rows = draw(&app, tab, 160);
-            let header_y = rows
-                .iter()
-                .position(|(r, _)| r.contains("SEL KEY"))
-                .unwrap();
-            let header = &rows[header_y].0;
+            let key = if tab == Tab::Unassigned {
+                "DEMO-3"
+            } else {
+                "DEMO-1"
+            };
+            let row = &line_with(&rows, key).unwrap().0;
             assert!(
-                !header.contains("EPIC") && !header.contains("LABELS"),
-                "{header}"
+                !row.contains("Payments") && !row.contains("infra"),
+                "{tab:?}: {row}"
             );
-            let (shared, color) = &rows[header_y + 1];
+            let (shared, color) = line_with(&rows, "all rows").unwrap();
             // Unassigned's groups are its epics, so its line leaves the epic out.
             let expected = if tab == Tab::Unassigned {
                 "all rows · infra"
@@ -354,7 +361,6 @@ mod tests {
         app.cache.team_tickets[1].epic_name = Some("Runner".into());
         app.mark_cache_changed();
         let rows = draw(&app, Tab::Team, 160);
-        assert!(line_with(&rows, "SEL KEY").unwrap().0.contains("EPIC"));
         assert!(line_with(&rows, "all rows · infra").is_some());
         assert!(line_with(&rows, "DEMO-2").unwrap().0.contains("Runner"));
 
@@ -366,10 +372,10 @@ mod tests {
             app.active_tab = tab;
             app.mark_cache_changed();
             let rows = draw(&app, tab, 160);
-            let header = &line_with(&rows, "SEL KEY").unwrap().0;
+            let row = &line_with(&rows, "DEMO-4").unwrap().0;
             assert!(
-                !header.contains("EPIC") && !header.contains("LABELS"),
-                "{tab:?}: {header}"
+                !row.contains("Runner") && !row.contains("tech-debt"),
+                "{tab:?}: {row}"
             );
         }
     }
@@ -394,31 +400,31 @@ mod tests {
         };
 
         let rows = draw_with(&mut app, None);
-        assert!(line_with(&rows, " Results (3) ").is_some());
+        assert!(line_with(&rows, "Results (3)").is_some());
 
         // The count is what the search keeps, a folded group's ticket included.
         let rows = draw_with(&mut app, Some("needle"));
-        assert!(line_with(&rows, " Results (2) ").is_some());
+        assert!(line_with(&rows, "Results (2)").is_some());
         assert!(line_with(&rows, "DEMO-1").is_some());
         assert!(line_with(&rows, "DEMO-2").is_none());
         assert!(line_with(&rows, "DEMO-3").is_none());
 
         let rows = draw_with(&mut app, Some("zzz"));
-        assert!(line_with(&rows, " Results (0) ").is_some());
+        assert!(line_with(&rows, "Results (0)").is_some());
         assert!(line_with(&rows, "No results match \"zzz\"").is_some());
-        assert!(line_with(&rows, "SEL KEY").is_none());
+        assert!(line_with(&rows, "DEMO-").is_none());
 
         // With no results at all, the search has nothing to explain.
         app.filter_results.clear();
         let rows = draw_with(&mut app, Some("zzz"));
-        assert!(line_with(&rows, " Results ").is_some());
+        assert!(line_with(&rows, "Results").is_some());
         assert!(line_with(&rows, "Results (").is_none());
         assert!(line_with(&rows, "Select a filter and press Enter to run it").is_some());
         assert!(line_with(&rows, "No results match").is_none());
     }
 
     #[test]
-    fn team_draws_the_shared_line_once_under_the_first_column_headers() {
+    fn team_draws_the_shared_line_once_at_the_top() {
         let mut app = App::new();
         app.loading = false;
         app.active_tab = Tab::Team;
@@ -445,8 +451,7 @@ mod tests {
         let shared: Vec<usize> = (0..rows.len())
             .filter(|&y| rows[y].0.contains("all rows"))
             .collect();
-        let first_header = rows.iter().position(|(r, _)| r.contains("SEL KEY"));
-        assert_eq!(shared, [first_header.unwrap() + 1], "{rows:?}");
+        assert_eq!(shared, [0], "{rows:?}");
     }
 
     #[test]
@@ -496,11 +501,12 @@ mod tests {
         app.loading = false;
         app.replace_cache_full_scope(cache.clone(), app.moves.now());
         let text = screen(&app, Tab::MyWork);
-        assert!(text.contains("▼ IN PROGRESS (1)"), "{text}");
+        let has_line = |text: &str, line: &str| text.lines().any(|row| row.trim_end() == line);
+        assert!(has_line(&text, " ● In Progress 1"), "{text}");
         assert!(text.contains("DEMO-1"), "{text}");
-        // Folded, each done group keeps its header and count but draws no rows.
-        assert!(text.contains("▶ CLOSED (2)"), "{text}");
-        assert!(text.contains("▶ RESOLVED (1)"), "{text}");
+        // Folded, each done group keeps its header and count, says how to open, and draws no rows.
+        assert!(text.contains("● Closed 2  (z to open)"), "{text}");
+        assert!(text.contains("● Resolved 1  (z to open)"), "{text}");
         for key in ["DEMO-2", "DEMO-3", "DEMO-4"] {
             assert!(!text.contains(key), "{key} is folded away: {text}");
         }
@@ -509,19 +515,22 @@ mod tests {
         app.toggle_group_collapse("Closed");
         app.replace_cache(cache.clone(), app.moves.now());
         let text = screen(&app, Tab::MyWork);
-        assert!(text.contains("▼ CLOSED (2)"), "{text}");
+        assert!(has_line(&text, " ● Closed 2"), "{text}");
         assert!(text.contains("DEMO-2") && text.contains("DEMO-3"), "{text}");
-        assert!(text.contains("▶ RESOLVED (1)"), "{text}");
+        assert!(text.contains("● Resolved 1  (z to open)"), "{text}");
 
-        // `d` still hides done tickets, headers included, and shows them again.
+        // `d` still hides done tickets, headers included, and says how many and how to show them.
         app.toggle_show_done();
         let text = screen(&app, Tab::MyWork);
         assert!(
-            !text.contains("CLOSED") && !text.contains("RESOLVED"),
+            !text.contains("Closed") && !text.contains("Resolved"),
             "{text}"
         );
+        assert!(text.contains("● Done 3  (d to show)"), "{text}");
         app.toggle_show_done();
-        assert!(screen(&app, Tab::MyWork).contains("▼ CLOSED (2)"));
+        let text = screen(&app, Tab::MyWork);
+        assert!(has_line(&text, " ● Closed 2"), "{text}");
+        assert!(!text.contains("(d to show)"), "{text}");
 
         // A filter's results start with their done groups folded too.
         app.active_tab = Tab::Filters;
@@ -549,14 +558,21 @@ mod tests {
         cache.my_tickets.push(Ticket::for_test("DEMO-2", "Closed"));
         app.replace_cache_full_scope(cache.clone(), app.moves.now());
         let rows = draw(&app, Tab::MyWork, 120);
-        assert!(line_with(&rows, "▶ CLOSED (1)").is_some(), "{rows:?}");
+        assert!(
+            line_with(&rows, "● Closed 1  (z to open)").is_some(),
+            "{rows:?}"
+        );
         assert!(line_with(&rows, "DEMO-2").is_none(), "{rows:?}");
 
         // Resolved mid-session: a done group that first appears after the full read shows open.
         cache.my_tickets[0].status = "Resolved".into();
         app.replace_cache_full_scope(cache, app.moves.now());
         let rows = draw(&app, Tab::MyWork, 120);
-        assert!(line_with(&rows, "▼ RESOLVED (1)").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "● Resolved 1").is_some(), "{rows:?}");
+        assert!(
+            line_with(&rows, "Resolved 1  (z to open)").is_none(),
+            "{rows:?}"
+        );
         assert!(line_with(&rows, "DEMO-1").is_some(), "{rows:?}");
     }
 
@@ -568,11 +584,12 @@ mod tests {
         app.loading = false;
         // The snapshot folds Closed; the user opens it before the full read lands.
         app.replace_cache(cache.clone(), app.moves.now());
-        assert!(line_with(&draw(&app, Tab::MyWork, 120), "▶ CLOSED (1)").is_some());
+        assert!(line_with(&draw(&app, Tab::MyWork, 120), "● Closed 1  (z to open)").is_some());
         app.toggle_group_collapse("Closed");
         app.replace_cache_full_scope(cache, app.moves.now());
         let rows = draw(&app, Tab::MyWork, 120);
-        assert!(line_with(&rows, "▼ CLOSED (1)").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "● Closed 1").is_some(), "{rows:?}");
+        assert!(line_with(&rows, "(z to open)").is_none(), "{rows:?}");
     }
 
     #[test]
@@ -598,7 +615,7 @@ mod tests {
                 .collect()
         };
         let row = |rows: &[String], key: &str| rows.iter().position(|r| r.contains(key)).unwrap();
-        let column = |rows: &[String], key: &str| rows[row(rows, key)].find(key).unwrap();
+        let column = |rows: &[String], key: &str| column_of(&rows[row(rows, key)], key);
 
         let parent = Ticket::for_test("DEMO-1", "In Progress");
         let plain = Ticket::for_test("DEMO-2", "In Progress");
@@ -618,7 +635,9 @@ mod tests {
         let rows = rows_of(&app, Tab::Epics);
         assert_eq!(row(&rows, "DEMO-3"), row(&rows, "DEMO-1") + 1);
         assert!(row(&rows, "DEMO-2") > row(&rows, "DEMO-3"));
-        assert_eq!(column(&rows, "DEMO-3"), column(&rows, "DEMO-1") + 2);
+        // A sub-task is indented two cells and leads with `└ `.
+        assert_eq!(column(&rows, "DEMO-3"), column(&rows, "DEMO-1") + 4);
+        assert_eq!(column(&rows, "└ DEMO-3"), column(&rows, "DEMO-1") + 2);
         assert!(rows[row(&rows, "DEMO-1")].contains("DEMO-1 ▼"));
 
         // Folded, the parent says how many sub-tasks are hidden and they have no row.
@@ -819,13 +838,13 @@ mod tests {
                 "{tab:?}: {columns:?}"
             );
             let row = &line_with(&rows, "DEMO-1").unwrap().0;
-            assert!(row.contains("Waiting for Approval │"), "{tab:?}: {row}");
+            assert!(row.contains("Waiting for Approval  "), "{tab:?}: {row}");
         }
 
-        // Narrow, Status gives up columns so the row still ends inside the panel. Team's narrowest
-        // fit is 84 (its Epic and Labels keep their floors even while hidden), and Filters shares
-        // its width with the list of filters.
-        for (tab, width) in [(Tab::Team, 84), (Tab::Unassigned, 60), (Tab::Filters, 84)] {
+        // Narrow, Status gives up columns so the row still ends inside the screen. Team's
+        // narrowest fit is 65 (its Epic and Labels keep their floors even while hidden), and
+        // Filters shares its width with the list of filters.
+        for (tab, width) in [(Tab::Team, 65), (Tab::Unassigned, 47), (Tab::Filters, 56)] {
             app.active_tab = tab;
             app.mark_cache_changed();
             let rows = draw(&app, tab, width);
@@ -834,7 +853,7 @@ mod tests {
                 row.contains("Wait") && !row.contains("Approval"),
                 "{tab:?}: {row}"
             );
-            assert!(line_with(&rows, "UPDATED").is_some(), "{tab:?}: {rows:#?}");
+            assert!(row.trim_end().ends_with(" -"), "{tab:?}: {row}");
         }
     }
 
@@ -908,18 +927,27 @@ mod tests {
             app.active_tab = tab;
             app.mark_cache_changed();
             let rows = draw(&app, tab, 160);
-            let header = &line_with(&rows, "SEL KEY").unwrap().0;
-            let column = |title: &str| header.split('│').position(|cell| cell.contains(title));
-            let updated = column("UPDATED").expect(header);
-            if let Some(labels) = column("LABELS") {
-                assert_eq!(updated + 1, labels, "{tab:?}: {header}");
-            }
-            let age_of = |key: &str| {
-                let row = &line_with(&rows, key).unwrap().0;
-                row.split('│').nth(updated).unwrap().trim().to_string()
-            };
-            for (key, age) in [("DEMO-1", "23m"), ("DEMO-2", "3d"), ("DEMO-4", "5h")] {
-                assert_eq!(age_of(key), age, "{tab:?}: {key}");
+            // Every age ends in the same column, and Labels, where a tab has it, follows.
+            let ends: Vec<(usize, String)> =
+                [("DEMO-1", "23m"), ("DEMO-2", "3d"), ("DEMO-4", "5h")]
+                    .iter()
+                    .map(|(key, age)| {
+                        let row = &line_with(&rows, key).unwrap().0;
+                        let at = row
+                            .rfind(&format!(" {age}"))
+                            .unwrap_or_else(|| panic!("{tab:?}: no {age} on {row}"));
+                        (row[..at].chars().count() + 1 + age.len(), row.clone())
+                    })
+                    .collect();
+            assert!(
+                ends.iter().all(|(end, _)| *end == ends[0].0),
+                "{tab:?}: {ends:?}"
+            );
+            let first = &ends[0].1;
+            if matches!(tab, Tab::MyWork | Tab::Team) {
+                assert!(first.trim_end().ends_with("23m  a"), "{tab:?}: {first}");
+            } else {
+                assert!(first.trim_end().ends_with("23m"), "{tab:?}: {first}");
             }
             if tab == Tab::Unassigned {
                 continue; // grouped by epic, not status
@@ -1017,7 +1045,11 @@ mod tests {
                     ));
                 }
                 Target::Fold(_) => {
-                    assert!(["▼", "▶"].contains(&cell.symbol()), "{}", row_text(rect.y))
+                    assert!(
+                        ["●", "▼", "▶"].contains(&cell.symbol()),
+                        "{}",
+                        row_text(rect.y)
+                    )
                 }
                 _ => {}
             }
@@ -1093,7 +1125,7 @@ mod tests {
                     .clone()
             };
             let header = match tab {
-                Tab::MyWork | Tab::Filters => "IN PROGRESS",
+                Tab::MyWork | Tab::Filters => "In Progress",
                 Tab::Team => "Alex",
                 Tab::Epics => "EPIC-9",
                 Tab::Unassigned => "No Epic",
@@ -1107,21 +1139,20 @@ mod tests {
             let (mark, fg, _, _) = mark_of(header);
             assert_eq!((mark.as_str(), fg), ("⊟", Color::Cyan), "{tab:?}");
 
-            // The mark takes one column, so the columns stay where the headings put them.
+            // The checkbox is two cells, so every key starts two after it.
             let buffer = terminal.backend().buffer();
             let row_text = |y: u16| {
                 (0..160)
                     .map(|x| buffer[(x, y)].symbol())
                     .collect::<String>()
             };
-            let bars = |y: u16| {
-                (0..160)
-                    .filter(|&x| buffer[(x, y)].symbol() == "│")
-                    .collect::<Vec<_>>()
-            };
-            let heading = (0..40).find(|&y| row_text(y).contains("SEL KEY")).unwrap();
             for y in (0..40).filter(|&y| row_text(y).contains(unpicked_key)) {
-                assert_eq!(bars(y), bars(heading), "{tab:?}: {}", row_text(y));
+                let row = row_text(y);
+                assert_eq!(
+                    column_of(&row, unpicked_key),
+                    column_of(&row, "☐") + 2,
+                    "{tab:?}: {row}"
+                );
             }
 
             // Everything selected: the group is selected too.
@@ -1131,18 +1162,79 @@ mod tests {
             let header_mark = marks.iter().find(|mark| mark.3.contains(header)).unwrap();
             assert_eq!((header_mark.0.as_str(), header_mark.1), ("☒", Color::Cyan));
 
-            // Nothing selected: every mark away from the cursor is unselected and muted.
+            // Nothing selected: marking is over, so no checkbox is drawn anywhere.
             app.clear_selected_tickets();
             draw(&mut terminal, &app, tab);
-            let unhighlighted: Vec<_> = marks_drawn(&terminal, &app)
-                .into_iter()
-                .filter(|mark| !mark.2)
-                .map(|mark| (mark.0, mark.1))
-                .collect();
-            assert!(unhighlighted.len() > 1, "{tab:?}");
-            for mark in unhighlighted {
-                assert_eq!(mark, ("☐".to_string(), Color::DarkGray), "{tab:?}");
-            }
+            assert!(
+                terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .all(|cell| !cell.symbol().starts_with(common::MARKS)),
+                "{tab:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn checkboxes_appear_on_every_row_and_header_only_while_a_ticket_is_marked() {
+        let boxes = |terminal: &Terminal<TestBackend>| {
+            let buffer = terminal.backend().buffer();
+            buffer
+                .content
+                .iter()
+                .filter(|cell| cell.symbol().starts_with(common::MARKS))
+                .count()
+        };
+        // (tab, key of a ticket, how many rows and headers draw a checkbox): each ticket and
+        // group, so a header counts as one.
+        for (tab, key, items) in [
+            (Tab::MyWork, "DEMO-1", 4),
+            (Tab::Team, "DEMO-1", 2),
+            (Tab::Epics, "DEMO-1", 3),
+            (Tab::Unassigned, "DEMO-3", 3),
+            (Tab::Filters, "DEMO-1", 4),
+        ] {
+            let mut app = App::new();
+            app.loading = false;
+            app.active_tab = tab;
+            app.filter_focus = FilterFocus::Results;
+            let mine = |key: &str, status: &str, email: &str| {
+                let mut ticket = Ticket::for_test(key, status);
+                ticket.assignee_email = Some(email.into());
+                ticket
+            };
+            app.cache.my_tickets = vec![
+                mine("DEMO-1", "In Progress", "alex@example.com"),
+                mine("DEMO-2", "To Do", "alex@example.com"),
+            ];
+            app.filter_results = app.cache.my_tickets.clone();
+            app.cache.team_tickets = vec![
+                mine("DEMO-1", "In Progress", "alex@example.com"),
+                mine("DEMO-3", "To Do", "__unassigned__"),
+                mine("DEMO-4", "To Do", "__unassigned__"),
+            ];
+            app.cache.team_members = vec![TeamMember {
+                name: "Alex".into(),
+                email: "alex@example.com".into(),
+            }];
+            app.cache.epics = vec![Epic {
+                key: "EPIC-9".into(),
+                summary: "Epic".into(),
+                children: app.cache.my_tickets.clone(),
+            }];
+            let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+            terminal.draw(|frame| render_tab(frame, &app, tab)).unwrap();
+            assert_eq!(boxes(&terminal), 0, "{tab:?}: none while nothing is marked");
+
+            app.selected_ticket_keys.insert(key.into());
+            terminal.draw(|frame| render_tab(frame, &app, tab)).unwrap();
+            assert_eq!(
+                boxes(&terminal),
+                items,
+                "{tab:?}: one on every row and header"
+            );
         }
     }
 
@@ -1176,7 +1268,7 @@ mod tests {
             ticket("DEMO-3", "To Do", 91 * DAY + DAY / 2),
             ticket("DEMO-4", "Closed", 91 * DAY + DAY / 2),
         ];
-        // A label on one row keeps the Labels column, so Updated has a separator after it.
+        // A label on one row keeps the Labels column, which follows Updated.
         app.cache.my_tickets[0].labels = vec!["a".into()];
         app.mark_cache_changed();
 
@@ -1189,15 +1281,7 @@ mod tests {
             .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
             .collect();
         let row = |text: &str| rows.iter().position(|row| row.contains(text)).unwrap();
-        let header = &rows[row("SEL KEY")];
-        let updated = header
-            .split('│')
-            .position(|c| c.contains("UPDATED"))
-            .unwrap();
-        let separator_after_updated = |row: &str| {
-            let (at, _) = row.match_indices('│').nth(updated).unwrap();
-            row[..at].chars().count()
-        };
+        let mut ends = Vec::new();
         for (key, age) in [
             ("DEMO-1", "2w"),
             ("DEMO-2", "3w"),
@@ -1205,14 +1289,12 @@ mod tests {
             ("DEMO-4", "13w"),
         ] {
             let drawn = &rows[row(key)];
-            let cell = drawn.split('│').nth(updated).unwrap();
-            assert_eq!(cell.split_whitespace().collect::<Vec<_>>().join(" "), age);
-            assert_eq!(
-                separator_after_updated(drawn),
-                separator_after_updated(header),
-                "{key}: {drawn}"
-            );
+            let at = drawn
+                .rfind(&format!(" {age}"))
+                .unwrap_or_else(|| panic!("{key}: no {age} on {drawn}"));
+            ends.push(drawn[..at].chars().count() + 1 + age.len());
         }
+        assert!(ends.iter().all(|end| *end == ends[0]), "{ends:?}");
         let fg = |key: &str, text: &str| {
             let y = row(key);
             buffer[(column_of(&rows[y], text) as u16, y as u16)].fg
@@ -1250,16 +1332,16 @@ mod tests {
         app.cache.my_tickets = vec![ticket.clone()];
         app.cache.team_tickets = vec![ticket];
         app.mark_cache_changed();
-        assert!(line_with(&draw(&app, Tab::MyWork, 120), "CURSED (1)").is_some());
+        assert!(line_with(&draw(&app, Tab::MyWork, 120), "Cursed 1").is_some());
         app.active_tab = Tab::Team;
         app.mark_cache_changed();
         let team = draw(&app, Tab::Team, 120);
-        assert!(line_with(&team, "DEMO-1").unwrap().0.contains("│ Cursed "));
+        assert!(line_with(&team, "DEMO-1").unwrap().0.contains("● Cursed "));
 
         app.delight.today = None;
         app.active_tab = Tab::MyWork;
         app.mark_cache_changed();
-        assert!(line_with(&draw(&app, Tab::MyWork, 120), "BLOCKED (1)").is_some());
+        assert!(line_with(&draw(&app, Tab::MyWork, 120), "Blocked 1").is_some());
     }
 
     #[test]
@@ -1342,7 +1424,7 @@ mod tests {
     }
 
     /// Draws `tab` `width` by `height`: each row's text and whether it is highlighted, after
-    /// checking a highlighted row's highlight reaches the panel's right edge.
+    /// checking a highlighted row's highlight reaches the screen's right edge.
     fn draw_highlights(app: &App, tab: Tab, width: u16, height: u16) -> Vec<(String, bool)> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| render_tab(frame, app, tab)).unwrap();
@@ -1352,7 +1434,7 @@ mod tests {
                 let text: String = (0..width).map(|x| buffer[(x, y)].symbol()).collect();
                 let lit = (0..width).any(|x| buffer[(x, y)].bg == selected_bg());
                 if lit {
-                    assert_eq!(buffer[(width - 3, y)].bg, selected_bg(), "{tab:?}: {text}");
+                    assert_eq!(buffer[(width - 1, y)].bg, selected_bg(), "{tab:?}: {text}");
                 }
                 (text, lit)
             })
@@ -1423,9 +1505,8 @@ mod tests {
                 line_with(&rows, "DEMO-5").is_some_and(|(_, lit)| *lit),
                 "{tab:?}"
             );
-            // Row 13 is the panel's bottom border, so 12 is its last inner row.
             assert!(
-                rows[12].0.contains("last5") && rows[12].1,
+                rows[13].0.contains("last5") && rows[13].1,
                 "{tab:?}: {rows:#?}"
             );
         }
@@ -1435,16 +1516,17 @@ mod tests {
     fn a_wrapped_ticket_taller_than_the_list_keeps_its_key_line_on_screen() {
         for &tab in Tab::all() {
             let mut tall = Ticket::for_test("DEMO-2", "In Progress");
-            tall.summary = words(80).join(" ");
+            tall.summary = words(200).join(" ");
             let mut app = wrapping_app(tab, vec![Ticket::for_test("DEMO-1", "In Progress"), tall]);
             select_ticket(&mut app, "DEMO-2");
             let rows = draw_highlights(&app, tab, 100, 8);
-            // Row 0 is the panel's top border, so 1 is its first inner row.
+            // The list starts at the top, under Filters' two-row pane title.
+            let top = if tab == Tab::Filters { 2 } else { 0 };
             assert!(
-                rows[1].0.contains("DEMO-2") && rows[1].1,
+                rows[top].0.contains("DEMO-2") && rows[top].1,
                 "{tab:?}: {rows:#?}"
             );
-            assert!(rows[1].0.contains("word01"), "{tab:?}: {rows:#?}");
+            assert!(rows[top].0.contains("word01"), "{tab:?}: {rows:#?}");
         }
     }
 
@@ -1465,7 +1547,7 @@ mod tests {
     }
 
     #[test]
-    fn a_wrapped_summarys_later_lines_are_blank_before_summarys_separator() {
+    fn a_wrapped_summarys_later_lines_are_blank_before_the_summary() {
         for &tab in Tab::all() {
             let mut long = Ticket::for_test("DEMO-1", "In Progress");
             long.summary = words(30).join(" ");
@@ -1480,22 +1562,316 @@ mod tests {
                 .unwrap();
             let text = String::from_iter(&rows[key]);
             let column = |word: &str| text[..text.find(word).unwrap()].chars().count();
-            let separator = column("word01") - 2;
-            // The list panel's left border: Filters draws its sidebar to the left of it.
-            let border = rows[key][..column("DEMO-1")]
+            let summary = column("word01");
+            // The list's left edge: Filters draws its sidebar and the divider to the left of it.
+            let left = rows[key][..column("DEMO-1")]
                 .iter()
                 .rposition(|c| *c == '│')
-                .unwrap();
-            for row in &rows[key..key + 2] {
-                assert_eq!(row[separator], '│', "{tab:?}: {}", String::from_iter(row));
-            }
+                .map_or(0, |divider| divider + 1);
             let later = &rows[key + 1];
             assert!(
-                later[border + 1..separator].iter().all(|c| *c == ' '),
+                later[left..summary].iter().all(|c| *c == ' '),
                 "{tab:?}: {}",
                 String::from_iter(later)
             );
             assert!(String::from_iter(later).contains("word"), "{tab:?}");
+            assert_ne!(
+                later[summary], ' ',
+                "{tab:?}: the summary continues in line"
+            );
+        }
+    }
+
+    /// The mockup's My Work: DEMO-101 with its sub-task DEMO-111 under In Progress, DEMO-201
+    /// under Ready for Work, DEMO-102 under In Review. The epics differ, so Epic shows.
+    fn mockup_app() -> App {
+        let ticket = |key: &str, summary: &str, status: &str, epic: &str, labels: &[&str]| {
+            let mut ticket = Ticket::for_test(key, status);
+            ticket.summary = summary.into();
+            ticket.epic_name = Some(epic.into());
+            ticket.labels = labels.iter().map(|label| label.to_string()).collect();
+            ticket
+        };
+        let mut child = ticket(
+            "DEMO-111",
+            "Migrate stored cards to the new vault",
+            "In Progress",
+            "Checkout redesign",
+            &["checkout"],
+        );
+        child.parent_key = Some("DEMO-101".into());
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = vec![
+            ticket(
+                "DEMO-101",
+                "Add saved payment methods to checkout",
+                "In Progress",
+                "Checkout redesign",
+                &["checkout", "frontend"],
+            ),
+            child,
+            ticket(
+                "DEMO-201",
+                "Profile slow facet queries",
+                "Ready for Work",
+                "Search performance",
+                &["search", "perf"],
+            ),
+            ticket(
+                "DEMO-102",
+                "Fix tax rounding for multi-currency carts",
+                "In Review",
+                "Checkout redesign",
+                &["checkout", "billing"],
+            ),
+        ];
+        app.mark_cache_changed();
+        app
+    }
+
+    /// The text of each row of `draw`, trailing blanks cut.
+    fn trimmed(rows: &[(String, Color)]) -> Vec<String> {
+        rows.iter()
+            .map(|(row, _)| row.trim_end().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn my_work_at_120_columns_is_the_mockup_with_groups_rows_and_sub_tasks_in_their_cells() {
+        let mut app = mockup_app();
+        // The cursor on DEMO-101: its group's header is item 0.
+        app.selected_index = 1;
+        let rows = trimmed(&draw(&app, Tab::MyWork, 120));
+        let expected = [
+            "",
+            " ● In Progress 2",
+            " › DEMO-101 ▼    Add saved payment methods to checkout            Checkout redesign            -  checkout, frontend",
+            "     └ DEMO-111  Migrate stored cards to the new vault            Checkout redesign            -  checkout",
+            "",
+            " ● Ready for Work 1",
+            "   DEMO-201      Profile slow facet queries                       Search performance           -  search, perf",
+            "",
+            " ● In Review 1",
+            "   DEMO-102      Fix tax rounding for multi-currency carts        Checkout redesign            -  checkout, billing",
+            "",
+        ];
+        assert_eq!(rows[..expected.len()], expected, "{rows:#?}");
+        assert!(rows[expected.len()..].iter().all(String::is_empty));
+    }
+
+    #[test]
+    fn rows_put_the_marker_the_key_and_the_summary_in_exact_columns() {
+        let mut app = mockup_app();
+        app.selected_index = 1;
+        let rows = draw(&app, Tab::MyWork, 120);
+        let at = |key: &str, text: &str| column_of(&line_with(&rows, key).unwrap().0, text);
+        // Marker in column 1, key in 3, the fold arrow after it, summary after the widest key cell
+        // (a sub-task's `  └ DEMO-111`, 12 cells) and a gap of 2.
+        assert_eq!(at("DEMO-101", "›"), 1);
+        assert_eq!(at("DEMO-101", "DEMO-101"), 3);
+        assert_eq!(at("DEMO-101", "▼"), 12);
+        assert_eq!(at("DEMO-101", "Add saved"), 17);
+        // A sub-task is indented two cells under its parent, with the `└` before its key.
+        assert_eq!(at("DEMO-111", "└"), 5);
+        assert_eq!(at("DEMO-111", "DEMO-111"), 7);
+        assert_eq!(at("DEMO-111", "Migrate"), 17);
+        // Another row's gutter is blank: its key and summary are where the selected row's are.
+        let other = &line_with(&rows, "DEMO-201").unwrap().0;
+        assert_eq!(other.chars().nth(1), Some(' '));
+        assert_eq!(at("DEMO-201", "DEMO-201"), 3);
+        assert_eq!(at("DEMO-201", "Profile"), 17);
+        // The group header's dot is in column 1 and its name in 3.
+        assert_eq!(at("In Progress", "●"), 1);
+        assert_eq!(at("In Progress", "In Progress"), 3);
+
+        // Marking adds the checkbox and its space before the key, and moves the rest two over.
+        app.selected_ticket_keys.insert("DEMO-201".into());
+        let rows = draw(&app, Tab::MyWork, 120);
+        let at = |key: &str, text: &str| column_of(&line_with(&rows, key).unwrap().0, text);
+        assert_eq!(at("DEMO-101", "›"), 1);
+        assert_eq!(at("DEMO-101", "☐"), 3);
+        assert_eq!(at("DEMO-101", "DEMO-101"), 5);
+        assert_eq!(at("DEMO-101", "Add saved"), 19);
+        assert_eq!(at("DEMO-111", "└"), 7);
+        assert_eq!(at("DEMO-111", "DEMO-111"), 9);
+        assert_eq!(at("DEMO-201", "☒"), 3);
+        assert_eq!(at("DEMO-201", "DEMO-201"), 5);
+        assert_eq!(at("In Progress", "●"), 1);
+        assert_eq!(at("In Progress", "☐"), 3);
+        assert_eq!(at("In Progress", "In Progress"), 5);
+    }
+
+    #[test]
+    fn the_selected_row_has_an_accent_marker_a_full_width_tint_and_a_bold_key_and_summary() {
+        let mut app = mockup_app();
+        app.selected_index = 1;
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        terminal
+            .draw(|frame| render_tab(frame, &app, Tab::MyWork))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let y = 2;
+        let bold = |x: u16| {
+            buffer[(x, y)]
+                .modifier
+                .contains(ratatui::style::Modifier::BOLD)
+        };
+        assert_eq!(buffer[(1, y)].symbol(), "›");
+        assert_eq!(buffer[(1, y)].fg, Color::Cyan);
+        assert!(bold(1));
+        for x in 0..120 {
+            assert_eq!(buffer[(x, y)].bg, selected_bg(), "column {x}");
+        }
+        // Key and summary are bold in the plain foreground, and the secondary cells are neither.
+        for x in [3, 10, 17, 40] {
+            assert!(bold(x), "column {x}");
+            assert_eq!(buffer[(x, y)].fg, Color::Reset, "column {x}");
+        }
+        let epic = column_of(&trimmed(&draw(&app, Tab::MyWork, 120))[2], "Checkout") as u16;
+        assert!(!bold(epic));
+        assert_eq!(
+            buffer[(epic, y)].fg,
+            Color::Gray,
+            "muted, lighter than the tint"
+        );
+        // Off the selected row, the same cell is the plain muted color with no tint.
+        assert_eq!(buffer[(epic, 6)].fg, Color::DarkGray);
+        assert_eq!(buffer[(epic, 6)].bg, Color::Reset);
+        assert_eq!(buffer[(3, 6)].fg, Color::Reset);
+        assert!(
+            buffer[(3, 6)].modifier.is_empty(),
+            "an unselected key isn't bold"
+        );
+    }
+
+    #[test]
+    fn a_group_header_is_a_status_dot_a_bold_name_and_a_muted_count() {
+        let mut app = mockup_app();
+        app.selected_index = 1;
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        terminal
+            .draw(|frame| render_tab(frame, &app, Tab::MyWork))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let header = |y: u16| {
+            let cell = |x| &buffer[(x, y)];
+            (
+                cell(1).symbol().to_string(),
+                cell(1).fg,
+                cell(3).modifier.contains(ratatui::style::Modifier::BOLD),
+                cell(15).symbol().to_string(),
+                cell(15).fg,
+            )
+        };
+        // "In Progress" is eleven cells from column 3, so its count is in column 15.
+        assert_eq!(
+            header(1),
+            (
+                "●".to_string(),
+                Color::Yellow,
+                true,
+                "2".to_string(),
+                Color::DarkGray
+            )
+        );
+        assert_eq!(buffer[(3, 5)].symbol(), "R");
+        assert_eq!(buffer[(1, 5)].fg, Color::Blue);
+        assert_eq!(buffer[(1, 8)].fg, Color::Cyan);
+    }
+
+    /// An app on `tab` with two groups of one ticket each, and the text that starts each group's
+    /// header line.
+    fn two_group_app(tab: Tab) -> (App, [&'static str; 2]) {
+        let mut app = App::new();
+        app.loading = false;
+        app.active_tab = tab;
+        app.filter_focus = FilterFocus::Results;
+        let mine = |key: &str, status: &str, email: &str, epic_key: Option<&str>| {
+            let mut ticket = Ticket::for_test(key, status);
+            ticket.assignee_email = Some(email.into());
+            ticket.epic_key = epic_key.map(String::from);
+            ticket.epic_name = epic_key.map(|key| format!("Epic {key}"));
+            ticket
+        };
+        app.cache.team_members = ["alex", "sam"]
+            .map(|name| TeamMember {
+                name: name.into(),
+                email: format!("{name}@example.com"),
+            })
+            .to_vec();
+        let tickets = [
+            mine("DEMO-1", "In Progress", "alex@example.com", None),
+            mine("DEMO-2", "To Do", "sam@example.com", None),
+        ];
+        app.cache.my_tickets = tickets.to_vec();
+        app.filter_results = tickets.to_vec();
+        app.cache.team_tickets = tickets.to_vec();
+        let epic = |key: &str, child: &Ticket| Epic {
+            key: key.into(),
+            summary: "Name".into(),
+            children: vec![child.clone()],
+        };
+        app.cache.epics = vec![epic("EPIC-1", &tickets[0]), epic("EPIC-2", &tickets[1])];
+        let unassigned = [
+            mine("DEMO-3", "To Do", "__unassigned__", Some("EPIC-1")),
+            mine("DEMO-4", "To Do", "__unassigned__", Some("EPIC-2")),
+        ];
+        app.cache.team_tickets.extend(unassigned);
+        app.mark_cache_changed();
+        let headers = match tab {
+            Tab::MyWork | Tab::Filters => ["● In Progress", "● To Do"],
+            Tab::Team => ["▼ alex", "▼ sam"],
+            Tab::Epics => ["▼ EPIC-1", "▼ EPIC-2"],
+            Tab::Unassigned => ["▼ EPIC-1", "▼ EPIC-2"],
+        };
+        (app, headers)
+    }
+
+    #[test]
+    fn one_blank_line_separates_the_groups_on_every_tab() {
+        for &tab in Tab::all() {
+            let (app, headers) = two_group_app(tab);
+            let rows = trimmed(&draw(&app, tab, 120));
+            // Filters draws its sidebar beside the list, so look from where the list starts.
+            let list: Vec<&str> = rows
+                .iter()
+                .map(|row| match tab {
+                    Tab::Filters => row.split_once('│').map_or("", |(_, list)| list),
+                    _ => row.as_str(),
+                })
+                .map(str::trim_end)
+                .collect();
+            let at = |text: &str| {
+                list.iter()
+                    .position(|row| row.trim_start().starts_with(text))
+                    .unwrap_or_else(|| panic!("{tab:?}: no {text} in {list:#?}"))
+            };
+            let (first, second) = (at(headers[0]), at(headers[1]));
+            assert_eq!(list[second - 1], "", "{tab:?}: {list:#?}");
+            assert_ne!(list[second - 2], "", "{tab:?}: {list:#?}");
+            assert!(second - first >= 3, "{tab:?}");
+            // And one before the first group, and none between a header and its first row.
+            assert_ne!(list[second + 1], "", "{tab:?}: {list:#?}");
+        }
+    }
+
+    #[test]
+    fn no_row_draws_a_column_separator_or_a_header_row() {
+        for &tab in Tab::all() {
+            let (app, _) = two_group_app(tab);
+            let rows = draw(&app, tab, 120);
+            for (row, _) in &rows {
+                assert!(
+                    !row.contains("SEL KEY") && !row.contains("SUMMARY"),
+                    "{row}"
+                );
+                assert!(!row.contains('╭') && !row.contains('╰'), "{row}");
+                assert!(!row.contains("─"), "{tab:?}: {row}");
+                // Only Filters has a divider, and it is the one `│` in the row.
+                let bars = row.matches('│').count();
+                assert_eq!(bars, usize::from(tab == Tab::Filters), "{tab:?}: {row}");
+            }
         }
     }
 }

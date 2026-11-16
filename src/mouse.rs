@@ -329,18 +329,20 @@ pub struct Item {
     /// The lines it takes: a header's one, a ticket's one per summary line.
     pub lines: std::ops::Range<usize>,
     pub index: usize,
-    pub header: bool,
+    /// The column of its fold arrow or dot in its first line: a group header's dot or arrow, a
+    /// parent's arrow.
+    pub fold: Option<u16>,
 }
 
 /// Registers each item's targets. Every drawn line of an item selects it; its first line also
-/// holds its mark and fold arrow.
-pub fn register_rows(
-    app: &App,
-    inner: Rect,
-    items: &[Item],
-    scroll: u16,
-    lines: &[ratatui::text::Line<'_>],
-) {
+/// holds its mark, over the gutter (and the checkbox, while `marking`), and its fold cell.
+pub fn register_rows(app: &App, inner: Rect, items: &[Item], scroll: u16, marking: bool) {
+    let mark_width = crate::views::common::GUTTER
+        + if marking {
+            crate::views::common::CHECKBOX_WIDTH
+        } else {
+            0
+        };
     for item in items {
         let index = item.index;
         for line in item.lines.clone() {
@@ -356,47 +358,18 @@ pub fn register_rows(
             if line != item.lines.start {
                 continue;
             }
-            let text = lines[line]
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>();
-            // The row's first mark is its selection mark, as many columns in as the text before it.
-            let mark = text
-                .find(crate::views::common::MARKS)
-                .map_or(0, |at| unicode_width::UnicodeWidthStr::width(&text[..at]))
-                as u16;
-            // The mark and the cells either side of it, so a click a cell off (or on a font's
-            // wider glyph) still toggles; a header's fold arrow is two cells after the mark.
-            let start = mark.saturating_sub(1);
             targets.push((
-                Rect::new(
-                    rect.x + start,
-                    rect.y,
-                    rect.width.saturating_sub(start).min(mark + 2 - start),
-                    1,
-                ),
+                Rect::new(rect.x, rect.y, rect.width.min(mark_width as u16), 1),
                 Target::Mark(index),
             ));
-            if item.header {
-                // A header's fold arrow follows its mark and a space.
+            if let Some(fold) = item.fold {
                 targets.push((
                     Rect::new(
-                        rect.x + mark + 2,
+                        rect.x + fold,
                         rect.y,
-                        rect.width.saturating_sub(mark + 2).min(1),
+                        rect.width.saturating_sub(fold).min(1),
                         1,
                     ),
-                    Target::Fold(index),
-                ));
-            } else if let Some(arrow) = text.split(" │ ").next().and_then(|key_cell| {
-                key_cell
-                    .find(['▼', '▶'])
-                    .map(|at| unicode_width::UnicodeWidthStr::width(&key_cell[..at]))
-            }) {
-                // A parent's fold arrow sits in its key cell.
-                targets.push((
-                    Rect::new(rect.x + arrow as u16, rect.y, 1, 1),
                     Target::Fold(index),
                 ));
             }
@@ -988,44 +961,88 @@ mod tests {
         assert!(app.settings.is_none());
     }
 
-    #[tokio::test]
-    async fn clicking_a_cell_either_side_of_a_mark_still_toggles_selection() {
-        let mut config: AppConfig =
-            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        // Either side, where a click lands when a font draws the mark wide.
-        for (side, offset) in [("left", -1), ("right", 1)] {
-            let mut app = App::new();
-            app.loading = false;
-            app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "To Do")];
-            draw(&app, &config);
-            let mark = locate(&app, "☐ DEMO-1");
-            let at = Position::new(mark.x.checked_add_signed(offset).unwrap(), mark.y);
-            click_at(&mut app, &mut config, &tx, at).await;
-            assert!(app.is_ticket_selected("DEMO-1"), "{side}");
-            assert!(!app.is_detail_open(), "{side}");
-        }
+    /// Draws My Work whole in an 80 by 24 frame, so its first column is column 0: a blank line,
+    /// the group header on row 1, then the tickets from row 2.
+    fn draw_my_work(app: &App) {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|f| crate::views::my_work::render(f, f.area(), app))
+            .unwrap();
+    }
+
+    fn my_work_app(tickets: &[&str]) -> App {
+        let mut app = App::new();
+        app.loading = false;
+        app.cache.my_tickets = tickets
+            .iter()
+            .map(|key| Ticket::for_test(key, "To Do"))
+            .collect();
+        app
     }
 
     #[tokio::test]
-    async fn clicking_a_headers_arrow_two_cells_after_its_mark_folds_without_selecting() {
+    async fn the_gutter_marks_a_ticket_and_the_key_selects_it_with_or_without_a_checkbox() {
         let mut config: AppConfig =
             toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new();
-        app.loading = false;
-        app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "To Do")];
+        // Nothing marked: no checkbox is drawn, and the three cells of the gutter still mark.
+        for x in [0, 1, 2] {
+            let mut app = my_work_app(&["DEMO-1"]);
+            draw(&app, &config);
+            click_at(&mut app, &mut config, &tx, Position::new(x, 4)).await;
+            assert!(app.is_ticket_selected("DEMO-1"), "gutter column {x}");
+            assert!(!app.is_detail_open(), "gutter column {x}");
+        }
+        // The key's first cell is no part of it: it selects the row.
+        let mut app = my_work_app(&["DEMO-1", "DEMO-2"]);
         draw(&app, &config);
-        let mark = locate(&app, "☐ ▼ TO DO");
-        click_at(
-            &mut app,
-            &mut config,
-            &tx,
-            Position::new(mark.x + 2, mark.y),
-        )
-        .await;
+        click_at(&mut app, &mut config, &tx, Position::new(3, 5)).await;
+        assert_eq!(app.selected_ticket_count(), 0);
+        assert_eq!(app.selected_index, 2);
+
+        // Marking: the checkbox, its space and the gutter all mark.
+        for x in [0, 1, 2, 3, 4] {
+            let mut app = my_work_app(&["DEMO-1", "DEMO-2"]);
+            app.selected_ticket_keys.insert("DEMO-1".into());
+            draw(&app, &config);
+            click_at(&mut app, &mut config, &tx, Position::new(x, 5)).await;
+            assert!(app.is_ticket_selected("DEMO-2"), "marking, column {x}");
+        }
+        let mut app = my_work_app(&["DEMO-1", "DEMO-2"]);
+        app.selected_ticket_keys.insert("DEMO-1".into());
+        draw(&app, &config);
+        click_at(&mut app, &mut config, &tx, Position::new(5, 5)).await;
+        assert!(!app.is_ticket_selected("DEMO-2"), "the key is at column 5");
+        assert_eq!(app.selected_index, 2);
+    }
+
+    #[tokio::test]
+    async fn a_headers_dot_folds_its_group_and_the_cells_beside_it_mark_the_group() {
+        let mut config: AppConfig =
+            toml::from_str("[jira]\nproject = 'DEMO'\nteam_name = 'Demo'\n").unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = my_work_app(&["DEMO-1"]);
+        draw(&app, &config);
+        click_at(&mut app, &mut config, &tx, Position::new(1, 3)).await;
         assert!(app.is_collapsed(Tab::MyWork, "To Do"));
         assert!(!app.is_ticket_selected("DEMO-1"));
+
+        for x in [0, 2] {
+            let mut app = my_work_app(&["DEMO-1"]);
+            draw(&app, &config);
+            click_at(&mut app, &mut config, &tx, Position::new(x, 3)).await;
+            assert!(!app.is_collapsed(Tab::MyWork, "To Do"), "column {x}");
+            assert!(app.is_ticket_selected("DEMO-1"), "column {x}");
+        }
+        // Marking: the dot is where it was, and the group's checkbox is two cells after it.
+        let mut app = my_work_app(&["DEMO-1", "DEMO-2"]);
+        app.selected_ticket_keys.insert("DEMO-1".into());
+        draw(&app, &config);
+        click_at(&mut app, &mut config, &tx, Position::new(3, 3)).await;
+        assert!(app.is_ticket_selected("DEMO-2"), "the group's checkbox");
+        draw(&app, &config);
+        click_at(&mut app, &mut config, &tx, Position::new(1, 3)).await;
+        assert!(app.is_collapsed(Tab::MyWork, "To Do"));
     }
 
     #[tokio::test]
@@ -1085,28 +1102,43 @@ mod tests {
     }
 
     #[test]
-    fn one_line_rows_keep_their_target_cells() {
-        let mut app = App::new();
-        app.loading = false;
-        let mut child = Ticket::for_test("DEMO-2", "To Do");
-        child.parent_key = Some("DEMO-1".into());
-        app.cache.my_tickets = vec![Ticket::for_test("DEMO-1", "To Do"), child];
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal
-            .draw(|f| crate::views::my_work::render(f, f.area(), &app))
-            .unwrap();
-        let row = |y| Rect::new(2, y, 76, 1);
+    fn one_line_rows_have_their_row_mark_and_fold_targets_over_exact_cells() {
+        let mut app = my_work_app(&["DEMO-1", "DEMO-2"]);
+        app.cache.my_tickets[1].parent_key = Some("DEMO-1".into());
+        draw_my_work(&app);
+        let row = |y| Rect::new(0, y, 80, 1);
+        // The gutter is columns 0 to 2, so a checkbox hidden is still a target there; the header's
+        // dot is column 1, and a parent's arrow follows its key and a space.
         assert_eq!(
             *app.mouse_targets.borrow(),
             vec![
-                (row(4), Target::Row(0)),
-                (Rect::new(2, 4, 2, 1), Target::Mark(0)),
-                (Rect::new(4, 4, 1, 1), Target::Fold(0)),
-                (row(5), Target::Row(1)),
-                (Rect::new(3, 5, 3, 1), Target::Mark(1)),
-                (Rect::new(13, 5, 1, 1), Target::Fold(1)),
-                (row(6), Target::Row(2)),
-                (Rect::new(5, 6, 3, 1), Target::Mark(2)),
+                (row(1), Target::Row(0)),
+                (Rect::new(0, 1, 3, 1), Target::Mark(0)),
+                (Rect::new(1, 1, 1, 1), Target::Fold(0)),
+                (row(2), Target::Row(1)),
+                (Rect::new(0, 2, 3, 1), Target::Mark(1)),
+                (Rect::new(10, 2, 1, 1), Target::Fold(1)),
+                (row(3), Target::Row(2)),
+                (Rect::new(0, 3, 3, 1), Target::Mark(2)),
+            ]
+        );
+
+        // Marking adds the checkbox and its space: the mark target grows to five cells and the
+        // arrow moves two to the right.
+        app.mouse_targets.borrow_mut().clear();
+        app.selected_ticket_keys.insert("DEMO-2".into());
+        draw_my_work(&app);
+        assert_eq!(
+            *app.mouse_targets.borrow(),
+            vec![
+                (row(1), Target::Row(0)),
+                (Rect::new(0, 1, 5, 1), Target::Mark(0)),
+                (Rect::new(1, 1, 1, 1), Target::Fold(0)),
+                (row(2), Target::Row(1)),
+                (Rect::new(0, 2, 5, 1), Target::Mark(1)),
+                (Rect::new(12, 2, 1, 1), Target::Fold(1)),
+                (row(3), Target::Row(2)),
+                (Rect::new(0, 3, 5, 1), Target::Mark(2)),
             ]
         );
     }
@@ -1149,7 +1181,15 @@ mod tests {
         .await;
         assert_eq!(app.selected_ticket_count(), 1);
         draw(&app, &config);
-        click(&mut app, &mut config, &tx, |t| matches!(t, Target::Row(20))).await;
+        let row = app
+            .mouse_targets
+            .borrow()
+            .iter()
+            .find(|(_, target)| *target == Target::Row(20))
+            .unwrap()
+            .0;
+        // Past the gutter and the checkbox, which mark.
+        click_at(&mut app, &mut config, &tx, Position::new(row.x + 20, row.y)).await;
         assert!(app.is_detail_open());
         draw(&app, &config);
         assert!(!app

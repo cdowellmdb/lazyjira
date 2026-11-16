@@ -1148,6 +1148,18 @@ impl App {
             .group(self.kept_by_search(&[], tickets).unwrap_or_default())
     }
 
+    /// How many done tickets the search keeps while `d` hides them, which My Work says under its
+    /// groups.
+    pub(crate) fn hidden_done_count(&self) -> usize {
+        if self.show_done {
+            return 0;
+        }
+        self.my_work_by_status(|status| self.status_rules.is_done(status))
+            .iter()
+            .map(|(_, tickets)| tickets.len())
+            .sum()
+    }
+
     /// Team members and visible tickets in the exact order used by the Team tab.
     /// Returns active tickets first, then Done tickets as a secondary group.
     pub(crate) fn team_visible_tickets_by_member(
